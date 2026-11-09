@@ -45,7 +45,7 @@ export async function startService(options: { store?: string; idle?: number; fak
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `project`. */
 		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: "prj_default", directory: "/work/default" }) {
 			const held = Effect.runSync(Scope.make());
-			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, hello: { protocol, project }, serve: fake.serve(opencode), timeout: 1000 }), held));
+			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, hello: { protocol, project }, modes: Effect.sync(() => [...opencode.sessions.keys()]), serve: fake.serve(opencode), timeout: 1000 }), held));
 			const connection = {
 				request: <M extends Method>(method: M, input: Methods[M]["input"]) => Effect.runPromise(live.request(method, input)),
 				url: () => Effect.runPromise(live.url),

@@ -63,9 +63,10 @@ flowchart LR
   hash of the schemas. On `hello` with another version, a service whose contract files changed on disk since it
   started retires (the plugin starts the new one); otherwise the plugin is told to `/reload`. It exits 10 minutes
   after its last client (plugin connection or open page) goes.
-- **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client. When
-  it loads it connects to the socket, starting the service detached if nobody answers (log: `<store>/service.log`),
-  says `hello`, and holds the connection, reconnecting (and restarting the service) if it drops. It is also the
+- **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client, one per
+  directory OpenCode works in. While a session in its directory is in desk mode, it connects to the socket, starting
+  the service detached if nobody answers (log: `<store>/service.log`), says `hello`, reports those sessions (`modes`),
+  and holds the connection; it hangs up when the last one turns desk mode off. Connected, it reconnects (restarting the service) if the connection drops. It is also the
   service's only way into OpenCode: on that connection the service asks it to look sessions up and to prompt them, and
   it reports `session.moved`. So the service needs no OpenCode endpoint or password.
 - **Delivery**: the user's text is written to its entries as an outbox (an OpenCode message id, fixed up front), then
@@ -76,7 +77,7 @@ flowchart LR
   root session's `projectID` (through a plugin) and remembers it in memory only. A session is asked again when it
   moves, and every session when a plugin connects (catching moves missed meanwhile); while OpenCode is away, what was
   known stays. A session no connected OpenCode knows goes under its folder, marked as a guess. The page's header says
-  whether OpenCode is connected and how many sessions are in desk mode (each plugin reports its OpenCode's). The page shows one project at a time (`/projects/<id>`, an entry at
+  how many sessions are in desk mode. An answer for a session whose OpenCode has nothing in desk mode waits until something is. The page shows one project at a time (`/projects/<id>`, an entry at
   `/projects/<id>/questions/<entry id>`); `/` lists the projects.
 
 | Module | What it is |

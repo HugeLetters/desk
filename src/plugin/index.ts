@@ -16,7 +16,10 @@ import { join } from "node:path";
 import { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { type Methods, protocol } from "../protocol";
 import * as Connection from "./connection";
@@ -36,7 +39,7 @@ export default Plugin.define({
 		Effect.gen(function* () {
 			const home = String(ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(/^~(?=\/|$)/, homedir());
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
-			/** The sessions in desk mode here (`on/<id>` in the plugin's storage), forgetting deleted ones. */
+			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
 				const sessions: Array<string> = [];
 				for (let after: string | undefined; ; ) {
@@ -45,11 +48,20 @@ export default Plugin.define({
 					if (page.next === undefined) break;
 					after = page.next;
 				}
-				const gone = yield* Effect.filter(sessions, (id) => ctx.session.get({ sessionID: id as never }).pipe(Effect.as(false), Effect.catchIf(notFound, () => Effect.succeed(true)), Effect.orElseSucceed(() => false)));
-				yield* Effect.forEach(gone, (id) => ctx.storage.remove(`on/${id}`));
-				return sessions.filter((id) => !gone.includes(id));
+				const where = yield* Effect.forEach(sessions, (id) =>
+					ctx.session.get({ sessionID: id as never }).pipe(
+						Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
+						Effect.catchIf(notFound, () => Effect.succeed("gone" as const)),
+						Effect.orElseSucceed(() => "elsewhere" as const),
+					),
+				);
+				yield* Effect.forEach(
+					sessions.filter((_, index) => where[index] === "gone"),
+					(id) => ctx.storage.remove(`on/${id}`),
+				);
+				return sessions.filter((_, index) => where[index] === "here");
 			});
-			const service = yield* Connection.make({
+			const options: Connection.Options = {
 				socket: join(home, "desk.sock"),
 				start: Connection.startService({ DESK_HOME: home, DESK_PORT: port }),
 				hello: { protocol, project: { id: ctx.location.project.id, directory: ctx.location.project.directory } },
@@ -64,10 +76,40 @@ export default Plugin.define({
 					prompt: ({ sessionID, id, text, delivery, files }) =>
 						ctx.session.prompt({ sessionID: sessionID as never, id: id as never, text, delivery, files: files.map((file) => ({ uri: file.uri, name: file.name })) }).pipe(Effect.as(null)),
 				},
-			});
+			};
+
+			// Connected (and so starting the service) only while a session in this directory is in desk mode: the page
+			// counts those sessions, and a plugin instance with none has nothing to ask or deliver.
+			const pluginScope = yield* Effect.scope;
+			const lock = yield* Semaphore.make(1);
+			let held: { scope: Scope.Closeable; connection: Connection.Connection } | undefined;
+			/** Connects, reports the sessions in desk mode, or hangs up, to match the storage. */
+			const sync = Semaphore.withPermits(
+				lock,
+				1,
+			)(
+				Effect.gen(function* () {
+					const mine = yield* modes;
+					if (mine.length === 0) {
+						if (held) yield* Scope.close(held.scope, Exit.void);
+						held = undefined;
+					} else if (held) yield* Effect.ignore(held.connection.request("modes", { sessions: mine }));
+					else {
+						const scope = yield* Scope.fork(pluginScope);
+						held = { scope, connection: yield* Scope.provide(Connection.make(options), scope) };
+					}
+				}),
+			);
+			yield* sync;
+			const service: Connection.Connection = {
+				request: (method, input) =>
+					held ? held.connection.request(method, input) : Effect.fail(new Connection.DeskError({ message: "Desk mode is off in this directory; the user turns it on with /desk-mode." })),
+				url: Effect.suspend(() => (held ? held.connection.url : Effect.fail(new Connection.DeskError({ message: "Desk mode is off in this directory." })))),
+			};
 			// The service's project cache drops a session that moves, so its entries follow it.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
-				Stream.runForEach((event) => Effect.ignore(service.request("moved", { session: event.data.sessionID }))),
+				// A session moving in or out of this directory may connect or hang up this instance, too.
+				Stream.runForEach((event) => Effect.andThen(Effect.ignore(service.request("moved", { session: event.data.sessionID })), sync)),
 				Effect.ignore,
 				Effect.forkScoped,
 			);
@@ -105,13 +147,13 @@ export default Plugin.define({
 							const now = (yield* ctx.storage.get(key(rootID))) !== true;
 							if (now) yield* ctx.storage.set(key(rootID), true);
 							else yield* ctx.storage.remove(key(rootID));
+							yield* sync;
 							const url = now ? (yield* service.request("page", { session: rootID })).url : undefined;
 							const text = url
 								? `Desk mode is on for this session. Every question, decision or review you need from the user goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. A critical one may also be mentioned in chat, by its title. The user answers on <${url}>\n`
 								: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
 							// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
 							const description = url ? `Desk mode on: ${url}` : "Desk mode off";
-							yield* Effect.ignore(Effect.flatMap(modes, (sessions) => service.request("modes", { sessions })));
 							yield* ctx.session.synthetic({ sessionID, text, description, resume: false });
 						}),
 				});

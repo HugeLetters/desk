@@ -120,7 +120,7 @@ try {
 	};
 	await tab.goto(page("prj_phantom"));
 	await settle(tab);
-	await tab.waitForSelector("text=No OpenCode connected");
+	await tab.waitForSelector("text=No session in desk mode");
 	await snap(16);
 	await tab.click(`.list a[href="/projects/prj_phantom/questions/${rows.id}"]`);
 	await settle(tab);

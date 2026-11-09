@@ -543,9 +543,9 @@ function App() {
 					<span class="spacer" />
 					<span
 						class={`connection${state.view!.opencode === 0 ? " none" : ""}`}
-						title="Answers go out through connected OpenCode instances, which also tell which project each question is in. The count is sessions with desk mode on."
+						title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
 					>
-						{state.view!.opencode === 0 ? "No OpenCode connected" : `OpenCode connected · ${state.view!.deskMode} in desk mode`}
+						{state.view!.opencode === 0 ? "No session in desk mode" : `${state.view!.deskMode} ${state.view!.deskMode === 1 ? "session" : "sessions"} in desk mode`}
 					</span>
 					<Show when={!state.online}>
 						<span class="offline">reconnecting…</span>
@@ -558,7 +558,7 @@ function App() {
 			<main>
 				<Show when={state.view!.opencode === 0 || state.view!.project?.guessed || (project() === undefined && state.view!.projects.some((other) => other.guessed))}>
 					<div class="notice">
-						<Show when={state.view!.opencode === 0}>No OpenCode is connected: answers wait as <em>not delivered</em> until one is. </Show>
+						<Show when={state.view!.opencode === 0}>No session is in desk mode: answers wait as <em>not delivered</em> until one is. </Show>
 						Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected OpenCode knows their session yet.
 					</div>
 				</Show>

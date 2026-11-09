@@ -112,6 +112,8 @@ afterAll(async () => {
 
 test("off by default: a session sees no desk tools until /desk-mode turns it on, for its subagents too", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
+	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service.
+	expect(await answering(join(home, "desk.sock"))).toBe(false);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(first.synthetic.at(-1)!.text).toMatch(/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//);
@@ -171,6 +173,11 @@ test("/desk-mode again turns it off", async () => {
 	expect(first.synthetic.at(-1)!.text).toContain("Desk mode is off");
 	expect(first.synthetic.at(-1)!.description).toBe("Desk mode off");
 	expect(await first.visible("ses_main")).toEqual(["read"]);
+	// Its last session in desk mode gone, the first instance hangs up; the second still has ses_main on.
+	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
+	const view = async () => Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!;
+	await eventually(async () => (await view()).opencode === 1);
+	expect(await view()).toMatchObject({ deskMode: 1 });
 });
 
 test("the service exits once every plugin instance has gone", async () => {
