@@ -1,7 +1,8 @@
 /**
  * Delivery: takes every outbox message to its session, once, through a connected plugin instance whose OpenCode knows
- * the session. A message no connected OpenCode knows stays in the outbox ("answered, not delivered") and goes out when
- * a plugin instance connects; one whose delivery failed is tried again then, or after `retry`. Each message is tried
+ * the session, while the session is in desk mode (`due`). A message no connected OpenCode knows, or whose session is out
+ * of desk mode, stays in the outbox ("answered, not delivered") and goes out when a plugin instance connects or the
+ * session turns desk mode on; one whose delivery failed is tried again then, or after `retry`. Each message is tried
  * on its own: one that fails doesn't hold up the others.
  *
  * Once: the message id is fixed before the first try and OpenCode admits an id once, so sending again after a crash
@@ -21,7 +22,7 @@ import { Desk } from "./desk";
 import type { MessageID } from "./entry";
 import type { DeliveryFailed } from "./errors";
 import { OpenCode } from "./opencode";
-import { messages } from "./outbox";
+import { due, messages } from "./outbox";
 import { Store } from "./store";
 import { deliveryFailed } from "./wording";
 
@@ -63,8 +64,9 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const failures = yield* Failures;
 
 			const flush = Effect.gen(function* () {
-				const pending = messages(yield* desk.entries);
-				for (const message of pending) {
+				const entries = yield* desk.entries;
+				const pending = messages(entries);
+				for (const message of due(entries, new Set(yield* opencode.inDeskMode))) {
 					const files = message.files.map(({ file, name }) => ({ uri: pathToFileURL(`${store.root}/${file}`).href, name }));
 					yield* opencode.prompt({ sessionID: message.session, id: message.id, text: message.text, delivery: message.delivery, files }).pipe(
 						Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
@@ -77,7 +79,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			});
 
 			// One flush at a time; triggers that pile up meanwhile only need one more.
-			yield* Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(opencode.attached, () => undefined), Stream.tick(Duration.fromInputUnsafe(retry))], { concurrency: "unbounded" }).pipe(
+			yield* Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(opencode.attached, () => undefined), Stream.map(opencode.deskMode, () => undefined), Stream.tick(Duration.fromInputUnsafe(retry))], { concurrency: "unbounded" }).pipe(
 				Stream.debounce("20 millis"),
 				Stream.runForEach(() => flush),
 				Effect.forkScoped,

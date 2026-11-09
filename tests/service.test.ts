@@ -169,6 +169,24 @@ describe("delivery", () => {
 		await eventually(async () => (await read(asked.id))?.pending === null);
 	});
 
+	test("while its session is out of desk mode, a reply waits, not delivered; it goes out once, when desk mode is on", async () => {
+		const server = service.fake.server("http://opencode-1");
+		server.session({ id: S("ses_a") });
+		const plugin = service.plugin(server);
+		const asked = await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Off?") });
+		await plugin.request("modes", { sessions: [] });
+		await eventually(async () => (await view(folder("/w"))).deskMode.length === 0);
+		await service.rpc((client) => client.send({ entry: asked.id, text: "later" }));
+		await Bun.sleep(200);
+		expect(server.calls).toHaveLength(0);
+		expect((await read(asked.id))?.pending).not.toBeNull();
+
+		await plugin.request("modes", { sessions: [S("ses_a")] });
+		await eventually(() => server.admitted.length === 1);
+		await eventually(async () => (await read(asked.id))?.pending === null);
+		expect(server.admitted).toHaveLength(1);
+	});
+
 	test("a lost reply is retried under the same message id, so the session gets it once", async () => {
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a") });

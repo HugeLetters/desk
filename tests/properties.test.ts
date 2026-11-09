@@ -17,8 +17,9 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { Desk } from "../src/desk";
 import { answerer, type Entry, next, ordered, Party, Priority, Status, waitingOn } from "../src/entry";
+import { due } from "../src/outbox";
 import { Store } from "../src/store";
-import { E, S } from "./support/ids";
+import { E, M, S } from "./support/ids";
 
 const runs = Number(process.env.PROPERTY_RUNS ?? 200);
 
@@ -118,6 +119,31 @@ const snapshot = async () => {
 	const names = (await readdir(root)).filter((name) => name.endsWith(".md")).sort();
 	return Promise.all(names.map(async (name) => `${name}\n${await readFile(join(root, name), "utf8")}`));
 };
+
+/** Desks with pending text across three sessions, and which of them are in desk mode. */
+const outboxes = Arbitrary.all({
+	desk: desks,
+	seeds: Arbitrary.array(pick, { minLength: 12, maxLength: 12 }),
+	on: Arbitrary.array(Arbitrary.schema(Schema.Boolean), { minLength: 3, maxLength: 3 }),
+}).pipe(
+	Arbitrary.map(({ desk, seeds, on }) => {
+		const session = (i: number) => S(`ses_${i}`);
+		const entries = desk.map((entry, index): Entry => {
+			const seed = seeds[index]!;
+			const at = session(seed % 3);
+			return { ...entry, session: at, pending: seed % 2 === 0 ? null : { message: M(`msg_${at}_${seed % 4}`), delivery: "queue" } };
+		});
+		return { entries, deskMode: new Set([0, 1, 2].filter((i) => on[i]).map(session)) };
+	}),
+);
+
+test("delivery: a session gets its pending text only while in desk mode, and then all of it", () =>
+	check(outboxes, ({ entries, deskMode }) => {
+		const sent = due(entries, deskMode);
+		const covered = new Set(sent.flatMap((message) => entries.filter((entry) => entry.pending?.message === message.id)));
+		const expected = entries.filter((entry) => entry.pending !== null && deskMode.has(entry.session));
+		return sent.every((message) => deskMode.has(message.session)) && covered.size === expected.length && expected.every((entry) => covered.has(entry));
+	}));
 
 test("whatever happens, every entry's parent is on the desk, no entry is below itself, and a refused change writes nothing", () =>
 	check(changes, (sequence) =>

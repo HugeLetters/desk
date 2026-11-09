@@ -186,6 +186,8 @@ function App() {
 			return `Submitted ${count} draft${count === 1 ? "" : "s"}; queued for the agents`;
 		});
 
+	/** Whether the entry's session is out of desk mode: its text waits until the session turns it on. */
+	const outOfDeskMode = (entry: Entry) => !state.view?.deskMode.includes(entry.session);
 	/** Why the last try to deliver the entry's text failed, if it did. */
 	const failure = (entry: Entry) => (entry.pending === null ? undefined : state.view?.failures[entry.pending.message]);
 
@@ -198,10 +200,12 @@ function App() {
 					title={
 						failure(props.entry)
 							? `Your text hasn't reached the session: the last try failed (${deliveryFailed(failure(props.entry)!)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`
-							: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does."
+							: outOfDeskMode(props.entry)
+								? "Your text hasn't reached the session yet: it isn't in desk mode, so it couldn't reply on the desk. It goes out when the session turns desk mode on."
+								: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does."
 					}
 				>
-					not delivered
+					{outOfDeskMode(props.entry) ? "waiting for desk mode" : "not delivered"}
 				</span>
 			</Show>
 			<Show when={yours(props.entry)}>
@@ -363,7 +367,7 @@ function App() {
 									</Show>
 									<Show when={entry().pending !== null}>
 										<div class="undelivered-actions">
-											<span class="muted">Your text hasn't reached its session yet.</span>
+											<span class="muted">{outOfDeskMode(entry()) ? "Your text waits for its session to turn desk mode on." : "Your text hasn't reached its session yet."}</span>
 											<button
 												class="link"
 												title="Stop trying to deliver it, e.g. when its session was deleted. The text stays on the entry, and the entry can be resolved."

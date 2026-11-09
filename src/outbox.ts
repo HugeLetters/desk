@@ -14,6 +14,12 @@ export interface Message {
 	readonly files: ReadonlyArray<{ readonly file: string; readonly name: string }>;
 }
 
+/**
+ * The messages to send now: those whose session is in desk mode. Out of it, the session has no desk tools to reply
+ * with, so its messages wait as they do for a session no connected OpenCode knows.
+ */
+export const due = (entries: ReadonlyArray<Entry>, deskMode: ReadonlySet<SessionID>): Array<Message> => messages(entries).filter((message) => deskMode.has(message.session));
+
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 	const byMessage = new Map<MessageID, Array<Entry>>();
 	for (const entry of entries) if (entry.pending !== null) byMessage.set(entry.pending.message, [...(byMessage.get(entry.pending.message) ?? []), entry]);
