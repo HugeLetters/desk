@@ -142,6 +142,41 @@ test("replies are all or nothing, and a refused one stores no attachments", asyn
 	).toContain("missing from the draft");
 });
 
+test("an attachment that can't be stored takes the ones stored before it with it", async () => {
+	const entry = await ask("A?");
+	await close();
+	// The same store, except that its second attachment fails to write.
+	const failing = Layer.effect(
+		Store,
+		Effect.map(Store, (store) => {
+			let stored = 0;
+			return Store.of({
+				...store,
+				attach: (name, data) => (++stored === 2 ? Effect.die("disk full") : store.attach(name, data)),
+			});
+		}),
+	).pipe(Layer.provide(Store.layer(root)));
+	scope = Effect.runSync(Scope.make());
+	services = (await Effect.runPromise(
+		Layer.buildWithScope(Desk.layer.pipe(Layer.provideMerge(failing), Layer.provideMerge(BunServices.layer)), scope),
+	)) as typeof services;
+	const [a, b] = [crypto.randomUUID(), crypto.randomUUID()];
+	const text = `![a](attachment:${a}) ![b](attachment:${b})`;
+	const files_ = [
+		{ id: a, name: "a.png", data: "AAAA" },
+		{ id: b, name: "b.png", data: "AAAA" },
+	];
+	const exit = await Effect.runPromiseExit(
+		Effect.provideContext(
+			Desk.use((d) => d.reply([{ entry: entry.id, text, files: files_ }], "queue")),
+			services,
+		),
+	);
+	expect(Exit.isFailure(exit)).toBe(true);
+	expect(await attachments()).toEqual([]);
+	expect((await entries())[0]).toMatchObject({ status: "open", pending: null });
+});
+
 test("only referenced attachments are stored, and they go with the last entry pointing at them", async () => {
 	const entry = await ask("A?");
 	const [kept, dropped] = [crypto.randomUUID(), crypto.randomUUID()];

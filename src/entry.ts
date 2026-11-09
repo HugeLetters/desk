@@ -172,6 +172,34 @@ export function openUnder(entries: ReadonlyArray<Entry>, root: Pick<Entry, "id">
 	return ordered(entries).filter((entry) => below.has(entry) && entry.status !== "resolved");
 }
 
+/** What an entry hangs under, from its root down. */
+export function ancestors(entries: ReadonlyArray<Entry>, entry: Pick<Entry, "parent">): ReadonlyArray<Entry> {
+	const parent = entries.find((other) => other.id === entry.parent);
+	return parent ? [...ancestors(entries, parent), parent] : [];
+}
+
+/** What stays on the desk and what leaves it. */
+interface Pruned {
+	readonly kept: ReadonlyArray<Entry>;
+	readonly pruned: ReadonlyArray<Entry>;
+}
+
+/**
+ * Who leaves the desk once `resolved` is: it, when nothing hangs under it; then its parent, if resolved and left without
+ * follow-ups; and so on up. `entries` already holds `resolved`.
+ */
+export function prune(entries: ReadonlyArray<Entry>, resolved: Entry): Pruned {
+	const up = (kept: ReadonlyArray<Entry>, current: Entry | undefined, pruned: ReadonlyArray<Entry>): Pruned =>
+		current?.status === "resolved" && !kept.some((other) => other.parent === current.id)
+			? up(
+					kept.filter((other) => other.id !== current.id),
+					kept.find((other) => other.id === current.parent),
+					[...pruned, current],
+				)
+			: { kept, pruned };
+	return up(entries, resolved, []);
+}
+
 export const newId = () => EntryId.make(crypto.randomUUID());
 
 /**

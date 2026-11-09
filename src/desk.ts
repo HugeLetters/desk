@@ -10,13 +10,16 @@
  */
 import { SessionMessage } from "@opencode/schema/session-message";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
+	ancestors,
 	answerer,
 	attachmentsIn,
 	type Delivery,
@@ -31,6 +34,7 @@ import {
 	type Pending,
 	type Priority,
 	pointAttachments,
+	prune,
 	referencedAttachments,
 	type SessionID,
 	waitingOn,
@@ -158,14 +162,11 @@ export class Desk extends Context.Service<
 
 				/** The draft with its `attachment:<id>` references pointed at the files they'll be stored as. One it references but doesn't carry is refused. */
 				const attachments = (draft: Draft) =>
-					Effect.gen(function* () {
-						const uploads: Array<Attachment> = [];
-						for (const id of referencedAttachments(draft.text)) {
-							const attachment = draft.files?.find((candidate) => candidate.id === id);
-							if (!attachment) return yield* new MissingAttachment({ id: draft.entry, attachment: id });
-							uploads.push(attachment);
-						}
-						return uploads;
+					Effect.forEach(referencedAttachments(draft.text), (id) => {
+						const attachment = draft.files?.find((candidate) => candidate.id === id);
+						return attachment
+							? Effect.succeed(attachment)
+							: Effect.fail(new MissingAttachment({ id: draft.entry, attachment: id }));
 					});
 
 				/** The user's draft: the answer when the entry waits on them, otherwise a follow-up question below it. */
@@ -186,7 +187,7 @@ export class Desk extends Context.Service<
 							directory: entry.directory,
 							labels: entry.labels,
 							priority: entry.priority,
-							created: new Date().toISOString(),
+							created: DateTime.formatIso(yield* DateTime.now),
 							title: text.split("\n")[0]!.slice(0, 100),
 							question: text,
 							answer: null,
@@ -219,7 +220,7 @@ export class Desk extends Context.Service<
 									directory: asker.directory,
 									labels: question.labels ?? [],
 									priority: question.priority ?? parent?.priority ?? "normal",
-									created: new Date().toISOString(),
+									created: DateTime.formatIso(yield* DateTime.now),
 									title: question.title.trim(),
 									question: question.body.trim(),
 									answer: null,
@@ -275,17 +276,8 @@ export class Desk extends Context.Service<
 								const resolved: Entry = { ...entry, status: "resolved" };
 								yield* store.write(resolved);
 								// A resolved entry without follow-ups leaves the desk; then its parent may, and so on up.
-								let kept = replace(all, resolved);
-								const pruned: Array<Entry> = [];
-								for (
-									let current: Entry | undefined = resolved;
-									current?.status === "resolved" && !kept.some((other) => other.parent === current!.id);
-								) {
-									yield* store.remove(current.id);
-									kept = kept.filter((other) => other.id !== current!.id);
-									pruned.push(current);
-									current = kept.find((other) => other.id === current!.parent);
-								}
+								const { kept, pruned } = prune(replace(all, resolved), resolved);
+								yield* Effect.forEach(pruned, (gone) => store.remove(gone.id), { discard: true });
 								// Attachments only the pruned entries pointed at go with them.
 								const texts = (list: Entries) =>
 									list.flatMap((other) =>
@@ -317,13 +309,7 @@ export class Desk extends Context.Service<
 							}
 							// The entry in full; what it hangs under and what hangs under it, one line each (the agent has those bodies, or can ask).
 							const entry = yield* find(all, id);
-							const above: Array<Entry> = [];
-							for (
-								let current = all.find((other) => other.id === entry.parent);
-								current;
-								current = all.find((other) => other.id === current!.parent)
-							)
-								above.unshift(current);
+							const above = ancestors(all, entry);
 							const line = (other: Entry) => `${other.id} ${other.title} (${other.status})`;
 							const followUps = all.filter((other) => other.parent === id);
 							return [
@@ -341,28 +327,42 @@ export class Desk extends Context.Service<
 						modify((all) =>
 							Effect.gen(function* () {
 								// Apply every draft before writing anything, so a refusal leaves the desk (and its attachments) as it was.
-								const outboxes = new Map<SessionID, MessageID>();
-								let next = all;
-								const uploads: Array<{ draft: number; attachment: Attachment }> = [];
-								for (const [index, draft] of drafts.entries()) {
-									const entry = yield* find(next, draft.entry);
-									const message = outboxes.get(entry.session) ?? SessionMessage.ID.create();
-									outboxes.set(entry.session, message);
-									for (const attachment of yield* attachments(draft)) uploads.push({ draft: index, attachment });
-									next = replace(next, yield* replyTo(next, draft, { message, delivery }));
-								}
-								// Store the files, then point the texts at them.
-								const stored: Array<string> = [];
-								const links = new Map<string, string>();
-								yield* Effect.forEach(uploads, ({ attachment }) =>
-									Effect.map(store.attach(attachment.name, Buffer.from(attachment.data, "base64")), (file) => {
-										stored.push(file);
-										links.set(attachment.id, file);
+								// One message per session.
+								const plan = yield* Effect.reduce(
+									drafts,
+									() => ({
+										next: all,
+										outboxes: new Map() as ReadonlyMap<SessionID, MessageID>,
+										uploads: [] as ReadonlyArray<Attachment>,
 									}),
-								).pipe(Effect.onError(() => store.detach(stored)));
+									(plan, draft) =>
+										Effect.gen(function* () {
+											const entry = yield* find(plan.next, draft.entry);
+											const message = plan.outboxes.get(entry.session) ?? SessionMessage.ID.create();
+											const uploads = yield* attachments(draft);
+											const reply = yield* replyTo(plan.next, draft, { message, delivery });
+											return {
+												next: replace(plan.next, reply),
+												outboxes: new Map(plan.outboxes).set(entry.session, message),
+												uploads: [...plan.uploads, ...uploads],
+											};
+										}),
+								);
+								// Store the files (all of them, or none: a failure removes those already stored), then point the texts
+								// at them.
+								const links = new Map(
+									yield* Effect.scoped(
+										Effect.forEach(plan.uploads, (attachment) =>
+											Effect.acquireRelease(
+												store.attach(attachment.name, Buffer.from(attachment.data, "base64")),
+												(file, exit) => (Exit.isFailure(exit) ? store.detach([file]) : Effect.void),
+											).pipe(Effect.map((file) => [attachment.id, file] as const)),
+										),
+									),
+								);
 								const link = (text: string) =>
 									pointAttachments(text, (id) => (links.has(id) ? `/${links.get(id)}` : undefined));
-								next = next.map((entry) =>
+								const next = plan.next.map((entry) =>
 									all.includes(entry)
 										? entry
 										: {
