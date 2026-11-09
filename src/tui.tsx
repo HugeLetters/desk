@@ -12,7 +12,7 @@ import type { Context } from "@opencode/plugin/tui/context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { createSignal } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { label, type Status, watch } from "./badge";
 
 /** Opens a URL in the browser; DESK_OPENER replaces `open` for tests. */
@@ -26,18 +26,14 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 		const id = session?.projectID ?? context.data.project.list().find((project) => project.canonical === (context.location ?? context.data.location.default()).directory)?.id;
 		return props.status?.projects.find((summary) => summary.id === id);
 	};
-	const color = () => {
-		if (hovered()) return context.theme.text.action.secondary.hovered;
-		if ((project()?.critical ?? 0) > 0) return context.theme.text.error;
-		return (project()?.waiting ?? 0) > 0 ? context.theme.text.warning : context.theme.text.muted;
-	};
+	// Like the footer's other items: base text, muted under the mouse (it's clickable); critical counts in the error color.
+	const critical = () => project()?.critical ?? 0;
 	return (
 		<text
 			visible={project() !== undefined}
 			marginLeft={1}
 			selectable={false}
-			fg={color()}
-			bg={hovered() ? context.theme.background.action.secondary.hovered : undefined}
+			fg={hovered() ? context.theme.text.muted : context.theme.text.base}
 			onMouseOver={() => setHovered(true)}
 			onMouseOut={() => setHovered(false)}
 			onMouseDown={(event) => {
@@ -48,7 +44,10 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 				open(`${props.status.url}projects/${encodeURIComponent(summary.id)}`);
 			}}
 		>
-			{label(project())}
+			{label(project() && { ...project()!, critical: 0 })}
+			<Show when={critical() > 0}>
+				<span style={{ fg: context.theme.text.feedback.error.base }}> !{critical()}</span>
+			</Show>
 		</text>
 	);
 }
