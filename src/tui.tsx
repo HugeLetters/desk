@@ -26,14 +26,14 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 		const id = session?.projectID ?? context.data.project.list().find((project) => project.canonical === (context.location ?? context.data.location.default()).directory)?.id;
 		return props.status?.projects.find((summary) => summary.id === id);
 	};
-	// Like the footer's other items: base text, muted under the mouse (it's clickable); critical counts in the error color.
+	// Like the footer's location: muted, base under the mouse (it's clickable); critical counts in the error color.
 	const critical = () => project()?.critical ?? 0;
 	return (
 		<text
 			visible={project() !== undefined}
 			marginLeft={1}
 			selectable={false}
-			fg={hovered() ? context.theme.text.muted : context.theme.text.base}
+			fg={hovered() ? context.theme.text.base : context.theme.text.muted}
 			onMouseOver={() => setHovered(true)}
 			onMouseOut={() => setHovered(false)}
 			onMouseDown={(event) => {
