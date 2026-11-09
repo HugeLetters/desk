@@ -18,11 +18,13 @@ import { join } from "node:path";
 import { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
 import { flow } from "effect";
+import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
+import * as ScopedRef from "effect/ScopedRef";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { EntryId, Priority, SessionID } from "../entry";
@@ -54,13 +56,12 @@ export default Plugin.define({
 			const timeout = Duration.fromInputUnsafe(ctx.options.timeout ?? "30 seconds");
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
-				const sessions: Array<SessionID> = [];
-				for (let after: string | undefined; ; ) {
-					const page = yield* ctx.storage.scan({ prefix: "on/", after });
-					sessions.push(...page.entries.map((entry) => SessionID.make(entry.key.slice("on/".length))));
-					if (page.next === undefined) break;
-					after = page.next;
-				}
+				const sessions = yield* Stream.paginate(undefined as string | undefined, (after) =>
+					Effect.map(ctx.storage.scan({ prefix: "on/", after }), (page) => [
+						page.entries.map((entry) => SessionID.make(entry.key.slice("on/".length))),
+						Option.fromUndefinedOr(page.next),
+					]),
+				).pipe(Stream.runCollect);
 				const where = yield* Effect.forEach(sessions, (id) =>
 					ctx.session.get({ sessionID: id }).pipe(
 						Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
@@ -106,9 +107,9 @@ export default Plugin.define({
 
 			// Connected (and so starting the service) only while a session in this directory is in desk mode: the page
 			// counts those sessions, and a plugin instance with none has nothing to ask or deliver.
-			const pluginScope = yield* Effect.scope;
 			const lock = yield* Semaphore.make(1);
-			let held: { scope: Scope.Closeable; connection: Connection.Connection } | undefined;
+			/** The connection while there is one: setting it hangs up the one before. */
+			const held = yield* ScopedRef.make<Option.Option<Connection.Connection>>(() => Option.none());
 			/** Connects, reports the sessions in desk mode, or hangs up, to match the storage. */
 			const sync = Semaphore.withPermits(
 				lock,
@@ -116,23 +117,20 @@ export default Plugin.define({
 			)(
 				Effect.gen(function* () {
 					const mine = yield* modes;
+					const now = yield* ScopedRef.get(held);
 					if (mine.length === 0) {
-						if (held) yield* Scope.close(held.scope, Exit.void);
-						held = undefined;
-					} else if (held)
-						yield* Effect.ignore(Effect.flatMap(held.connection.client, (client) => client.modes({ sessions: mine })));
-					else {
-						const scope = yield* Scope.fork(pluginScope);
-						held = { scope, connection: yield* Scope.provide(Connection.make(options), scope) };
-					}
+						if (Option.isSome(now)) yield* ScopedRef.set(held, Effect.succeed(Option.none()));
+					} else if (Option.isSome(now))
+						yield* Effect.ignore(Effect.flatMap(now.value.client, (client) => client.modes({ sessions: mine })));
+					else yield* ScopedRef.set(held, Effect.map(Connection.make(options), Option.some));
 				}),
 			);
 			yield* sync;
 			/** Runs `f` against the service, while this instance is connected. */
 			const service = <A, E>(f: (client: Connection.Client) => Effect.Effect<A, E>) =>
-				Effect.suspend(() =>
-					held
-						? Effect.flatMap(held.connection.client, f)
+				Effect.flatMap(ScopedRef.get(held), (now) =>
+					Option.isSome(now)
+						? Effect.flatMap(now.value.client, f)
 						: Effect.fail(
 								new Connection.DeskError({
 									message: "Desk mode is off in this directory; the user turns it on with /desk-mode.",
@@ -149,16 +147,22 @@ export default Plugin.define({
 				Effect.forkScoped,
 			);
 
-			/** A session's top-level session: a subagent's desk is its parent's. Parents never change, so it's cached. */
-			const roots = new Map<SessionID, SessionID>();
-			const root = (sessionID: SessionID): Effect.Effect<SessionID, unknown> => {
-				const known = roots.get(sessionID);
-				if (known) return Effect.succeed(known);
-				return ctx.session.get({ sessionID }).pipe(
-					Effect.flatMap((session) => (session.parentID ? root(session.parentID) : Effect.succeed(session.id))),
-					Effect.tap((found) => Effect.sync(() => roots.set(sessionID, found))),
-				);
-			};
+			/**
+			 * A session's top-level session: a subagent's desk is its parent's. Parents never change, so it's cached; a
+			 * failed lookup isn't (OpenCode may answer next time).
+			 */
+			const roots: Cache.Cache<SessionID, SessionID, unknown> = yield* Cache.makeWith(
+				(sessionID: SessionID) =>
+					ctx.session
+						.get({ sessionID })
+						.pipe(
+							Effect.flatMap((session) =>
+								session.parentID ? Cache.get(roots, session.parentID) : Effect.succeed(session.id),
+							),
+						),
+				{ capacity: 10_000, timeToLive: (exit) => (Exit.isSuccess(exit) ? Duration.infinity : Duration.zero) },
+			);
+			const root = (sessionID: SessionID) => Cache.get(roots, sessionID);
 			const key = (rootID: SessionID) => `on/${rootID}`;
 			const on = flow(
 				root,
