@@ -24,8 +24,8 @@ export const View = Schema.Struct({
 	projects: Schema.Array(ProjectSummary),
 	/** Connected plugin instances: with none, answers wait and projects are folder guesses. */
 	opencode: Schema.Int,
-	/** Sessions in desk mode, across the connected OpenCode instances. */
-	deskMode: Schema.Int,
+	/** The (top-level) sessions in desk mode, across the connected OpenCode instances. */
+	deskMode: Schema.Array(Schema.String),
 	/** Outbox (message id) → why its last delivery failed, for undelivered entries whose try failed. */
 	failures: Schema.Record(Schema.String, Schema.String),
 });

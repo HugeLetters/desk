@@ -37,9 +37,9 @@ export class OpenCode extends Context.Service<
 		readonly connected: Effect.Effect<number>;
 		/** A client reports the sessions in desk mode in its OpenCode (all of them, each time). */
 		readonly modes: (client: Client, sessions: ReadonlyArray<string>) => Effect.Effect<void>;
-		/** How many sessions are in desk mode across the attached clients, now and after every change. */
-		readonly deskMode: Stream.Stream<number>;
-		readonly inDeskMode: Effect.Effect<number>;
+		/** The sessions in desk mode across the attached clients (sorted), now and after every change. */
+		readonly deskMode: Stream.Stream<ReadonlyArray<string>>;
+		readonly inDeskMode: Effect.Effect<ReadonlyArray<string>>;
 		/** The session, from the first attached client that knows it; undefined when none does. */
 		readonly session: (sessionID: string) => Effect.Effect<SessionInfo | undefined>;
 		/** Delivers through the attached client that knows the session: false when none does (nothing was sent). */
@@ -60,9 +60,9 @@ export class OpenCode extends Context.Service<
 				const moved = yield* PubSub.unbounded<string>();
 				/** Each client's sessions in desk mode; instances of one OpenCode report the same ones, so they're counted once. */
 				const modes = new Map<Client, ReadonlyArray<string>>();
-				const deskMode = yield* SubscriptionRef.make(0);
+				const deskMode = yield* SubscriptionRef.make<ReadonlyArray<string>>([]);
 				const publish = Effect.suspend(() =>
-					Effect.andThen(SubscriptionRef.set(attached, clients.length), SubscriptionRef.set(deskMode, new Set([...modes.values()].flat()).size)),
+					Effect.andThen(SubscriptionRef.set(attached, clients.length), SubscriptionRef.set(deskMode, [...new Set([...modes.values()].flat())].sort())),
 				);
 
 				const find = (sessionID: string) =>

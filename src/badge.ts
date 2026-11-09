@@ -19,6 +19,8 @@ export interface Status {
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
 	readonly url: string;
 	readonly projects: ReadonlyArray<ProjectSummary>;
+	/** The top-level sessions in desk mode. */
+	readonly deskMode: ReadonlyArray<string>;
 }
 
 /** The running service's page, from its registration. */
@@ -28,7 +30,7 @@ const registered = (home: string) =>
 /** One service's statuses, until it goes. */
 const from = (url: string): Stream.Stream<Status, unknown> =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
-		Stream.map((view) => ({ url, projects: view.projects })),
+		Stream.map((view) => ({ url, projects: view.projects, deskMode: view.deskMode })),
 		Stream.provide(RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))),
 	);
 
@@ -51,6 +53,6 @@ export const watch = (home: string, every: Schedule.Schedule<unknown> = Schedule
 		Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
 	);
 
-/** The footer text for a project: `desk`, `desk 3`, or `desk 3 !1` when one of those three is critical. */
-export const label = (summary: ProjectSummary | undefined) =>
-	summary === undefined || summary.waiting === 0 ? "desk" : `desk ${summary.waiting}${summary.critical > 0 ? ` !${summary.critical}` : ""}`;
+/** The footer's count for a project: none when nothing waits on the user, else how many do and how many of those are critical. */
+export const count = (summary: ProjectSummary | undefined) =>
+	summary === undefined || summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };

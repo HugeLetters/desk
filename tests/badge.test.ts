@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { label, type Status, watch } from "../src/badge";
+import { count, type Status, watch } from "../src/badge";
 import { eventually, type Service, startService } from "./support/service";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -25,7 +25,7 @@ const watching = (home: string) => {
 
 const register = (service: Service) => writeFile(join(service.store, "service.json"), JSON.stringify({ url: service.url }));
 
-test("the badge counts a project's entries waiting on the user, and follows the service through a restart", async () => {
+test("the badge counts a project's entries waiting on the user, knows the sessions in desk mode, and follows the service through a restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "desk-badge-"));
 	cleanup.push(() => rm(home, { recursive: true, force: true }));
 	const { seen, latest } = watching(home);
@@ -35,13 +35,16 @@ test("the badge counts a project's entries waiting on the user, and follows the 
 
 	const first = await startService({ store: home });
 	await register(first);
-	const plugin = first.plugin();
+	// An OpenCode whose session ses_a is in desk mode (the test plugin reports every session its OpenCode knows).
+	const opencode = first.fake.server("http://opencode");
+	opencode.session({ id: "ses_a" });
+	const plugin = first.plugin(opencode);
 	const asked = { session: "ses_a", directory: "/work/a" };
 	await plugin.request("ask", { asker: asked, question: { title: "One?", body: "" } });
 	await plugin.request("ask", { asker: asked, question: { title: "Two?", body: "", priority: "critical" } });
 	const counted = await eventually(() => latest()?.projects.find((project) => project.waiting === 2));
-	expect(latest()!.url).toBe(first.url);
-	expect(label(counted)).toBe("desk 2 !1");
+	expect(latest()!).toMatchObject({ url: first.url, deskMode: ["ses_a"] });
+	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
 
 	// The service goes (its registration first, as `registration.ts` does); the badge hides, then finds the next one.
 	await rm(join(home, "service.json"));
@@ -54,10 +57,9 @@ test("the badge counts a project's entries waiting on the user, and follows the 
 	expect(latest()!.projects).toHaveLength(1);
 });
 
-test("the label: plain when nothing waits, a count, and critical ones after !", () => {
+test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
 	const summary = { id: "p", name: "p", guessed: false };
-	expect(label(undefined)).toBe("desk");
-	expect(label({ ...summary, waiting: 0, critical: 0 })).toBe("desk");
-	expect(label({ ...summary, waiting: 3, critical: 0 })).toBe("desk 3");
-	expect(label({ ...summary, waiting: 3, critical: 1 })).toBe("desk 3 !1");
+	expect(count(undefined)).toBeUndefined();
+	expect(count({ ...summary, waiting: 0, critical: 0 })).toBeUndefined();
+	expect(count({ ...summary, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
 });

@@ -37,8 +37,9 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
    question for the user on the desk, not in chat.
 4. The page is `http://127.0.0.1:47400/` (or the `url` in `<store>/service.json` if that port was taken);
-   `/desk-mode` links to the session's project there. The TUI's footer shows `desk N` when N entries of the session's
-   project wait on you (`!M` in red for critical ones); clicking it opens the page. The badge is the plugin's `./tui`
+   `/desk-mode` links to the session's project there. In a session with desk mode on, the TUI's footer shows `desk`, or
+   `desk [N]` when N entries of the session's project wait on you (`[N !M]`, M in red, for critical ones); clicking it
+   opens the page. The badge is the plugin's `./tui`
    part, so it loads wherever the plugin does.
 
 ## How it fits together

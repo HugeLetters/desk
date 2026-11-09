@@ -164,7 +164,7 @@ test("a second plugin instance (another OpenCode) shares the one service and the
 	// The page counts sessions in desk mode, not plugin instances: both report ses_main, which counts once.
 	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
 	const view = await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect));
-	expect(Array.from(view)[0]!).toMatchObject({ opencode: 2, deskMode: 1 });
+	expect(Array.from(view)[0]!).toMatchObject({ opencode: 2, deskMode: ["ses_main"] });
 });
 
 test("/desk-mode again turns it off", async () => {
@@ -177,7 +177,7 @@ test("/desk-mode again turns it off", async () => {
 	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
 	const view = async () => Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!;
 	await eventually(async () => (await view()).opencode === 1);
-	expect(await view()).toMatchObject({ deskMode: 1 });
+	expect(await view()).toMatchObject({ deskMode: ["ses_main"] });
 });
 
 test("the service exits once every plugin instance has gone", async () => {

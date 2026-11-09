@@ -545,7 +545,7 @@ function App() {
 						class={`connection${state.view!.opencode === 0 ? " none" : ""}`}
 						title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
 					>
-						{state.view!.opencode === 0 ? "No session in desk mode" : `${state.view!.deskMode} ${state.view!.deskMode === 1 ? "session" : "sessions"} in desk mode`}
+						{state.view!.opencode === 0 ? "No session in desk mode" : `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
 					</span>
 					<Show when={!state.online}>
 						<span class="offline">reconnecting…</span>
