@@ -142,9 +142,10 @@ function App() {
 
 	/** The entries of the project shown; none while the previous project's view is still up. */
 	const entries = () => (state.view && (state.view.project?.id ?? undefined) === project() ? state.view.entries : []);
-	/** Blocked entries (an unresolved follow-up below) are in neither group: their follow-ups are. */
+	/** Blocked entries (an unresolved follow-up below) are in neither group: their follow-ups are. They're listed on their own. */
 	const mine = createMemo(() => waitingFor(entries(), "user"));
 	const theirs = createMemo(() => waitingFor(entries(), "agent"));
+	const blocked = createMemo(() => ordered(entries()).filter((entry) => waitingOn(entry, entries()) === "blocked"));
 	const yours = (entry: Entry) => waitingOn(entry, entries()) === "user";
 	// Drafts are kept by the id of an entry on the desk, so their keys are entry ids.
 	const pending = (): Array<{ entry: EntryId; text: string }> => Object.entries(drafts).flatMap(([entry, text]) => (text?.trim() ? [{ entry: entry as EntryId, text }] : []));
@@ -245,6 +246,7 @@ function App() {
 			<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
 				<Section title="Waiting on you" entries={mine()} note={`${mine().filter(drafted).length} of ${mine().length} drafted`} />
 				<Section title="Waiting on the agents" entries={theirs()} />
+				<Section title="Waiting on their follow-ups" entries={blocked()} />
 				<Section title="Resolved" entries={ordered(entries()).filter((entry) => entry.status === "resolved")} />
 			</Show>
 			</Show>
