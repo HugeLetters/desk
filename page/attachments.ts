@@ -50,21 +50,13 @@ export const remove = (ids: Iterable<string>) =>
 		return undefined;
 	});
 
-/** The files a draft's text references, ready to send (base64). Ids it can't find are left to the desk to refuse. */
+/** The files a draft's text references, ready to send. Ids it can't find are left to the desk to refuse. */
 export async function outgoing(text: string, files: (id: string) => Local | undefined): Promise<Array<Attachment>> {
 	return Promise.all(
 		[...referenced(text)].flatMap((id) => {
 			const file = files(id);
 			if (!file) return [];
-			return [
-				file.blob.arrayBuffer().then((buffer) => {
-					const bytes = new Uint8Array(buffer);
-					let binary = "";
-					for (let i = 0; i < bytes.length; i += 0x8000)
-						binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-					return { id, name: file.name, data: btoa(binary) };
-				}),
-			];
+			return [file.blob.bytes().then((data) => ({ id, name: file.name, data }))];
 		}),
 	);
 }

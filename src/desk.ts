@@ -353,9 +353,8 @@ export class Desk extends Context.Service<
 								const links = new Map(
 									yield* Effect.scoped(
 										Effect.forEach(plan.uploads, (attachment) =>
-											Effect.acquireRelease(
-												store.attach(attachment.name, Buffer.from(attachment.data, "base64")),
-												(file, exit) => (Exit.isFailure(exit) ? store.detach([file]) : Effect.void),
+											Effect.acquireRelease(store.attach(attachment.name, attachment.data), (file, exit) =>
+												Exit.isFailure(exit) ? store.detach([file]) : Effect.void,
 											).pipe(Effect.map((file) => [attachment.id, file] as const)),
 										),
 									),

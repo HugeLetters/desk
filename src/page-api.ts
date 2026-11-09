@@ -6,12 +6,13 @@ import { Entry, EntryId } from "./entry";
 import { DeliveryFailed, Refusal } from "./errors";
 import { Placement } from "./placement";
 
-export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.String });
+/** An attachment the page sends: its bytes, base64 on the wire. */
+export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.Uint8ArrayFromBase64 });
 export type Attachment = typeof Attachment.Type;
 
 /**
  * The user's text for an entry: an answer, or (on their own question) a follow-up. `files` holds the attachments the
- * text references (`attachment:<id>` in its Markdown, `data` base64); sending stores them as `attachments/<uuid>.<ext>`.
+ * text references (`attachment:<id>` in its Markdown); sending stores them as `attachments/<uuid>.<ext>`.
  */
 export const Draft = Schema.Struct({
 	entry: EntryId,

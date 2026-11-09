@@ -46,6 +46,7 @@ const failure = async <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) 
 const entries = () => desk((d) => d.entries);
 const ask = (title: string, extra: Partial<Question> = {}) =>
 	desk((d) => d.ask({ session: S("ses_a"), directory: "/w" }, { title, body: "", ...extra }));
+const bytes = (text: string) => new TextEncoder().encode(text);
 const files = async () => (await readdir(root)).filter((name) => name.endsWith(".md")).sort();
 const attachments = async () => (await readdir(join(root, "attachments")).catch(() => [])).sort();
 
@@ -124,7 +125,7 @@ test("describe: unresolved entries of the scope, flat with full ids, or one thre
 test("replies are all or nothing, and a refused one stores no attachments", async () => {
 	const entry = await ask("A?");
 	const local = crypto.randomUUID();
-	const files_ = [{ id: local, name: "a.png", data: "AAAA" }];
+	const files_ = [{ id: local, name: "a.png", data: bytes("AAAA") }];
 	const error = await failure((d) =>
 		d.reply(
 			[
@@ -163,8 +164,8 @@ test("an attachment that can't be stored takes the ones stored before it with it
 	const [a, b] = [crypto.randomUUID(), crypto.randomUUID()];
 	const text = `![a](attachment:${a}) ![b](attachment:${b})`;
 	const files_ = [
-		{ id: a, name: "a.png", data: "AAAA" },
-		{ id: b, name: "b.png", data: "AAAA" },
+		{ id: a, name: "a.png", data: bytes("AAAA") },
+		{ id: b, name: "b.png", data: bytes("AAAA") },
 	];
 	const exit = await Effect.runPromiseExit(
 		Effect.provideContext(
@@ -187,8 +188,8 @@ test("only referenced attachments are stored, and they go with the last entry po
 					entry: entry.id,
 					text: `![kept](attachment:${kept})`,
 					files: [
-						{ id: kept, name: "kept.png", data: "AAAA" },
-						{ id: dropped, name: "dropped.png", data: "BBBB" },
+						{ id: kept, name: "kept.png", data: bytes("AAAA") },
+						{ id: dropped, name: "dropped.png", data: bytes("BBBB") },
 					],
 				},
 			],

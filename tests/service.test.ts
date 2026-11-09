@@ -344,7 +344,7 @@ describe("delivery", () => {
 			.plugin(server)
 			.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Picture?") });
 		const local = crypto.randomUUID();
-		const data = Buffer.from("PNGDATA").toString("base64");
+		const data = new TextEncoder().encode("PNGDATA");
 		await service.rpc((client) =>
 			client.submit({
 				drafts: [
