@@ -25,7 +25,7 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 	const on = () => props.sessionID !== undefined && (props.status?.deskMode.includes(context.data.session.root(props.sessionID) ?? props.sessionID) ?? false);
 	const projectID = () => (props.sessionID === undefined ? undefined : context.data.session.get(props.sessionID)?.projectID);
 	const waiting = () => count(props.status?.projects.find((summary) => summary.id === projectID()));
-	// Like the footer's location: muted, base under the mouse (it's clickable); the count in the accent color, critical ones in the error color.
+	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.
 	return (
 		<text
 			visible={on()}
@@ -47,7 +47,7 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 				{(shown) => (
 					<>
 						{" ["}
-						<span style={{ fg: context.theme.hue.accent[500] }}>{shown().waiting}</span>
+						<span style={{ fg: context.theme.text.base }}>{shown().waiting}</span>
 						<Show when={shown().critical > 0}>
 							<span style={{ fg: context.theme.text.feedback.error.base }}> !{shown().critical}</span>
 						</Show>
