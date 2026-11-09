@@ -5,6 +5,7 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Delivery from "../delivery";
 import { Desk } from "../desk";
@@ -28,7 +29,7 @@ export interface Config {
 	/** How often undelivered messages are tried again, besides whenever a plugin instance connects. */
 	readonly retry?: Duration.Input | undefined;
 	/** Whether this service is the outdated side when a plugin's protocol differs (default: the code on disk changed since it loaded). */
-	readonly outdated?: (() => boolean) | undefined;
+	readonly outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem> | undefined;
 }
 
 export const layer = (config: Config) => {

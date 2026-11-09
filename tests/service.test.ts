@@ -7,6 +7,7 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -600,10 +601,10 @@ describe("the service's life", () => {
 		await rm(store, { recursive: true, force: true });
 	});
 
-	test("the protocol version is the build id: a hash of the code on disk; the service is outdated once that changes", () => {
+	test("the protocol version is the build id: a hash of the code on disk; the service is outdated once that changes", async () => {
 		expect(protocol).toMatch(/^[0-9a-z]+$/);
-		expect(build()).toBe(protocol);
-		expect(changedOnDisk()).toBe(false);
+		expect(await Effect.runPromise(Effect.provide(build, BunServices.layer))).toBe(protocol);
+		expect(await Effect.runPromise(Effect.provide(changedOnDisk, BunServices.layer))).toBe(false);
 	});
 
 	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {
@@ -619,7 +620,7 @@ describe("the service's life", () => {
 	test("a plugin speaking another protocol: told it's the outdated side while the service is current; once the contract changed on disk, the service is, and retires", async () => {
 		await service.close();
 		let changed = false;
-		service = await startService({ outdated: () => changed });
+		service = await startService({ outdated: Effect.sync(() => changed) });
 		expect(await loose(service.socket, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
 		await expect(loose(service.socket, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({
 			_tag: "Outdated",

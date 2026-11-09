@@ -8,6 +8,7 @@ import { join } from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import type * as FileSystem from "effect/FileSystem";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -32,7 +33,12 @@ type Answer<Tag extends Request> = Effect.Success<ReturnType<Connection.Client[T
 const isRefusal = Schema.is(Refusal);
 
 export async function startService(
-	options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode>; outdated?: () => boolean } = {},
+	options: {
+		store?: string;
+		idle?: number;
+		fake?: ReturnType<typeof fakeOpenCode>;
+		outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
+	} = {},
 ) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
 	const fake = options.fake ?? fakeOpenCode();
@@ -46,7 +52,7 @@ export async function startService(
 				port: 0,
 				idle: options.idle ?? 60_000,
 				retry: "50 millis",
-				outdated: options.outdated ?? (() => false),
+				outdated: options.outdated ?? Effect.succeed(false),
 			}),
 			scope,
 		),

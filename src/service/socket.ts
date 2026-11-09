@@ -35,7 +35,11 @@ const callTimeout = "30 seconds";
  * Whether this service is the outdated side: the contract on disk is no longer the one it loaded. The plugin always
  * starts the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
  */
-export const changedOnDisk = () => build() !== protocol;
+export const changedOnDisk = build.pipe(
+	Effect.map((now) => now !== protocol),
+	// Unreadable (a checkout halfway through, say): no reason to make way.
+	Effect.orElseSucceed(() => false),
+);
 
 /** One attached plugin instance: its OpenCode as a `Client`, and its calls waiting for a reply. */
 interface Attached {
@@ -50,7 +54,7 @@ const without = <K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> => {
 	return rest;
 };
 
-const handlers = (outdated: () => boolean) =>
+const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>) =>
 	PluginApi.toLayer(
 		Effect.gen(function* () {
 			const api = yield* Api;
@@ -138,7 +142,7 @@ const handlers = (outdated: () => boolean) =>
 				hello: ({ protocol: theirs }) =>
 					Effect.gen(function* () {
 						if (theirs === protocol) return { url: api.url };
-						const outdatedHere = outdated();
+						const outdatedHere = yield* outdated;
 						yield* Effect.logWarning(
 							`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`,
 						);
@@ -196,7 +200,7 @@ const logger = Logger.layer(
 	{ mergeWithExisting: false },
 );
 
-export const layer = (path: string, outdated: () => boolean = changedOnDisk) =>
+export const layer = (path: string, outdated: Effect.Effect<boolean, never, FileSystem.FileSystem> = changedOnDisk) =>
 	RpcServer.layer(PluginApi).pipe(
 		Layer.provide(handlers(outdated)),
 		Layer.provide(RpcServer.layerProtocolSocketServer),

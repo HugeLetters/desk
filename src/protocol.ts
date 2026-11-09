@@ -11,6 +11,8 @@
 
 import { readFileSync } from "node:fs";
 import { ProjectID } from "@opencode/schema/project-id";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
@@ -111,14 +113,22 @@ const contract = ["src/protocol.ts", "src/entry.ts", "src/errors.ts", "bun.lock"
 	(file) => new URL(`../${file}`, import.meta.url).pathname,
 );
 
+const hash = (texts: ReadonlyArray<string>) =>
+	Bun.hash(contract.map((file, index) => `${file}\0${texts[index]}`).join("\0")).toString(36);
+
 /** The contract's version as it's on disk now: a hash of its code. Nothing is bumped by hand. */
-export const build = () =>
-	Bun.hash(contract.map((file) => `${file}\0${readFileSync(file, "utf8")}`).join("\0")).toString(36);
+export const build = Effect.flatMap(FileSystem.FileSystem, (fs) =>
+	Effect.map(
+		Effect.forEach(contract, (file) => fs.readFileString(file)),
+		hash,
+	),
+);
 
 /**
  * The version this side speaks: the contract's code it loaded. Plugin and service compare it on `hello`. A hash can't
- * say which side is older; the service decides (`socket.ts`).
+ * say which side is older; the service decides (`socket.ts`). Read while the module loads, synchronously: both sides
+ * need it before any of their services exist.
  */
-export const protocol = build();
+export const protocol = hash(contract.map((file) => readFileSync(file, "utf8")));
 
 export type { Delivery, Priority };
