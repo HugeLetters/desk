@@ -57,12 +57,11 @@ const desks = Arbitrary.array(
 
 // The reference model: the definitions, written the plain way.
 const below = (all: ReadonlyArray<Entry>, entry: Entry): Array<Entry> => all.filter((other) => other.parent === entry.id).flatMap((child) => [child, ...below(all, child)]);
-const turn = (all: ReadonlyArray<Entry>, entry: Entry) =>
-	entry.status === "resolved" ? null : below(all, entry).some((other) => other.status !== "resolved") ? "blocked" : entry.status === "open" ? answerer(entry) : entry.asker;
+const turn = (entry: Entry) => (entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker);
 const rank = (entry: Entry) => Priority.literals.indexOf(entry.priority);
 
-test("whose turn it is: nobody once resolved, blocked by anything unresolved below, else the answerer or the asker", () =>
-	check(desks, (all) => all.every((entry) => waitingOn(entry, all) === turn(all, entry))));
+test("whose turn it is: nobody once resolved, else the answerer while open and the asker once answered, whatever is below", () =>
+	check(desks, (all) => all.every((entry) => waitingOn(entry) === turn(entry))));
 
 test("the order: every entry once, priority first, and within a priority an entry after everything below it", () =>
 	check(desks, (all) => {
@@ -83,7 +82,7 @@ test("Next: the first entry after this one in the order, wrapping round, that wa
 		const order = ordered(all);
 		const at = order.indexOf(current);
 		const after = [...order.slice(at + 1), ...order.slice(0, at)];
-		return next(all, current) === after.find((entry) => turn(all, entry) === "user");
+		return next(all, current) === after.find((entry) => turn(entry) === "user");
 	}));
 
 // The desk keeps its shape whatever the agents and the user do.

@@ -243,8 +243,7 @@ export class Desk extends Context.Service<
 							// One short line each: [status, whose turn, priority unless normal, "from the user" for the user's own questions].
 							return open
 								.map((entry) => {
-									const wait = waitingOn(entry, all);
-									const tags = [entry.status, wait === "blocked" ? "blocked" : `${wait}'s turn`, ...(entry.priority === "normal" ? [] : [entry.priority]), ...(entry.asker === "user" ? ["from the user"] : [])];
+									const tags = [entry.status, `${waitingOn(entry)}'s turn`, ...(entry.priority === "normal" ? [] : [entry.priority]), ...(entry.asker === "user" ? ["from the user"] : [])];
 									return `- ${entry.id} ${entry.title} [${tags.join(", ")}]${entry.parent === null ? "" : ` under ${entry.parent}`}`;
 								})
 								.join("\n");

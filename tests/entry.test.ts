@@ -48,29 +48,19 @@ test("files that aren't entries parse to None", () => {
 });
 
 test("whose move it is", () => {
-	expect<unknown>(waitingOn({ ...entry, status: "open" }, [])).toBe("user");
-	expect<unknown>(waitingOn({ ...entry, status: "answered" }, [])).toBe("agent");
-	expect<unknown>(waitingOn({ ...entry, asker: "user", status: "open" }, [])).toBe("agent");
-	expect<unknown>(waitingOn({ ...entry, status: "resolved" }, [])).toBe(null);
+	expect<unknown>(waitingOn({ ...entry, status: "open" })).toBe("user");
+	expect<unknown>(waitingOn({ ...entry, status: "answered" })).toBe("agent");
+	expect<unknown>(waitingOn({ ...entry, asker: "user", status: "open" })).toBe("agent");
+	expect<unknown>(waitingOn({ ...entry, status: "resolved" })).toBe(null);
 });
 
-test("blocked: an entry with an unresolved follow-up waits on nobody itself and is in neither group; its follow-up is", () => {
-	const parent: Entry = { ...entry, id: E("parent"), parent: null, created: "1" }; // answered: would wait on the agent
-	const followUp: Entry = { ...entry, id: E("follow-up"), parent: E("parent"), created: "2", status: "open", answer: null }; // waits on the user
-	const deeper: Entry = { ...followUp, id: E("deeper"), parent: E("follow-up"), created: "3", status: "resolved" };
-	const all = [parent, followUp, deeper];
-	expect<unknown>(waitingOn(parent, all)).toBe("blocked");
-	expect<unknown>(waitingOn(followUp, all)).toBe("user"); // a resolved entry below doesn't block
-	expect<unknown>(waitingFor(all, "user").map((e) => e.id)).toEqual(["follow-up"]);
-	expect<unknown>(waitingFor(all, "agent")).toEqual([]);
-	expect<unknown>(next(all, followUp)).toBeUndefined(); // Next skips the blocked parent
-	// The follow-up resolved: the parent is back in its group.
-	const done = [parent, { ...followUp, status: "resolved" as const }, deeper];
-	expect<unknown>(waitingOn(parent, done)).toBe("agent");
-	expect<unknown>(waitingFor(done, "agent").map((e) => e.id)).toEqual(["parent"]);
-	expect<unknown>(waitingFor(done, "user")).toEqual([]);
-	// A resolved entry stays resolved, whatever is below it.
-	expect<unknown>(waitingOn({ ...parent, status: "resolved" }, all)).toBe(null);
+test("what's open below an entry doesn't change whose turn it is; the order puts it first", () => {
+	const parent: Entry = { ...entry, id: E("parent"), parent: null, created: "1", status: "open", answer: null }; // an agent's question to the user
+	const followUp: Entry = { ...entry, id: E("follow-up"), parent: E("parent"), created: "2", status: "open", answer: null };
+	const all = [parent, followUp];
+	expect<unknown>(waitingOn(parent)).toBe("user");
+	expect<unknown>(waitingFor(all, "user").map((e) => e.id)).toEqual(["follow-up", "parent"]);
+	expect<unknown>(next(all, followUp)?.id).toBe("parent");
 });
 
 test("Next: the next entry waiting on the user by `created`, wrapping round; none left means back to the list", () => {
@@ -97,15 +87,15 @@ test("Open further down: entries below the direct children that wait on the user
 		e("root", null, "1"),
 		e("child", "root", "2"), // a direct child: the Follow-ups list shows it
 		e("deep2", "child", "6"),
-		e("deep1", "child", "3"), // blocked by grand
-		e("grand", "deep1", "4", "answered"), // blocked by deepest
+		e("deep1", "child", "3"),
+		e("grand", "deep1", "4", "answered"), // waits on the agent
 		e("deepest", "grand", "5", "answered", "user"), // waits on the user, four levels down
 		e("done", "child", "7", "resolved"),
 		e("other", null, "0"),
 		e("elsewhere", "other", "1"),
 		e("elsewhere2", "elsewhere", "1"),
 	];
-	expect<unknown>(openBelow(entries, { id: E("root") }).map((x) => x.id)).toEqual(["deepest", "deep2"]);
+	expect<unknown>(openBelow(entries, { id: E("root") }).map((x) => x.id)).toEqual(["deepest", "deep1", "deep2"]);
 	expect<unknown>(openBelow(entries, { id: E("deepest") })).toEqual([]);
 	expect<unknown>(openBelow(entries, { id: E("elsewhere") }).map((x) => x.id)).toEqual([]);
 	// openUnder counts everything unresolved at any depth, whoever it waits on
@@ -152,9 +142,9 @@ test("order and Next: within a priority, follow-ups before the entries they hang
 	expect<unknown>(ordered(all).map((e) => e.id)).toEqual(["urgent", "older", "deeper", "first", "second", "review"]);
 	// A raised follow-up still goes first; a lowered one moves below its parent with its priority.
 	expect<unknown>(ordered([review, { ...second, priority: "high" }, { ...first, priority: "low" }]).map((e) => e.id)).toEqual(["second", "review", "first"]);
-	// Blocked entries (first under deeper, review under both) wait on nobody, so Next skips them.
-	expect<unknown>(next(all, deeper)?.id).toBe("second");
-	expect<unknown>(next(all, second)?.id).toBe("urgent"); // wraps round
+	// Next goes through them in that order: a follow-up, then the entry it hangs under.
+	expect<unknown>(next(all, deeper)?.id).toBe("first");
+	expect<unknown>(next(all, review)?.id).toBe("urgent"); // wraps round
 	expect<unknown>(next([review, { ...first, status: "resolved" as const }], first)?.id).toBe("review"); // its follow-up done: the review waits again
 	// The current entry left the desk (a follow-up, answered and pruned): Next goes on from where it was.
 	expect<unknown>(next([review, older], { id: E("gone"), parent: E("review"), created: "9", priority: "normal" })?.id).toBe("review");

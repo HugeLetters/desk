@@ -127,7 +127,6 @@ The answer.
 
 - **Asker and answerer:** `asker` is `agent` or `user`; the answerer is the other one.
 - **Status:** `open` (waiting on the answerer) → `answered` (waiting on the asker) → `resolved` (the asker marked it done; refused while anything below it is unresolved, or while the user's text on it is undelivered). A resolved entry with no follow-ups leaves the desk, then its parent gets the same check, up the chain; attachments only they referenced go too.
-- **Blocked:** an unresolved entry with anything unresolved below it waits on nobody; its follow-ups carry the wait.
 - **Session and directory:** the top-level session the entry belongs to (a subagent's question goes to the session above it) and where it works. Relative paths in the entry's Markdown resolve against the directory (`/files/<id>/<path>` on the page).
 - **Outbox and delivery:** present only while the user's text hasn't reached the session. Entries sharing an outbox go out as one message (one per session per Submit).
 - **Parents:** set once, never changed; a top-level entry may be adopted once (`desk_adopt`), never into its own subtree.

@@ -101,7 +101,7 @@ test("describe: unresolved entries of the scope, flat with full ids, or one thre
 	const second = await ask("Child", { body: "More", parent: first.id });
 	await desk((d) => d.ask({ session: S("ses_elsewhere"), directory: "/x" }, { title: "Elsewhere", body: "" }));
 	expect(await desk((d) => d.describe(undefined, (entry) => entry.session === "ses_a"))).toBe(
-		`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, blocked]`,
+		`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, user's turn]`,
 	);
 	// One entry in full; what it hangs under, and its follow-ups, one line each (the agent has their bodies already).
 	const child = await desk((d) => d.describe(second.id, () => true));
