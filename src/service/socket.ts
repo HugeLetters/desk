@@ -12,10 +12,12 @@ import type { ProjectID } from "@opencode/schema/project-id";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
@@ -38,8 +40,15 @@ export const changedOnDisk = () => build() !== protocol;
 /** One attached plugin instance: its OpenCode as a `Client`, and its calls waiting for a reply. */
 interface Attached {
 	readonly client: Client;
-	readonly waiting: Map<number, Deferred.Deferred<Outcome>>;
+	/** Its calls that wait for the plugin's reply, by call id. */
+	readonly waiting: Ref.Ref<ReadonlyMap<number, Deferred.Deferred<Outcome>>>;
 }
+
+const without = <K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> => {
+	const rest = new Map(map);
+	rest.delete(key);
+	return rest;
+};
 
 const handlers = (outdated: () => boolean) =>
 	PluginApi.toLayer(
@@ -49,8 +58,10 @@ const handlers = (outdated: () => boolean) =>
 			const projects = yield* Projects;
 			const clients = yield* Clients;
 			/** By RPC client id, while attached. */
-			const attachments = new Map<number, Attached>();
-			let lastCall = 0;
+			const attachments = yield* Ref.make<ReadonlyMap<number, Attached>>(new Map());
+			const lastCall = yield* Ref.make(0);
+			/** Work started by a request that outlives it; it ends with the service. */
+			const background = yield* FiberSet.make();
 			/** Looks the sessions up, so their projects are known and named (`Projects`). */
 			const learn = (sessions: ReadonlyArray<SessionID>, directory: string) =>
 				Effect.forEach(sessions, (session) => projects.of({ session, directory }), { discard: true });
@@ -62,20 +73,20 @@ const handlers = (outdated: () => boolean) =>
 			) =>
 				Effect.gen(function* () {
 					const calls = yield* Queue.unbounded<ServiceCall>();
-					const waiting = new Map<number, Deferred.Deferred<Outcome>>();
+					const waiting = yield* Ref.make<ReadonlyMap<number, Deferred.Deferred<Outcome>>>(new Map());
 					/** Sends a call on the stream and waits for its reply. */
 					const call = (make: (call: number) => ServiceCall) =>
 						Effect.gen(function* () {
-							const call = ++lastCall;
+							const call = yield* Ref.updateAndGet(lastCall, (last) => last + 1);
 							const reply = yield* Deferred.make<Outcome>();
-							waiting.set(call, reply);
+							yield* Ref.update(waiting, (all) => new Map(all).set(call, reply));
 							yield* Queue.offer(calls, make(call));
 							return yield* Deferred.await(reply).pipe(
 								Effect.timeoutOrElse({
 									duration: callTimeout,
 									orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })),
 								}),
-								Effect.ensuring(Effect.sync(() => waiting.delete(call))),
+								Effect.ensuring(Ref.update(waiting, (all) => without(all, call))),
 							);
 						});
 					const failed = (outcome: Outcome) =>
@@ -99,13 +110,16 @@ const handlers = (outdated: () => boolean) =>
 					// All of it for as long as the stream runs: the plugin hanging up (or dying) ends it.
 					yield* clients.hold;
 					yield* Effect.acquireRelease(
-						Effect.sync(() => attachments.set(id, { client, waiting })),
+						Ref.update(attachments, (all) => new Map(all).set(id, { client, waiting })),
 						() =>
-							Effect.gen(function* () {
-								attachments.delete(id);
-								for (const reply of waiting.values())
-									yield* Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" });
-							}),
+							Effect.andThen(
+								Ref.update(attachments, (all) => without(all, id)),
+								Effect.flatMap(Ref.get(waiting), (left) =>
+									Effect.forEach(left.values(), (reply) =>
+										Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" }),
+									),
+								),
+							),
 					);
 					yield* opencode.attach(client);
 					yield* opencode.modes(client, sessions);
@@ -130,23 +144,27 @@ const handlers = (outdated: () => boolean) =>
 						);
 						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
 						if (outdatedHere) {
-							yield* Effect.forkDetach(Effect.andThen(Effect.sleep("100 millis"), clients.retire));
+							// The sleep: so the `Outdated` reply is written to the socket before it closes.
+							yield* FiberSet.run(background, Effect.andThen(Effect.sleep("100 millis"), clients.retire));
 							return yield* new Outdated({ side: "service" });
 						}
 						return yield* new Outdated({ side: "plugin" });
 					}),
 				attach: ({ project, sessions }, { client }) => Stream.unwrap(attach(client.id, project, sessions)),
 				reply: ({ call, outcome }, { client }) =>
-					Effect.suspend(() => {
-						const reply = attachments.get(client.id)?.waiting.get(call);
-						return reply ? Deferred.succeed(reply, outcome) : Effect.void;
-					}).pipe(Effect.asVoid),
-				modes: ({ sessions }, { client }) => {
-					const attached = attachments.get(client.id);
-					return attached
-						? Effect.andThen(opencode.modes(attached.client, sessions), Effect.forkDetach(learn(sessions, "")))
-						: Effect.void;
-				},
+					Effect.gen(function* () {
+						const attached = (yield* Ref.get(attachments)).get(client.id);
+						const reply = attached && (yield* Ref.get(attached.waiting)).get(call);
+						if (reply) yield* Deferred.succeed(reply, outcome);
+					}),
+				modes: ({ sessions }, { client }) =>
+					Effect.gen(function* () {
+						const attached = (yield* Ref.get(attachments)).get(client.id);
+						if (!attached) return;
+						yield* opencode.modes(attached.client, sessions);
+						// In the background, as on attach: the lookups go out on the attachment's stream.
+						yield* FiberSet.run(background, learn(sessions, ""));
+					}),
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,
 				adopt: api.adopt,
