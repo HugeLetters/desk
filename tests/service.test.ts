@@ -14,7 +14,10 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { type EntryId, parse } from "../src/entry";
 import type { View } from "../src/page-api";
-import { folder } from "../src/projects";
+import { key } from "../src/projects";
+
+/** The key (URL) of an entry placed by its folder. */
+const folder = (directory: string) => key({ _tag: "Folder", directory });
 import { Outdated, protocol } from "../src/protocol";
 import { Refusal } from "../src/errors";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
@@ -256,7 +259,7 @@ describe("projects", () => {
 		await plugin.request("ask", { asker: { session: S("ses_q"), directory: "/work/other" }, question: question("Q?") });
 		expect(p.url).toBe(`${service.url}projects/prj_phantom/questions/${p.id}`);
 		const phantom = await view("prj_phantom");
-		expect(phantom.project).toEqual({ id: P("prj_phantom"), name: "phantom", guessed: false });
+		expect(phantom.project).toEqual({ id: P("prj_phantom"), name: "phantom", placement: { _tag: "Project", id: P("prj_phantom") } });
 		expect(phantom.entries.map((entry) => entry.title)).toEqual(["P?"]);
 		expect(phantom.projects.map((project) => [project.name, project.waiting])).toEqual([
 			["other", 1],
@@ -270,12 +273,24 @@ describe("projects", () => {
 
 	test("an entry no connected OpenCode knows goes under its folder until one that knows it connects", async () => {
 		await service.plugin().request("ask", { asker: { session: S("ses_p"), directory: "/work/phantom/app" }, question: question("Where?") });
-		expect((await view()).projects.map((project) => [project.id, project.name, project.guessed])).toEqual([[folder("/work/phantom/app"), "app", true]]);
+		expect((await view()).projects.map((project) => [project.id, project.name, project.placement._tag])).toEqual([[folder("/work/phantom/app"), "app", "Folder"]]);
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
 		service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
 		await eventually(async () => (await view()).projects[0]?.id === "prj_phantom");
 		expect((await view()).opencode).toBe(2);
+	});
+
+	test("a lookup that fails isn't taken for an unknown session: the entry is placed once the plugin answers, with no reconnect", async () => {
+		const server = service.fake.server("http://opencode-1");
+		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
+		const plugin = service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
+		await plugin.url();
+		server.down = true;
+		await plugin.request("ask", { asker: { session: S("ses_p"), directory: "/work/phantom" }, question: question("Where?") });
+		expect((await view()).projects.map((project) => project.placement._tag)).toEqual(["Folder"]);
+		server.down = false;
+		await eventually(async () => (await view()).projects[0]?.id === "prj_phantom");
 	});
 
 	test("a known project stays while OpenCode is away; the next connect catches a move missed meanwhile", async () => {
@@ -288,7 +303,7 @@ describe("projects", () => {
 		await first.close();
 		server.sessions.set(S("ses_p"), { ...server.sessions.get(S("ses_p"))!, projectID: P("prj_moved") }); // moved, nobody told
 		await eventually(async () => (await view()).opencode === 0);
-		expect((await view()).projects.map((project) => [project.id, project.guessed])).toEqual([["prj_phantom", false]]);
+		expect((await view()).projects.map((project) => [project.id, project.placement._tag])).toEqual([["prj_phantom", "Project"]]);
 
 		service.plugin(server);
 		await eventually(async () => (await view()).projects[0]?.id === "prj_moved");
@@ -302,7 +317,7 @@ describe("projects", () => {
 		const plugin = service.plugin(server, { id: P("prj_other"), directory: "/work/other" });
 		const { url } = await plugin.request("page", { session: S("ses_p") });
 		expect(url).toBe(`${service.url}projects/prj_phantom`);
-		expect((await view("prj_phantom")).project).toEqual({ id: P("prj_phantom"), name: "phantom", guessed: false });
+		expect((await view("prj_phantom")).project).toEqual({ id: P("prj_phantom"), name: "phantom", placement: { _tag: "Project", id: P("prj_phantom") } });
 	});
 
 	test("without a project, the page lists the projects only", async () => {
@@ -310,7 +325,7 @@ describe("projects", () => {
 		const all = await view();
 		expect(all.project).toBeNull();
 		expect(all.entries).toEqual([]);
-		expect(all.projects).toEqual([{ id: folder("/w"), name: "w", guessed: true, waiting: 1, critical: 0 }]);
+		expect(all.projects).toEqual([{ id: folder("/w"), name: "w", placement: { _tag: "Folder", directory: "/w" }, waiting: 1, critical: 0 }]);
 	});
 
 	test("a live view follows changes", async () => {

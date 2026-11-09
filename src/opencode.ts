@@ -21,6 +21,12 @@ import type { Prompt, SessionInfo } from "./protocol";
 
 export type { Prompt, SessionInfo };
 
+/**
+ * What the attached OpenCode instances say about a session: one knows it; all of them answered and none does; or none
+ * knows it and one couldn't answer, so it may yet. Only `Unknown` is an answer to remember.
+ */
+export type Lookup = { readonly _tag: "Known"; readonly session: SessionInfo } | { readonly _tag: "Unknown" } | { readonly _tag: "Unreachable" };
+
 /** The plugin instance couldn't do what was asked (OpenCode said no, or the plugin didn't answer): what was said. */
 export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly cause: string }> {}
 
@@ -29,6 +35,12 @@ export interface Client {
 	/** The session, or undefined when this OpenCode doesn't know it. */
 	readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined, Unanswered>;
 	readonly prompt: (prompt: Prompt) => Effect.Effect<void, Unanswered>;
+}
+
+/** An attached plugin instance, and the sessions in desk mode it last reported. */
+interface Attached {
+	readonly client: Client;
+	readonly deskMode: ReadonlyArray<SessionID>;
 }
 
 export class OpenCode extends Context.Service<
@@ -40,13 +52,15 @@ export class OpenCode extends Context.Service<
 		readonly attached: Stream.Stream<number>;
 		/** How many clients are attached now. */
 		readonly connected: Effect.Effect<number>;
+		/** Each time a client attaches: it may know sessions (or moves) the others didn't. */
+		readonly joined: Stream.Stream<void>;
 		/** A client reports the sessions in desk mode in its OpenCode (all of them, each time). */
 		readonly modes: (client: Client, sessions: ReadonlyArray<SessionID>) => Effect.Effect<void>;
 		/** The sessions in desk mode across the attached clients (sorted), now and after every change. */
 		readonly deskMode: Stream.Stream<ReadonlyArray<SessionID>>;
 		readonly inDeskMode: Effect.Effect<ReadonlyArray<SessionID>>;
-		/** The session, from the first attached client that knows it; undefined when none does. */
-		readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined>;
+		/** The session, from the first attached client that knows it. */
+		readonly session: (sessionID: SessionID) => Effect.Effect<Lookup>;
 		/** Delivers through the attached client that knows the session: false when none does (nothing was sent). */
 		readonly prompt: (prompt: Prompt) => Effect.Effect<boolean, DeliveryFailed>;
 		/** A client reports that a session moved. */
@@ -59,56 +73,53 @@ export class OpenCode extends Context.Service<
 		return Layer.effect(
 			this,
 			Effect.gen(function* () {
-				/** Attached clients, in the order they came. */
-				const clients: Array<Client> = [];
-				const attached = yield* SubscriptionRef.make(0);
+				/** The attached clients, in the order they came: the one state; the counts and desk-mode sessions follow from it. */
+				const state = yield* SubscriptionRef.make<ReadonlyArray<Attached>>([]);
 				const moved = yield* PubSub.unbounded<SessionID>();
-				/** Each client's sessions in desk mode; instances of one OpenCode report the same ones, so they're counted once. */
-				const modes = new Map<Client, ReadonlyArray<SessionID>>();
-				const deskMode = yield* SubscriptionRef.make<ReadonlyArray<SessionID>>([]);
-				const publish = Effect.suspend(() =>
-					Effect.andThen(SubscriptionRef.set(attached, clients.length), SubscriptionRef.set(deskMode, [...new Set([...modes.values()].flat())].sort())),
-				);
+				const joined = yield* PubSub.unbounded<void>();
+				const count = (all: ReadonlyArray<Attached>) => all.length;
+				// Instances of one OpenCode report the same sessions, so they're counted once.
+				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> => [...new Set(all.flatMap((attached) => attached.deskMode))].sort();
+				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) => a.length === b.length && a.every((session, index) => session === b[index]);
 
-				/** The first attached client that knows the session. One that can't answer is skipped. */
+				/** The first attached client that knows the session. One that can't answer is skipped, and remembered. */
 				const find = (sessionID: SessionID) =>
 					Effect.gen(function* () {
-						for (const client of [...clients]) {
-							const session = yield* Effect.orElseSucceed(client.session(sessionID), () => undefined);
-							if (session) return { client, session };
+						let unreachable = false;
+						for (const { client } of yield* SubscriptionRef.get(state)) {
+							const session = yield* client.session(sessionID).pipe(
+								Effect.catch(() =>
+									Effect.sync(() => {
+										unreachable = true;
+										return undefined;
+									}),
+								),
+							);
+							if (session) return { client, lookup: { _tag: "Known", session } as Lookup };
 						}
-						return undefined;
+						return { client: undefined, lookup: (unreachable ? { _tag: "Unreachable" } : { _tag: "Unknown" }) as Lookup };
 					});
 
 				return OpenCode.of({
 					attach: (client) =>
 						Effect.acquireRelease(
-							Effect.suspend(() => {
-								clients.push(client);
-								return publish;
-							}),
-							() =>
-								Effect.suspend(() => {
-									clients.splice(clients.indexOf(client), 1);
-									modes.delete(client);
-									return publish;
-								}),
+							Effect.andThen(
+								SubscriptionRef.update(state, (all) => [...all, { client, deskMode: [] }]),
+								PubSub.publish(joined, undefined),
+							),
+							() => SubscriptionRef.update(state, (all) => all.filter((attached) => attached.client !== client)),
 						),
-					attached: SubscriptionRef.changes(attached),
-					modes: (client, sessions) =>
-						Effect.suspend(() => {
-							if (!clients.includes(client)) return Effect.void;
-							modes.set(client, sessions);
-							return publish;
-						}),
-					deskMode: SubscriptionRef.changes(deskMode),
-					inDeskMode: SubscriptionRef.get(deskMode),
-					connected: SubscriptionRef.get(attached),
-					session: (sessionID) => Effect.map(find(sessionID), (found) => found?.session),
+					attached: Stream.changes(Stream.map(SubscriptionRef.changes(state), count)),
+					connected: Effect.map(SubscriptionRef.get(state), count),
+					joined: Stream.fromPubSub(joined),
+					modes: (client, sessions) => SubscriptionRef.update(state, (all) => all.map((attached) => (attached.client === client ? { client, deskMode: sessions } : attached))),
+					deskMode: Stream.changesWith(Stream.map(SubscriptionRef.changes(state), inDeskMode), sameSessions),
+					inDeskMode: Effect.map(SubscriptionRef.get(state), inDeskMode),
+					session: (sessionID) => Effect.map(find(sessionID), (found) => found.lookup),
 					prompt: (prompt) =>
-						Effect.flatMap(find(prompt.sessionID), (found) =>
-							found
-								? found.client.prompt(prompt).pipe(
+						Effect.flatMap(find(prompt.sessionID), ({ client }) =>
+							client
+								? client.prompt(prompt).pipe(
 										Effect.mapError(({ cause }) => new DeliveryFailed({ session: prompt.sessionID, cause })),
 										Effect.as(true),
 									)

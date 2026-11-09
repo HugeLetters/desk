@@ -14,7 +14,7 @@ import { Failures } from "../delivery";
 import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
 import type { Refusal } from "../errors";
 import type { Draft, View } from "../page-api";
-import { guessed, Projects } from "../projects";
+import { fromKey, key, type Placement, Projects } from "../projects";
 import { OpenCode } from "../opencode";
 import type { PluginApi } from "../protocol";
 
@@ -50,12 +50,12 @@ export class Api extends Context.Service<
 				const projects = yield* Projects;
 				const opencode = yield* OpenCode;
 				const failures = yield* Failures;
-				const link = (project: string, entry?: string) => `${url}projects/${encodeURIComponent(project)}${entry ? `/questions/${entry}` : ""}`;
+				const link = (project: Placement, entry?: string) => `${url}projects/${encodeURIComponent(key(project))}${entry ? `/questions/${entry}` : ""}`;
 
 				/** Each entry's project (one lookup per root session; `Projects` remembers them). */
 				const placed = (entries: ReadonlyArray<Entry>) =>
 					Effect.gen(function* () {
-						const byEntry = new Map<string, string>();
+						const byEntry = new Map<string, Placement>();
 						for (const entry of entries) byEntry.set(entry.id, yield* projects.of(entry));
 						return (entry: Entry) => byEntry.get(entry.id)!;
 					});
@@ -66,25 +66,28 @@ export class Api extends Context.Service<
 						const where = directory ?? all.find((entry) => entry.session === session)?.directory ?? "";
 						const project = yield* projects.of({ session, directory: where });
 						const projectOf = yield* placed(all);
-						return { project, scope: (entry: Entry) => projectOf(entry) === project };
+						return { project, scope: (entry: Entry) => key(projectOf(entry)) === key(project) };
 					});
 
+				/** `project` is a placement's key (the page's URL). */
 				const view = (project: string | undefined, entries: ReadonlyArray<Entry>) =>
 					Effect.gen(function* () {
 						const projectOf = yield* placed(entries);
-						const ids = [...new Set(entries.map(projectOf))];
-						const summaries = yield* Effect.forEach(ids, (id) =>
+						const keyOf = (entry: Entry) => key(projectOf(entry));
+						const placements = new Map(entries.map((entry) => [keyOf(entry), projectOf(entry)]));
+						const summaries = yield* Effect.forEach(placements, ([id, placement]) =>
 							Effect.gen(function* () {
-								const mine = entries.filter((entry) => projectOf(entry) === id);
+								const mine = entries.filter((entry) => keyOf(entry) === id);
 								const waiting = waitingFor(mine, "user");
-								const name = yield* projects.name(id, mine[0]?.directory);
-								return { id, name, guessed: guessed(id), waiting: waiting.length, critical: waiting.filter((entry) => entry.priority === "critical").length };
+								const name = yield* projects.name(placement, mine[0]?.directory);
+								return { id, name, placement, waiting: waiting.length, critical: waiting.filter((entry) => entry.priority === "critical").length };
 							}),
 						);
-						const name = project === undefined ? undefined : (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(project)));
+						const shown = project === undefined ? undefined : (placements.get(project) ?? fromKey(project));
+						const name = project === undefined ? undefined : (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown!)));
 						return {
-							project: project === undefined ? null : { id: project, name: name!, guessed: guessed(project) },
-							entries: project === undefined ? [] : entries.filter((entry) => projectOf(entry) === project),
+							project: project === undefined ? null : { id: project, name: name!, placement: shown! },
+							entries: project === undefined ? [] : entries.filter((entry) => keyOf(entry) === project),
 							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
 							opencode: yield* opencode.connected,
 							deskMode: yield* opencode.inDeskMode,

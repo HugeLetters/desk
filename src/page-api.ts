@@ -4,6 +4,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import { Entry, EntryId } from "./entry";
 import { DeliveryFailed, Refusal } from "./errors";
+import { Placement } from "./placement";
 
 export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.String });
 export type Attachment = typeof Attachment.Type;
@@ -15,13 +16,13 @@ export type Attachment = typeof Attachment.Type;
 export const Draft = Schema.Struct({ entry: EntryId, text: Schema.String, files: Schema.optional(Schema.Array(Attachment)) });
 export type Draft = typeof Draft.Type;
 
-/** A project with entries. `guessed`: no connected OpenCode knows its sessions, so it's their folder. */
-export const ProjectSummary = Schema.Struct({ id: Schema.String, name: Schema.String, guessed: Schema.Boolean, waiting: Schema.Int, critical: Schema.Int });
+/** A project with entries. `id` is its placement's key (its URL); a `Folder` is a guess: no connected OpenCode knows its sessions. */
+export const ProjectSummary = Schema.Struct({ id: Schema.String, name: Schema.String, placement: Placement, waiting: Schema.Int, critical: Schema.Int });
 export type ProjectSummary = typeof ProjectSummary.Type;
 
 /** One project's desk, every project with entries (for switching), and how many OpenCode instances are connected. */
 export const View = Schema.Struct({
-	project: Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String, guessed: Schema.Boolean })),
+	project: Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String, placement: Placement })),
 	entries: Schema.Array(Entry),
 	projects: Schema.Array(ProjectSummary),
 	/** Connected plugin instances: with none, answers wait and projects are folder guesses. */

@@ -264,7 +264,7 @@ function App() {
 						{(other) => (
 							<A class={`item${other.waiting ? " turn" : ""}`} href={projectPath(other.id)}>
 								<span class="title">{other.name}</span>
-								<Show when={other.guessed}>
+								<Show when={other.placement._tag === "Folder"}>
 									<span class="label" title="Guessed from the folder: no connected OpenCode knows these sessions yet">folder</span>
 								</Show>
 								<Show when={other.critical}>
@@ -543,7 +543,7 @@ function App() {
 								{(other) => (
 									<option value={other.id} selected={other.id === project()}>
 										{other.name}
-										{other.guessed ? " (folder)" : ""}
+										{other.placement._tag === "Folder" ? " (folder)" : ""}
 										{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
 									</option>
 								)}
@@ -566,7 +566,7 @@ function App() {
 				</div>
 			</header>
 			<main>
-				<Show when={state.view!.opencode === 0 || state.view!.project?.guessed || (project() === undefined && state.view!.projects.some((other) => other.guessed))}>
+				<Show when={state.view!.opencode === 0 || state.view!.project?.placement._tag === "Folder" || (project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))}>
 					<div class="notice">
 						<Show when={state.view!.opencode === 0}>No session is in desk mode: answers wait as <em>not delivered</em> until one is. </Show>
 						Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected OpenCode knows their session yet.

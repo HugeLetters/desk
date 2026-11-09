@@ -9,7 +9,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { count, type Status, watch } from "../src/badge";
 import { eventually, type Service, startService } from "./support/service";
-import { E, S } from "./support/ids";
+import { P, S } from "./support/ids";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -59,7 +59,7 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
-	const summary = { id: E("p"), name: "p", guessed: false };
+	const summary = { id: "p", name: "p", placement: { _tag: "Project", id: P("p") } } as const;
 	expect(count(undefined)).toBeUndefined();
 	expect(count({ ...summary, waiting: 0, critical: 0 })).toBeUndefined();
 	expect(count({ ...summary, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
