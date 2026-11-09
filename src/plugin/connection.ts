@@ -134,7 +134,10 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 		} satisfies Connection;
 	});
 
-/** Starts `bun src/service/main.ts` detached, logging to `<store>/service.log`. */
+/**
+ * Starts `bun src/service/main.ts` detached, logging to `<store>/service.log`. With `node:child_process`, not Effect's
+ * `ChildProcess`: that one ends the child with its scope, and the service has to outlive this OpenCode.
+ */
 export const startService = (env: { DESK_HOME: string; DESK_PORT: string }) =>
 	Effect.sync(() => {
 		mkdirSync(env.DESK_HOME, { recursive: true });

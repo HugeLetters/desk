@@ -21,6 +21,7 @@ import * as Schema from "effect/Schema";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
+import { OpenCode } from "../../src/opencode";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 import { P } from "./ids";
 
@@ -37,7 +38,7 @@ export async function startService(options: { store?: string; idle?: number; fak
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
 		Layer.buildWithScope(App.layer({ store, socket, port: 0, idle: options.idle ?? 60_000, retry: "50 millis", outdated: options.outdated ?? (() => false) }), scope),
-	)) as Context.Context<Api | Clients>;
+	)) as Context.Context<Api | Clients | OpenCode>;
 	const url = Context.get(services, Api).url;
 	const plugins: Array<Scope.Closeable> = [];
 	const unwatch: Array<() => void> = [];
@@ -71,6 +72,8 @@ export async function startService(options: { store?: string; idle?: number; fak
 		},
 		rpc: <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => rpc(url, f),
 		clients: () => Effect.runPromise(Context.get(services, Clients).count),
+		/** How many plugin instances are attached. */
+		attached: () => Effect.runPromise(Context.get(services, OpenCode).connected),
 		/** Stops the service; the store stays unless `remove`. */
 		async close(remove = true) {
 			for (const stop of unwatch) stop();

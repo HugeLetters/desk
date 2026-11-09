@@ -278,7 +278,7 @@ describe("projects", () => {
 		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
 		service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
 		await eventually(async () => (await view()).projects[0]?.id === "prj_phantom");
-		expect((await view()).opencode).toBe(2);
+		expect(await service.attached()).toBe(2);
 	});
 
 	test("a lookup that fails isn't taken for an unknown session: the entry is placed once the plugin answers, with no reconnect", async () => {
@@ -298,16 +298,16 @@ describe("projects", () => {
 		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
 		const first = service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
 		await first.request("ask", { asker: { session: S("ses_p"), directory: "/work/phantom" }, question: question("Where?") });
-		expect((await view()).opencode).toBe(1);
+		expect(await service.attached()).toBe(1);
 
 		await first.close();
 		server.sessions.set(S("ses_p"), { ...server.sessions.get(S("ses_p"))!, projectID: P("prj_moved") }); // moved, nobody told
-		await eventually(async () => (await view()).opencode === 0);
+		await eventually(async () => (await service.attached()) === 0);
 		expect((await view()).projects.map((project) => [project.id, project.placement._tag])).toEqual([["prj_phantom", "Project"]]);
 
 		service.plugin(server);
 		await eventually(async () => (await view()).projects[0]?.id === "prj_moved");
-		expect((await view()).opencode).toBe(1);
+		expect(await service.attached()).toBe(1);
 	});
 
 	test("a project no plugin instance has reported is named after its session's folder, not its id", async () => {
@@ -341,6 +341,23 @@ describe("projects", () => {
 describe("the page server", () => {
 	test("serves the page as built by Vite", async () => {
 		await expectBuiltPage(service.url.replace(/\/$/, ""));
+	});
+
+	test("serves an entry's media from below its folder, and nothing outside it", async () => {
+		const work = await mkdtemp(join(tmpdir(), "desk-work-"));
+		await mkdir(join(work, "shots"));
+		await writeFile(join(work, "shots", "a b.png"), "PNG");
+		await writeFile(join(tmpdir(), "desk-outside.txt"), "secret");
+		const asked = await service.plugin().request("ask", { asker: { session: S("ses_a"), directory: work }, question: question("Media?") });
+		const get = (path: string) => fetch(`${service.url}files/${asked.id}/${path}`);
+		const found = await get("shots/a%20b.png");
+		expect(found.status).toBe(200);
+		expect(await found.text()).toBe("PNG");
+		expect((await get("shots/missing.png")).status).toBe(404);
+		expect((await get("..%2Fdesk-outside.txt")).status).toBe(403);
+		expect((await fetch(`${service.url}files/${E("00000000-0000-4000-8000-000000000000")}/shots/a%20b.png`)).status).toBe(404);
+		await rm(work, { recursive: true, force: true });
+		await rm(join(tmpdir(), "desk-outside.txt"), { force: true });
 	});
 
 	test("a link to a project or an entry opens the page, its assets from the root", async () => {

@@ -167,6 +167,17 @@ export const newId = () => EntryId.make(crypto.randomUUID());
  * The attachments a text points at, as `[name](/attachments/<uuid>.<ext>)`: the page serves `/attachments/` from the
  * store; `file` is the path below the store.
  */
+/** A draft's reference to an attachment it carries, `](attachment:<id>)` in its Markdown (`page/attachments.ts`). */
+const attachmentReference = /\]\(attachment:([0-9a-f-]{36})\)/g;
+/** The attachment ids a draft's text references. */
+export const referencedAttachments = (text: string) => new Set([...text.matchAll(attachmentReference)].map(([, id]) => id!));
+/** The text with each attachment reference pointed elsewhere; `to` returns undefined to leave one as it is. */
+export const pointAttachments = (text: string, to: (id: string) => string | undefined) =>
+	text.replaceAll(attachmentReference, (whole, id: string) => {
+		const target = to(id);
+		return target === undefined ? whole : `](${target})`;
+	});
+
 export const attachmentsIn = (text: string) =>
 	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].map(([, name, file]) => ({ name: name || file!, file: file! }));
 

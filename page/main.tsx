@@ -552,10 +552,10 @@ function App() {
 					</Show>
 					<span class="spacer" />
 					<span
-						class={`connection${state.view!.opencode === 0 ? " none" : ""}`}
+						class={`connection${state.view!.deskMode.length === 0 ? " none" : ""}`}
 						title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
 					>
-						{state.view!.opencode === 0 ? "No session in desk mode" : `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
+						{state.view!.deskMode.length === 0 ? "No session in desk mode" : `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
 					</span>
 					<Show when={!state.online}>
 						<span class="offline">reconnecting…</span>
@@ -566,9 +566,9 @@ function App() {
 				</div>
 			</header>
 			<main>
-				<Show when={state.view!.opencode === 0 || state.view!.project?.placement._tag === "Folder" || (project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))}>
+				<Show when={state.view!.deskMode.length === 0 || state.view!.project?.placement._tag === "Folder" || (project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))}>
 					<div class="notice">
-						<Show when={state.view!.opencode === 0}>No session is in desk mode: answers wait as <em>not delivered</em> until one is. </Show>
+						<Show when={state.view!.deskMode.length === 0}>No session is in desk mode: answers wait as <em>not delivered</em> until one is. </Show>
 						Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected OpenCode knows their session yet.
 					</div>
 				</Show>

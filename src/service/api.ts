@@ -89,7 +89,6 @@ export class Api extends Context.Service<
 							project: project === undefined ? null : { id: project, name: name!, placement: shown! },
 							entries: project === undefined ? [] : entries.filter((entry) => keyOf(entry) === project),
 							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
-							opencode: yield* opencode.connected,
 							deskMode: yield* opencode.inDeskMode,
 							failures: Object.fromEntries(yield* failures.current),
 						} satisfies View;

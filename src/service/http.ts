@@ -66,9 +66,7 @@ const Files = HttpRouter.add("GET", "/files/*", (request) =>
 		const path = resolve(entry.directory, decodeURIComponent(rest.join("/")));
 		const inside = relative(entry.directory, path);
 		if (inside.startsWith("..") || isAbsolute(inside)) return HttpServerResponse.text("outside the entry's directory", { status: 403 });
-		const file = Bun.file(path);
-		if (!(yield* Effect.promise(() => file.exists()))) return HttpServerResponse.text("not found", { status: 404 });
-		return HttpServerResponse.fromWeb(new Response(file));
+		return yield* HttpServerResponse.file(path).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.text("not found", { status: 404 }))));
 	}),
 );
 

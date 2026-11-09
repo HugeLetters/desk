@@ -17,7 +17,7 @@ import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { AlreadyResolved, EmptyText, HasParent, MissingAttachment, NoSuchEntry, NotTheAnswerer, NotTheAsker, NothingUndelivered, OpenBelow, type Refusal, Undelivered, WouldCycle } from "./errors";
-import { answerer, attachmentsIn, type Delivery, descendants, type Entry, type EntryId, type MessageID, newId, type Pending, openUnder, ordered, type Party, type Priority, type SessionID, waitingOn } from "./entry";
+import { answerer, attachmentsIn, pointAttachments, referencedAttachments, type Delivery, descendants, type Entry, type EntryId, type MessageID, newId, type Pending, openUnder, ordered, type Party, type Priority, type SessionID, waitingOn } from "./entry";
 import type { Attachment, Draft } from "./page-api";
 import { Store } from "./store";
 
@@ -113,7 +113,7 @@ export class Desk extends Context.Service<
 			const attachments = (draft: Draft) =>
 				Effect.gen(function* () {
 					const uploads: Array<Attachment> = [];
-					for (const id of new Set([...draft.text.matchAll(/\]\(attachment:([0-9a-f-]{36})\)/g)].map(([, id]) => id!))) {
+					for (const id of referencedAttachments(draft.text)) {
 						const attachment = draft.files?.find((candidate) => candidate.id === id);
 						if (!attachment) return yield* new MissingAttachment({ id: draft.entry, attachment: id });
 						uploads.push(attachment);
@@ -283,7 +283,7 @@ export class Desk extends Context.Service<
 									links.set(attachment.id, file);
 								}),
 							).pipe(Effect.onError(() => store.detach(stored)));
-							const link = (text: string) => text.replaceAll(/\]\(attachment:([0-9a-f-]{36})\)/g, (whole, id: string) => (links.has(id) ? `](/${links.get(id)})` : whole));
+							const link = (text: string) => pointAttachments(text, (id) => (links.has(id) ? `/${links.get(id)}` : undefined));
 							next = next.map((entry) => (all.includes(entry) ? entry : { ...entry, question: link(entry.question), answer: entry.answer === null ? null : link(entry.answer) }));
 							yield* Effect.forEach(
 								next.filter((entry) => !all.includes(entry)),

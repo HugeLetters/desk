@@ -2,6 +2,7 @@
  * Files attached to drafts, kept in the browser (IndexedDB, so they survive reloads) until their draft is sent. The
  * draft's Markdown names one `attachment:<id>`; sending uploads only those the text still references.
  */
+import { referencedAttachments } from "../src/entry";
 import type { Attachment } from "../src/page-api";
 
 export interface Local {
@@ -15,7 +16,7 @@ export interface Local {
 export const link = (file: Local) => `${/^(image|video)\//.test(file.type) ? "!" : ""}[${file.name.replace(/[[\]]/g, "")}](attachment:${file.id})`;
 
 /** The attachment ids a draft's text references. */
-export const referenced = (text: string) => new Set([...text.matchAll(/\]\(attachment:([0-9a-f-]{36})\)/g)].map(([, id]) => id!));
+export const referenced = referencedAttachments;
 
 const database = new Promise<IDBDatabase>((resolve, reject) => {
 	const request = indexedDB.open("desk", 1);

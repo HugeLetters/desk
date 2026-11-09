@@ -3,7 +3,7 @@
  * the session, while the session is in desk mode (`due`). A message no connected OpenCode knows, or whose session is out
  * of desk mode, stays in the outbox ("answered, not delivered") and goes out when a plugin instance connects or the
  * session turns desk mode on; one whose delivery failed is tried again then, or after `retry`. Each message is tried
- * on its own: one that fails doesn't hold up the others.
+ * on its own, all at once: one that fails or hangs doesn't hold up the others.
  *
  * Once: the message id is fixed before the first try and OpenCode admits an id once, so sending again after a crash
  * between "sent" and "marked delivered" doesn't deliver twice.
@@ -66,14 +66,19 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const flush = Effect.gen(function* () {
 				const entries = yield* desk.entries;
 				const pending = messages(entries);
-				for (const message of due(entries, new Set(yield* opencode.inDeskMode))) {
-					const files = message.files.map(({ file, name }) => ({ uri: pathToFileURL(`${store.root}/${file}`).href, name }));
-					yield* opencode.prompt({ sessionID: message.session, id: message.id, text: message.text, delivery: message.delivery, files }).pipe(
-						Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
-						Effect.andThen(failures.set(message.id, undefined)),
-						Effect.catch((failed) => Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed))),
-					);
-				}
+				// All at once: a plugin that hangs (until its call times out) doesn't hold up the other sessions.
+				yield* Effect.forEach(
+					due(entries, new Set(yield* opencode.inDeskMode)),
+					(message) => {
+						const files = message.files.map(({ file, name }) => ({ uri: pathToFileURL(`${store.root}/${file}`).href, name }));
+						return opencode.prompt({ sessionID: message.session, id: message.id, text: message.text, delivery: message.delivery, files }).pipe(
+							Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
+							Effect.andThen(failures.set(message.id, undefined)),
+							Effect.catch((failed) => Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed))),
+						);
+					},
+					{ concurrency: "unbounded", discard: true },
+				);
 				// Messages that left the outbox (delivered, or their entry went) have nothing to report.
 				for (const outbox of (yield* failures.current).keys()) if (!pending.some((message) => message.id === outbox)) yield* failures.set(outbox, undefined);
 			});
