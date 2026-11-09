@@ -328,7 +328,7 @@ export class Desk extends Context.Service<
 					modify((all) =>
 						Effect.gen(function* () {
 							const held = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
-							if (held.length === 0) return yield* new DeskError({ message: `Nothing waits to be delivered as ; it may have just gone out.` });
+							if (held.length === 0) return yield* new DeskError({ message: `Nothing waits to be delivered as ${outbox}; it may have just gone out.` });
 							yield* Effect.forEach(held, store.write);
 							return [undefined, all] as const;
 						}),
