@@ -3,15 +3,17 @@
  * running service is (`Info`, `service-info.ts`), as OpenCode's own `service.json` is.
  *
  * A service creates the file exclusively when it starts. If it exists and names a live process, another service has
- * the store and this one leaves (`AlreadyRunning`); if that process is gone, the file is stale and replaced. The file
- * goes when the service stops. A port, configured or not, doesn't decide anything: the page takes whichever port it
- * can and writes it here.
+ * the store and this one leaves (`AlreadyRunning`); if that process is gone, the file is stale and replaced, by one
+ * service at a time (`<store>/service.json.takeover`, a directory made exclusively). The file goes when the service
+ * stops. A port, configured or not, doesn't decide anything: the page takes whichever port it can and writes it here.
  */
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import { protocol } from "../protocol";
@@ -62,24 +64,44 @@ export class Registration extends Context.Service<
 					yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 				});
 				const taken = (pid: number) => new AlreadyRunning({ path, pid });
+				const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
+					error._tag === "PlatformError" && error.reason?._tag === "AlreadyExists";
+				/**
+				 * Replacing a dead service's file, one service at a time: whoever makes this directory. Only a service holding
+				 * it removes the file, after reading it again: two removing at once, one could remove the other's fresh file,
+				 * and both would hold the store. One left by a service that crashed while replacing goes after 10 seconds.
+				 */
+				const takeover = `${path}.takeover`;
+				const replaceStale = Effect.gen(function* () {
+					const made = yield* fs.makeDirectory(takeover).pipe(
+						Effect.as(true),
+						Effect.catchIf(exists, () => Effect.succeed(false)),
+					);
+					if (!made) {
+						const left = yield* fs.stat(takeover).pipe(Effect.option);
+						const age = Option.flatMap(left, (info) => info.mtime);
+						if (Option.isSome(age) && (yield* Clock.currentTimeMillis) - age.value.getTime() > 10_000)
+							yield* fs.remove(takeover, { recursive: true });
+						return yield* taken(0);
+					}
+					yield* Effect.gen(function* () {
+						const holder = yield* read;
+						if (holder && alive(holder.pid)) return yield* taken(holder.pid);
+						yield* fs.remove(path, { force: true });
+						yield* create;
+					}).pipe(Effect.ensuring(Effect.ignore(fs.remove(takeover, { recursive: true }))));
+				});
 				const acquire = Effect.gen(function* () {
 					yield* fs.makeDirectory(store, { recursive: true });
 					const created = yield* create.pipe(
 						Effect.as(true),
-						Effect.catchIf(
-							(error) => error._tag === "PlatformError" && error.reason._tag === "AlreadyExists",
-							() => Effect.succeed(false),
-						),
+						Effect.catchIf(exists, () => Effect.succeed(false)),
 					);
 					if (created) return;
 					const holder = yield* read;
 					if (holder && alive(holder.pid)) return yield* taken(holder.pid);
-					// Stale: its service is gone (or the file isn't a registration). Another service may be replacing it right now:
-					// only one of the two creates it, and one that removed the other's fresh file finds out reading it back.
-					yield* fs.remove(path, { force: true });
-					yield* create;
-					const kept = yield* read;
-					if (kept?.pid !== process.pid) return yield* taken(kept?.pid ?? 0);
+					// Stale: its service is gone (or the file isn't a registration), or it went just now.
+					yield* replaceStale;
 				}).pipe(
 					Effect.catchIf(
 						(error) => error._tag !== "AlreadyRunning",
