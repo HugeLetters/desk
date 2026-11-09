@@ -18,7 +18,7 @@ import { key } from "../src/projects";
 
 /** The key (URL) of an entry placed by its folder. */
 const folder = (directory: string) => key({ _tag: "Folder", directory });
-import { Outdated, protocol } from "../src/protocol";
+import { build, Outdated, protocol } from "../src/protocol";
 import { Refusal } from "../src/errors";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Schema from "effect/Schema";
@@ -28,7 +28,7 @@ import type { RpcClientError } from "effect/rpc/RpcClientError";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as App from "../src/service/app";
-import { changedSinceStart } from "../src/service/socket";
+import { changedOnDisk } from "../src/service/socket";
 import { expectBuiltPage } from "./support/page";
 import { eventually, type Service, startService } from "./support/service";
 import { E, S, P } from "./support/ids";
@@ -410,13 +410,10 @@ describe("the service's life", () => {
 		await rm(store, { recursive: true, force: true });
 	});
 
-	test("the protocol version is generated: a revision and a hash of the contract's schemas", () => {
-		expect(protocol).toMatch(/^\d+\.[0-9a-z]+$/);
-	});
-
-	test("the service is outdated once its contract files change after it started", async () => {
-		expect(changedSinceStart(Date.now() + 60_000)()).toBe(false);
-		expect(changedSinceStart(0)()).toBe(true);
+	test("the protocol version is the build id: a hash of the code on disk; the service is outdated once that changes", () => {
+		expect(protocol).toMatch(/^[0-9a-z]+$/);
+		expect(build()).toBe(protocol);
+		expect(changedOnDisk()).toBe(false);
 	});
 
 	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {

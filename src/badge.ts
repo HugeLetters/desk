@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import { DeskApi, type ProjectSummary } from "./page-api";
+import { decode } from "./service-info";
 
 export interface Status {
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
@@ -25,7 +26,11 @@ export interface Status {
 
 /** The running service's page, from its registration. */
 const registered = (home: string) =>
-	Effect.tryPromise(() => readFile(join(home, "service.json"), "utf8")).pipe(Effect.map((text) => String(JSON.parse(text).url)));
+	Effect.tryPromise(() => readFile(join(home, "service.json"), "utf8")).pipe(
+		Effect.flatMap(decode),
+		// Not up yet: no page to show.
+		Effect.flatMap((info) => (info.url === undefined ? Effect.fail(new Error("the service's page isn't up yet")) : Effect.succeed(info.url))),
+	);
 
 /** One service's statuses, until it goes. */
 const from = (url: string): Stream.Stream<Status, unknown> =>

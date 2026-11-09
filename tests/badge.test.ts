@@ -24,7 +24,7 @@ const watching = (home: string) => {
 	return { seen, latest: () => seen.at(-1) };
 };
 
-const register = (service: Service) => writeFile(join(service.store, "service.json"), JSON.stringify({ url: service.url }));
+const register = (service: Service) => writeFile(join(service.store, "service.json"), JSON.stringify({ pid: process.pid, protocol: "test", url: service.url }));
 
 test("the badge counts a project's entries waiting on the user, knows the sessions in desk mode, and follows the service through a restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "desk-badge-"));

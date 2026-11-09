@@ -99,7 +99,9 @@ const previousIdle = process.env.DESK_IDLE;
 
 beforeAll(async () => {
 	home = await mkdtemp(join(tmpdir(), "desk-plugin-"));
-	process.env.DESK_IDLE = "300"; // the service the plugin starts exits 300 ms after its last client
+	// The service the plugin starts exits 1 s after its last client, or after starting with none: a plugin that loaded
+	// it under load (the whole suite running) may take a few hundred ms to attach.
+	process.env.DESK_IDLE = "1000";
 	first = fakeContext(home, sessions);
 	cleanups.push(await load(first));
 });

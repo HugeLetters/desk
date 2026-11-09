@@ -58,13 +58,15 @@ flowchart LR
 
 - **The service** (`src/service/main.ts`, Effect on Bun) is the only thing that touches the store. It serves the
   page (port 47400 when free, else any free port), answers the plugins on `<store>/desk.sock`, and delivers answers.
-  One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url, socket }`), created exclusively,
-  like OpenCode's own `service.json`; a second service finds a live registration and exits, a dead one's is replaced.
+  One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url, socket }`, `src/service-info.ts`),
+  created exclusively, like OpenCode's own `service.json`. That's the only lock: a second service finds a live
+  registration and exits, a dead one's is replaced.
   The socket carries an `effect/rpc` group, `PluginApi` (`src/protocol.ts`), checked on both sides; what the desk
-  refuses comes back typed and is worded by the plugin or the page (`src/wording.ts`). Its version is a revision plus
-  a hash of the schemas. On `hello` with another version, a service whose contract files changed on disk since it
-  started retires (the plugin starts the new one); otherwise the plugin is told to `/reload`. It exits 10 minutes
-  after its last client (plugin connection or open page) goes.
+  refuses comes back typed and is worded by the plugin or the page (`src/wording.ts`). Its version is the build id, a
+  hash of the code's contents (`src/`, `bun.lock`), so nothing is bumped by hand. On `hello` with another version, a
+  service whose code on disk changed since it loaded retires (the plugin starts the new one); otherwise the plugin is
+  told to `/reload`. So merging service code restarts the service by itself. It exits 10 minutes after its last client
+  (plugin connection or open page) goes, or on a signal, within about a second even with pages open.
 - **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client, one per
   directory OpenCode works in. While a session in its directory is in desk mode, it connects to the socket, starting
   the service detached if nobody answers (log: `<store>/service.log`), says `hello`, and holds `attach` open with those

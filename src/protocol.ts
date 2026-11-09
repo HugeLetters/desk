@@ -9,6 +9,7 @@
  * Everything else is an ordinary request; what the desk refuses comes back as a typed `Refusal`.
  */
 import { ProjectID } from "@opencode/schema/project-id";
+import { readFileSync } from "node:fs";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
@@ -81,22 +82,27 @@ export const PluginApi = RpcGroup.make(
 	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
 );
 
-/**
- * Bump for a change of meaning the schemas can't see (a field that keeps its type but means something else).
- */
-const revision = 4;
+/** The code a build id covers: everything under `src/`, and the dependencies' versions. */
+const sources = () => {
+	const root = new URL("..", import.meta.url).pathname;
+	return [...new Bun.Glob("src/**/*.{ts,tsx}").scanSync({ cwd: root }), "bun.lock"].sort().map((file) => `${root}${file}`);
+};
 
 /**
- * This contract's version: `<revision>.<hash of the schemas>`, so any change of shape changes it by itself. Plugin and
- * service compare it on `hello`. A hash can't say which side is older; the service decides (`socket.ts`).
+ * A build id: a hash of the code's contents (`sources`), as it's on disk now. Nothing is bumped by hand, and any
+ * change, of the contract or of what either side does with it, makes another.
  */
-export const protocol = `${revision}.${Bun.hash(
-	JSON.stringify(
-		[...PluginApi.requests.values()].map((rpc) => [rpc._tag, ...[rpc.payloadSchema, rpc.successSchema, rpc.errorSchema].map((schema) => Schema.toJsonSchemaDocument(schema as Schema.Top))]),
-	),
-).toString(36)}`;
+export const build = () =>
+	Bun.hash(
+		sources()
+			.map((file) => `${file}\0${readFileSync(file, "utf8")}`)
+			.join("\0"),
+	).toString(36);
 
-/** The files the contract is defined in: the service is outdated once they change after it started. */
-export const contractFiles = ["./protocol.ts", "./entry.ts", "./errors.ts"].map((file) => new URL(file, import.meta.url).pathname);
+/**
+ * The version this side speaks: the build id of the code it loaded. Plugin and service compare it on `hello`. A hash
+ * can't say which side is older; the service decides (`socket.ts`).
+ */
+export const protocol = build();
 
 export type { Delivery, Priority };

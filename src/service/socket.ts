@@ -7,7 +7,6 @@
  * OpenCode reachable (`OpenCode`). The service's calls into that OpenCode go out on the stream; the plugin's `reply`
  * settles each, within `callTimeout`.
  */
-import { statSync } from "node:fs";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -23,7 +22,7 @@ import type { ProjectID } from "@opencode/schema/project-id";
 import type { SessionID } from "../entry";
 import { type Client, OpenCode, Unanswered } from "../opencode";
 import { Projects } from "../projects";
-import { contractFiles, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../protocol";
+import { build, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../protocol";
 import { Api } from "./api";
 import { Clients } from "./clients";
 
@@ -31,17 +30,10 @@ import { Clients } from "./clients";
 const callTimeout = "30 seconds";
 
 /**
- * Whether this service's contract is the outdated one: its files changed on disk after the service started. The plugin
- * always starts the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
+ * Whether this service is the outdated side: the code on disk is no longer the code it loaded. The plugin always starts
+ * the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
  */
-export const changedSinceStart = (started = Date.now()) => () =>
-	contractFiles.some((file) => {
-		try {
-			return statSync(file).mtimeMs > started;
-		} catch {
-			return false;
-		}
-	});
+export const changedOnDisk = () => build() !== protocol;
 
 /** One attached plugin instance: its OpenCode as a `Client`, and its calls waiting for a reply. */
 interface Attached {
@@ -102,8 +94,10 @@ const handlers = (outdated: () => boolean) =>
 				hello: ({ protocol: theirs }) =>
 					Effect.gen(function* () {
 						if (theirs === protocol) return { url: api.url };
+						const outdatedHere = outdated();
+						yield* Effect.logWarning(`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`);
 						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
-						if (outdated()) {
+						if (outdatedHere) {
 							yield* Effect.forkDetach(Effect.andThen(Effect.sleep("100 millis"), clients.retire));
 							return yield* new Outdated({ side: "service" });
 						}
@@ -141,7 +135,7 @@ const hungUp = (cause: Cause.Cause<unknown>) => {
 };
 const logger = Logger.layer([Logger.make((options) => (hungUp(options.cause) ? undefined : Logger.defaultLogger.log(options)))], { mergeWithExisting: false });
 
-export const layer = (path: string, outdated: () => boolean = changedSinceStart()) =>
+export const layer = (path: string, outdated: () => boolean = changedOnDisk) =>
 	RpcServer.layer(PluginApi).pipe(
 		Layer.provide(handlers(outdated)),
 		Layer.provide(RpcServer.layerProtocolSocketServer),

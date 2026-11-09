@@ -5,7 +5,9 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import { Desk } from "../desk";
 import * as Delivery from "../delivery";
 import { OpenCode } from "../opencode";
@@ -27,9 +29,22 @@ export interface Config {
 	readonly idle: Duration.Input;
 	/** How often undelivered messages are tried again, besides whenever a plugin instance connects. */
 	readonly retry?: Duration.Input | undefined;
-	/** Whether this service is the outdated side when a plugin's protocol differs (default: its contract files changed since it started). */
+	/** Whether this service is the outdated side when a plugin's protocol differs (default: the code on disk changed since it loaded). */
 	readonly outdated?: (() => boolean) | undefined;
 }
+
+/**
+ * `layer`, with its shutdown given at most `limit`. The page server's waits for its open requests, and an open page's
+ * view stream never ends: unbounded, the service couldn't stop while a page is open.
+ */
+const bounded = <A, E, R>(layer: Layer.Layer<A, E, R>, limit: Duration.Input) =>
+	Layer.effectContext(
+		Effect.gen(function* () {
+			const scope = yield* Scope.make();
+			yield* Effect.addFinalizer(() => Effect.ignore(Effect.timeout(Scope.close(scope, Exit.void), limit)));
+			return yield* Layer.buildWithScope(layer, scope);
+		}),
+	);
 
 export const layer = (config: Config) => {
 	const core = Layer.mergeAll(Desk.layer, Projects.layer, Delivery.Failures.layer).pipe(
@@ -38,7 +53,7 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(Clients.layer(config.idle)),
 		Layer.provideMerge(BunServices.layer),
 	);
-	const server = config.port === 0 ? Http.server(0) : Http.server(config.port).pipe(Layer.catchCause(() => Http.server(0)));
+	const server = bounded(config.port === 0 ? Http.server(0) : Http.server(config.port).pipe(Layer.catchCause(() => Http.server(0))), "1 second");
 	// Once the page and the socket are up, the registration says where.
 	const publish = Layer.effectDiscard(
 		Effect.gen(function* () {
@@ -52,6 +67,6 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(server),
 		Layer.provideMerge(core),
 		// The lock first: nothing else starts while another service has the store.
-		Layer.provideMerge(Registration.layer(config.store)),
+		Layer.provideMerge(Registration.layer(config.store).pipe(Layer.provide(BunServices.layer))),
 	);
 };
