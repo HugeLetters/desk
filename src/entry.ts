@@ -54,7 +54,9 @@ const rank = { critical: 0, high: 1, normal: 2, low: 3 } as const;
  * each before the entry it hangs under), trees by their root's `created`; that walk breaks ties within a priority.
  * Pass the whole desk and filter afterwards: an entry whose parent isn't in `entries` counts as a root.
  */
-export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "created">>(entries: ReadonlyArray<E>): Array<E> {
+export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "created">>(
+	entries: ReadonlyArray<E>,
+): Array<E> {
 	const byCreated = [...entries].sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
 	const walk = new Map<EntryId, number>();
 	const visit = (entry: E): void => {
@@ -121,27 +123,36 @@ export const answerer = (entry: Pick<Entry, "asker">): Party => (entry.asker ===
  * Whose move it is: the answerer while open, the asker while answered, nobody once resolved. What's open below an
  * entry doesn't change that; the desk's order puts it first (a PR's questions before its review).
  */
-export const waitingOn = (entry: Pick<Entry, "asker" | "status">): Party | null => (entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker);
+export const waitingOn = (entry: Pick<Entry, "asker" | "status">): Party | null =>
+	entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker;
 
 /** The entries waiting on `party`, in the desk's order: the page's two groups and its project counts. */
-export const waitingFor = (entries: ReadonlyArray<Entry>, party: Party): Array<Entry> => ordered(entries).filter((entry) => waitingOn(entry) === party);
+export const waitingFor = (entries: ReadonlyArray<Entry>, party: Party): Array<Entry> =>
+	ordered(entries).filter((entry) => waitingOn(entry) === party);
 
 /**
  * Next on the page: the first entry waiting on the user after `current` in the desk's order, wrapping round;
  * undefined when nothing else waits on them (the page then goes back to the list). `current` may have left the desk
  * already: it's placed where it was.
  */
-export function next(entries: ReadonlyArray<Entry>, current: Pick<Entry, "id" | "parent" | "created" | "priority">): Entry | undefined {
+export function next(
+	entries: ReadonlyArray<Entry>,
+	current: Pick<Entry, "id" | "parent" | "created" | "priority">,
+): Entry | undefined {
 	const order = ordered([...entries.filter((entry) => entry.id !== current.id), current]);
 	const at = order.indexOf(current);
-	return [...order.slice(at + 1), ...order.slice(0, at)].find((entry) => entry !== current && waitingOn(entry as Entry) === "user") as Entry | undefined;
+	return [...order.slice(at + 1), ...order.slice(0, at)].find(
+		(entry) => entry !== current && waitingOn(entry as Entry) === "user",
+	) as Entry | undefined;
 }
 
 /** Everything below `root` at depth `from` or deeper (1: its follow-ups), in no particular order. */
 export function descendants(entries: ReadonlyArray<Entry>, root: Pick<Entry, "id">, from = 1): ReadonlyArray<Entry> {
 	const below = (ids: ReadonlySet<EntryId>, depth: number): Array<Entry> => {
 		const children = entries.filter((entry) => entry.parent !== null && ids.has(entry.parent));
-		return children.length === 0 ? [] : [...(depth >= from ? children : []), ...below(new Set(children.map((child) => child.id)), depth + 1)];
+		return children.length === 0
+			? []
+			: [...(depth >= from ? children : []), ...below(new Set(children.map((child) => child.id)), depth + 1)];
 	};
 	return below(new Set([root.id]), 1);
 }
@@ -170,7 +181,8 @@ export const newId = () => EntryId.make(crypto.randomUUID());
 /** A draft's reference to an attachment it carries, `](attachment:<id>)` in its Markdown (`page/attachments.ts`). */
 const attachmentReference = /\]\(attachment:([0-9a-f-]{36})\)/g;
 /** The attachment ids a draft's text references. */
-export const referencedAttachments = (text: string) => new Set([...text.matchAll(attachmentReference)].map(([, id]) => id!));
+export const referencedAttachments = (text: string) =>
+	new Set([...text.matchAll(attachmentReference)].map(([, id]) => id!));
 /** The text with each attachment reference pointed elsewhere; `to` returns undefined to leave one as it is. */
 export const pointAttachments = (text: string, to: (id: string) => string | undefined) =>
 	text.replaceAll(attachmentReference, (whole, id: string) => {
@@ -179,7 +191,10 @@ export const pointAttachments = (text: string, to: (id: string) => string | unde
 	});
 
 export const attachmentsIn = (text: string) =>
-	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].map(([, name, file]) => ({ name: name || file!, file: file! }));
+	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].map(([, name, file]) => ({
+		name: name || file!,
+		file: file!,
+	}));
 
 /** The last six hex digits: enough to tell entries apart where the full id is too long to show. */
 export const shortId = (id: string) => id.slice(-6);

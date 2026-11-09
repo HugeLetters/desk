@@ -7,20 +7,20 @@
 import { spawn } from "node:child_process";
 import { mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ProjectID } from "@opencode/schema/project-id";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
+import type { ProjectID } from "@opencode/schema/project-id";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as RpcClient from "effect/rpc/RpcClient";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import * as RpcClient from "effect/rpc/RpcClient";
-import type { RpcClientError } from "effect/rpc/RpcClientError";
-import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import type { SessionID } from "../entry";
 import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type SessionInfo } from "../protocol";
 
@@ -54,10 +54,18 @@ export interface Connection {
 	readonly url: Effect.Effect<string, DeskError>;
 }
 
-type State = { readonly _tag: "Connecting" } | { readonly _tag: "Live"; readonly client: Client; readonly url: string } | { readonly _tag: "Refused"; readonly message: string };
+type State =
+	| { readonly _tag: "Connecting" }
+	| { readonly _tag: "Live"; readonly client: Client; readonly url: string }
+	| { readonly _tag: "Refused"; readonly message: string };
 
 /** A failure's message, whatever was thrown. */
-export const errorMessage = (error: unknown) => (error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error));
+export const errorMessage = (error: unknown) =>
+	error instanceof Error
+		? error.message
+		: typeof error === "object" && error !== null && "message" in error
+			? String(error.message)
+			: String(error);
 
 /** Whether a service answers on `path`. */
 export const answering = (path: string) =>
@@ -73,11 +81,17 @@ export const answering = (path: string) =>
 export const make = (options: Options): Effect.Effect<Connection, never, Scope.Scope> =>
 	Effect.gen(function* () {
 		const state = yield* SubscriptionRef.make<State>({ _tag: "Connecting" });
-		const transport = RpcClient.layerProtocolSocket().pipe(Layer.provide(BunSocket.layerNet({ path: options.socket })), Layer.provide(RpcSerialization.layerNdjson));
+		const transport = RpcClient.layerProtocolSocket().pipe(
+			Layer.provide(BunSocket.layerNet({ path: options.socket })),
+			Layer.provide(RpcSerialization.layerNdjson),
+		);
 
 		/** Answers one of the service's calls, in this OpenCode; a failure is the answer, not the connection's. */
 		const answer = (client: Client, call: ServiceCall) =>
-			(call._tag === "Session" ? Effect.map(options.serve.session(call.sessionID), (session): Outcome => ({ _tag: "Session", session })) : Effect.as(options.serve.prompt(call.prompt), { _tag: "Prompted" } as Outcome)).pipe(
+			(call._tag === "Session"
+				? Effect.map(options.serve.session(call.sessionID), (session): Outcome => ({ _tag: "Session", session }))
+				: Effect.as(options.serve.prompt(call.prompt), { _tag: "Prompted" } as Outcome)
+			).pipe(
 				Effect.catch((error) => Effect.succeed<Outcome>({ _tag: "Failed", cause: errorMessage(error) })),
 				Effect.flatMap((outcome) => client.reply({ call: call.call, outcome })),
 				Effect.ignore,
@@ -91,7 +105,8 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 				Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: (up) => up }),
 				Effect.timeoutOrElse({
 					duration: options.timeout ?? "10 seconds",
-					orElse: () => Effect.fail(new DeskError({ message: `The desk service didn't start (socket ${options.socket}).` })),
+					orElse: () =>
+						Effect.fail(new DeskError({ message: `The desk service didn't start (socket ${options.socket}).` })),
 				}),
 			);
 		});
@@ -102,21 +117,39 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 			const client = yield* RpcClient.make(PluginApi);
 			const { url } = yield* client.hello({ protocol }).pipe(
 				// Something that doesn't speak this protocol at all answers nothing: try again later rather than wait for good.
-				Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.fail(new DeskError({ message: `The desk service on ${options.socket} doesn't answer hello.` })) }),
+				Effect.timeoutOrElse({
+					duration: "5 seconds",
+					orElse: () =>
+						Effect.fail(new DeskError({ message: `The desk service on ${options.socket} doesn't answer hello.` })),
+				}),
 				Effect.catchTag("Outdated", ({ side }) =>
 					side === "plugin"
-						? Effect.andThen(SubscriptionRef.set(state, { _tag: "Refused", message: "This OpenCode's desk plugin is older than the desk service: run /reload." }), Effect.never)
+						? Effect.andThen(
+								SubscriptionRef.set(state, {
+									_tag: "Refused",
+									message: "This OpenCode's desk plugin is older than the desk service: run /reload.",
+								}),
+								Effect.never,
+							)
 						: // It's making way for a new one: start that next time round.
-							Effect.fail(new DeskError({ message: "The desk service is older than this plugin; it's making way for a new one." })),
+							Effect.fail(
+								new DeskError({
+									message: "The desk service is older than this plugin; it's making way for a new one.",
+								}),
+							),
 				),
 			);
 			yield* SubscriptionRef.set(state, { _tag: "Live", client, url });
-			yield* client.attach({ project: options.project, sessions: yield* options.modes }).pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
+			yield* client
+				.attach({ project: options.project, sessions: yield* options.modes })
+				.pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
 		}).pipe(Effect.scoped, Effect.provide(transport));
 
 		yield* connection.pipe(
 			Effect.exit,
-			Effect.andThen(SubscriptionRef.update(state, (now): State => (now._tag === "Refused" ? now : { _tag: "Connecting" }))),
+			Effect.andThen(
+				SubscriptionRef.update(state, (now): State => (now._tag === "Refused" ? now : { _tag: "Connecting" })),
+			),
 			Effect.andThen(Effect.sleep("250 millis")),
 			Effect.forever,
 			Effect.forkScoped,
@@ -126,7 +159,11 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 			Stream.filter((now) => now._tag !== "Connecting"),
 			Stream.runHead,
 			Effect.map(Option.getOrThrow),
-			Effect.flatMap((now) => (now._tag === "Live" ? Effect.succeed(now) : Effect.fail(new DeskError({ message: now._tag === "Refused" ? now.message : "The desk service is gone." })))),
+			Effect.flatMap((now) =>
+				now._tag === "Live"
+					? Effect.succeed(now)
+					: Effect.fail(new DeskError({ message: now._tag === "Refused" ? now.message : "The desk service is gone." })),
+			),
 		);
 		return {
 			client: Effect.map(live, (now) => now.client),

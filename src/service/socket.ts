@@ -8,6 +8,7 @@
  * settles each, within `callTimeout`.
  */
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
+import type { ProjectID } from "@opencode/schema/project-id";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -15,10 +16,9 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Queue from "effect/Queue";
-import * as Stream from "effect/Stream";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
-import type { ProjectID } from "@opencode/schema/project-id";
+import * as Stream from "effect/Stream";
 import type { SessionID } from "../entry";
 import { type Client, OpenCode, Unanswered } from "../opencode";
 import { Projects } from "../projects";
@@ -52,9 +52,14 @@ const handlers = (outdated: () => boolean) =>
 			const attachments = new Map<number, Attached>();
 			let lastCall = 0;
 			/** Looks the sessions up, so their projects are known and named (`Projects`). */
-			const learn = (sessions: ReadonlyArray<SessionID>, directory: string) => Effect.forEach(sessions, (session) => projects.of({ session, directory }), { discard: true });
+			const learn = (sessions: ReadonlyArray<SessionID>, directory: string) =>
+				Effect.forEach(sessions, (session) => projects.of({ session, directory }), { discard: true });
 
-			const attach = (id: number, project: { readonly id: ProjectID; readonly directory: string }, sessions: ReadonlyArray<SessionID>) =>
+			const attach = (
+				id: number,
+				project: { readonly id: ProjectID; readonly directory: string },
+				sessions: ReadonlyArray<SessionID>,
+			) =>
 				Effect.gen(function* () {
 					const calls = yield* Queue.unbounded<ServiceCall>();
 					const waiting = new Map<number, Deferred.Deferred<Outcome>>();
@@ -66,15 +71,30 @@ const handlers = (outdated: () => boolean) =>
 							waiting.set(call, reply);
 							yield* Queue.offer(calls, make(call));
 							return yield* Deferred.await(reply).pipe(
-								Effect.timeoutOrElse({ duration: callTimeout, orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })) }),
+								Effect.timeoutOrElse({
+									duration: callTimeout,
+									orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })),
+								}),
 								Effect.ensuring(Effect.sync(() => waiting.delete(call))),
 							);
 						});
-					const failed = (outcome: Outcome) => (outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome));
+					const failed = (outcome: Outcome) =>
+						outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome);
 					const client: Client = {
 						session: (sessionID) =>
-							Effect.flatMap(call((call) => ({ _tag: "Session", call, sessionID })), failed).pipe(Effect.map((outcome) => (outcome._tag === "Session" ? (outcome.session ?? undefined) : undefined))),
-						prompt: (prompt) => Effect.asVoid(Effect.flatMap(call((call) => ({ _tag: "Prompt", call, prompt })), failed)),
+							Effect.flatMap(
+								call((call) => ({ _tag: "Session", call, sessionID })),
+								failed,
+							).pipe(
+								Effect.map((outcome) => (outcome._tag === "Session" ? (outcome.session ?? undefined) : undefined)),
+							),
+						prompt: (prompt) =>
+							Effect.asVoid(
+								Effect.flatMap(
+									call((call) => ({ _tag: "Prompt", call, prompt })),
+									failed,
+								),
+							),
 					};
 					// All of it for as long as the stream runs: the plugin hanging up (or dying) ends it.
 					yield* clients.hold;
@@ -83,7 +103,8 @@ const handlers = (outdated: () => boolean) =>
 						() =>
 							Effect.gen(function* () {
 								attachments.delete(id);
-								for (const reply of waiting.values()) yield* Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" });
+								for (const reply of waiting.values())
+									yield* Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" });
 							}),
 					);
 					yield* opencode.attach(client);
@@ -93,7 +114,9 @@ const handlers = (outdated: () => boolean) =>
 					// session can belong to another project than the location (an older id of the same repository, say). In
 					// the background: the lookups go out on the stream this returns.
 					yield* Effect.forkScoped(learn(sessions, project.directory));
-					yield* Effect.logInfo(`desk: a plugin attached in ${project.directory} (project ${project.id}), ${sessions.length} in desk mode`);
+					yield* Effect.logInfo(
+						`desk: a plugin attached in ${project.directory} (project ${project.id}), ${sessions.length} in desk mode`,
+					);
 					return Stream.fromQueue(calls);
 				});
 
@@ -102,7 +125,9 @@ const handlers = (outdated: () => boolean) =>
 					Effect.gen(function* () {
 						if (theirs === protocol) return { url: api.url };
 						const outdatedHere = outdated();
-						yield* Effect.logWarning(`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`);
+						yield* Effect.logWarning(
+							`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`,
+						);
 						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
 						if (outdatedHere) {
 							yield* Effect.forkDetach(Effect.andThen(Effect.sleep("100 millis"), clients.retire));
@@ -118,7 +143,9 @@ const handlers = (outdated: () => boolean) =>
 					}).pipe(Effect.asVoid),
 				modes: ({ sessions }, { client }) => {
 					const attached = attachments.get(client.id);
-					return attached ? Effect.andThen(opencode.modes(attached.client, sessions), Effect.forkDetach(learn(sessions, ""))) : Effect.void;
+					return attached
+						? Effect.andThen(opencode.modes(attached.client, sessions), Effect.forkDetach(learn(sessions, "")))
+						: Effect.void;
 				},
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,
@@ -137,10 +164,19 @@ const handlers = (outdated: () => boolean) =>
  * error. It isn't one: the attachment ends either way. Everything else is logged as usual.
  */
 const hungUp = (cause: Cause.Cause<unknown>) => {
-	const error = Cause.squash(cause) as { _tag?: string; reason?: { _tag?: string; cause?: { code?: string } } } | undefined;
-	return error?._tag === "SocketError" && error.reason?._tag === "SocketReadError" && ["ECONNRESET", "EPIPE"].includes(error.reason.cause?.code ?? "");
+	const error = Cause.squash(cause) as
+		| { _tag?: string; reason?: { _tag?: string; cause?: { code?: string } } }
+		| undefined;
+	return (
+		error?._tag === "SocketError" &&
+		error.reason?._tag === "SocketReadError" &&
+		["ECONNRESET", "EPIPE"].includes(error.reason.cause?.code ?? "")
+	);
 };
-const logger = Logger.layer([Logger.make((options) => (hungUp(options.cause) ? undefined : Logger.defaultLogger.log(options)))], { mergeWithExisting: false });
+const logger = Logger.layer(
+	[Logger.make((options) => (hungUp(options.cause) ? undefined : Logger.defaultLogger.log(options)))],
+	{ mergeWithExisting: false },
+);
 
 export const layer = (path: string, outdated: () => boolean = changedOnDisk) =>
 	RpcServer.layer(PluginApi).pipe(

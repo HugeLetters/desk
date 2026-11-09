@@ -11,11 +11,11 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import plugin from "../src/plugin/index";
-import { answering } from "../src/plugin/connection";
-import { eventually, rpc } from "./support/service";
 import type { EntryId } from "../src/entry";
-import { S, P } from "./support/ids";
+import { answering } from "../src/plugin/connection";
+import plugin from "../src/plugin/index";
+import { P, S } from "./support/ids";
+import { eventually, rpc } from "./support/service";
 
 interface Session {
 	id: string;
@@ -29,7 +29,13 @@ type Run<A = unknown> = Effect.Effect<A, unknown>;
 
 /** The parts of the plugin context the desk uses, recording what the plugin registers and says. */
 function fakeContext(home: string, sessions: Array<Session>, options: Record<string, unknown> = {}) {
-	const tools = new Map<string, { options?: { codemode?: boolean }; execute: (input: unknown, context: { sessionID: string }) => Run<{ content: string }> }>();
+	const tools = new Map<
+		string,
+		{
+			options?: { codemode?: boolean };
+			execute: (input: unknown, context: { sessionID: string }) => Run<{ content: string }>;
+		}
+	>();
 	const commands = new Map<string, { execute: (input: { sessionID: string }) => Run<void> }>();
 	const hooks: Array<(event: { sessionID: string; tools: Record<string, unknown> }) => Run<void>> = [];
 	const storage = new Map<string, unknown>();
@@ -43,20 +49,34 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 			get: (key: string) => Effect.sync(() => storage.get(key)),
 			set: (key: string, value: unknown) => Effect.sync(() => void storage.set(key, value)),
 			remove: (key: string) => Effect.sync(() => void storage.delete(key)),
-			scan: ({ prefix }: { prefix: string }) => Effect.sync(() => ({ entries: [...storage].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value })) })),
+			scan: ({ prefix }: { prefix: string }) =>
+				Effect.sync(() => ({
+					entries: [...storage].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value })),
+				})),
 		},
 		session: {
 			get: ({ sessionID }: { sessionID: string }) =>
 				Effect.suspend(() => {
 					const session = sessions.find((candidate) => candidate.id === sessionID);
-					return session ? Effect.succeed(session) : Effect.fail({ _tag: "SessionNotFoundError", sessionID, message: `Session not found: ${sessionID}` });
+					return session
+						? Effect.succeed(session)
+						: Effect.fail({ _tag: "SessionNotFoundError", sessionID, message: `Session not found: ${sessionID}` });
 				}),
-			synthetic: (input: { sessionID: string; text: string; description?: string }) => Effect.sync(() => void synthetic.push(input)),
+			synthetic: (input: { sessionID: string; text: string; description?: string }) =>
+				Effect.sync(() => void synthetic.push(input)),
 			prompt: (input: { sessionID: string; id: string; text: string }) => Effect.sync(() => void prompts.push(input)),
 			hook: (_name: "context", callback: (typeof hooks)[number]) => Effect.sync(() => void hooks.push(callback)),
 		},
-		tool: { transform: (callback: (editor: { add: (tool: { name: string } & Parameters<typeof tools.set>[1]) => void }) => void) => Effect.sync(() => callback({ add: (tool) => tools.set(tool.name, tool) })) },
-		command: { transform: (callback: (editor: { add: (command: { name: string } & Parameters<typeof commands.set>[1]) => void }) => void) => Effect.sync(() => callback({ add: (command) => commands.set(command.name, command) })) },
+		tool: {
+			transform: (
+				callback: (editor: { add: (tool: { name: string } & Parameters<typeof tools.set>[1]) => void }) => void,
+			) => Effect.sync(() => callback({ add: (tool) => tools.set(tool.name, tool) })),
+		},
+		command: {
+			transform: (
+				callback: (editor: { add: (command: { name: string } & Parameters<typeof commands.set>[1]) => void }) => void,
+			) => Effect.sync(() => callback({ add: (command) => commands.set(command.name, command) })),
+		},
 		event: { subscribe: () => Stream.fromQueue(events) },
 	};
 	return {
@@ -74,7 +94,8 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 			return Object.keys(event.tools).sort();
 		},
 		command: (name: string, sessionID: string) => Effect.runPromise(commands.get(name)!.execute({ sessionID })),
-		tool: (name: string, sessionID: string, input: unknown) => Effect.runPromise(tools.get(name)!.execute(input, { sessionID })),
+		tool: (name: string, sessionID: string, input: unknown) =>
+			Effect.runPromise(tools.get(name)!.execute(input, { sessionID })),
 	};
 }
 
@@ -110,7 +131,10 @@ afterAll(async () => {
 	for (const cleanup of cleanups) await cleanup();
 	if (previousIdle === undefined) delete process.env.DESK_IDLE;
 	else process.env.DESK_IDLE = previousIdle;
-	await eventually(async () => (await readFile(join(home, "service.log"), "utf8").catch(() => "")).includes("exiting"), 5000).catch(() => {});
+	await eventually(
+		async () => (await readFile(join(home, "service.log"), "utf8").catch(() => "")).includes("exiting"),
+		5000,
+	).catch(() => {});
 	await rm(home, { recursive: true, force: true });
 });
 
@@ -120,14 +144,21 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	expect(await answering(join(home, "desk.sock"))).toBe(false);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
-	expect(first.synthetic.at(-1)!.text).toMatch(/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//);
+	expect(first.synthetic.at(-1)!.text).toMatch(
+		/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//,
+	);
 	// Replies go on the desk too, to what's said there and in chat.
-	expect(first.synthetic.at(-1)!.text).toContain("your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat");
+	expect(first.synthetic.at(-1)!.text).toContain(
+		"your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat",
+	);
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
 	expect(first.synthetic.at(-1)!.description).toMatch(/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/projects\//);
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
 	// The rarely needed ones are in Code Mode; the rest are direct tools.
-	expect(desk.filter((name) => first.tools.get(name)!.options?.codemode !== false)).toEqual(["desk_adopt", "desk_prioritize"]);
+	expect(desk.filter((name) => first.tools.get(name)!.options?.codemode !== false)).toEqual([
+		"desk_adopt",
+		"desk_prioritize",
+	]);
 	expect(await first.visible("ses_sub")).toEqual([...desk, "read"]);
 	expect(await first.visible("ses_other")).toEqual(["read"]);
 	await expect(first.tool("desk_list", "ses_other", {})).rejects.toThrow("The desk is off for this session");
@@ -153,7 +184,10 @@ test("the plugin is the service's way into its OpenCode: the user's reply goes o
 	expect(prompt.sessionID).toBe("ses_main");
 	expect(prompt.id).toMatch(/^msg_/);
 	// The plugin looked the session's project up for the service; a move in its OpenCode makes the service ask again.
-	const projects = async () => Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!.projects.map((project) => project.id);
+	const projects = async () =>
+		Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!.projects.map(
+			(project) => project.id,
+		);
 	expect(await projects()).toEqual(["prj_phantom"]);
 	sessions[0]!.projectID = "prj_moved";
 	first.emit({ type: "session.moved", data: { sessionID: S("ses_main") } });
@@ -184,7 +218,8 @@ test("/desk-mode again turns it off", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// Its last session in desk mode gone, the first instance hangs up; the second still has ses_main on.
 	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
-	const view = async () => Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!;
+	const view = async () =>
+		Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!;
 	await eventually(async () => (await view()).deskMode.length === 1);
 	expect(await view()).toMatchObject({ deskMode: ["ses_main"] });
 });

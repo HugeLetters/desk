@@ -13,7 +13,8 @@ export interface Local {
 }
 
 /** `![name](attachment:<id>)` for images and video (rendered inline), `[name](attachment:<id>)` otherwise. */
-export const link = (file: Local) => `${/^(image|video)\//.test(file.type) ? "!" : ""}[${file.name.replace(/[[\]]/g, "")}](attachment:${file.id})`;
+export const link = (file: Local) =>
+	`${/^(image|video)\//.test(file.type) ? "!" : ""}[${file.name.replace(/[[\]]/g, "")}](attachment:${file.id})`;
 
 /** The attachment ids a draft's text references. */
 export const referenced = referencedAttachments;
@@ -25,7 +26,10 @@ const database = new Promise<IDBDatabase>((resolve, reject) => {
 	request.onerror = () => reject(request.error);
 });
 
-async function transact<A>(mode: IDBTransactionMode, f: (store: IDBObjectStore) => IDBRequest<A> | void): Promise<A | undefined> {
+async function transact<A>(
+	mode: IDBTransactionMode,
+	f: (store: IDBObjectStore) => IDBRequest<A> | undefined,
+): Promise<A | undefined> {
 	const transaction = (await database).transaction("attachments", mode);
 	const request = f(transaction.objectStore("attachments"));
 	return new Promise((resolve, reject) => {
@@ -35,8 +39,16 @@ async function transact<A>(mode: IDBTransactionMode, f: (store: IDBObjectStore) 
 }
 
 export const all = async () => (await transact<Array<Local>>("readonly", (store) => store.getAll())) ?? [];
-export const save = (file: Local) => transact("readwrite", (store) => void store.put(file));
-export const remove = (ids: Iterable<string>) => transact("readwrite", (store) => void [...ids].forEach((id) => store.delete(id)));
+export const save = (file: Local) =>
+	transact("readwrite", (store) => {
+		store.put(file);
+		return undefined;
+	});
+export const remove = (ids: Iterable<string>) =>
+	transact("readwrite", (store) => {
+		for (const id of ids) store.delete(id);
+		return undefined;
+	});
 
 /** The files a draft's text references, ready to send (base64). Ids it can't find are left to the desk to refuse. */
 export async function outgoing(text: string, files: (id: string) => Local | undefined): Promise<Array<Attachment>> {
@@ -48,7 +60,8 @@ export async function outgoing(text: string, files: (id: string) => Local | unde
 				file.blob.arrayBuffer().then((buffer) => {
 					const bytes = new Uint8Array(buffer);
 					let binary = "";
-					for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+					for (let i = 0; i < bytes.length; i += 0x8000)
+						binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
 					return { id, name: file.name, data: btoa(binary) };
 				}),
 			];

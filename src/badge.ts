@@ -9,10 +9,10 @@ import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
-import * as Schedule from "effect/Schedule";
-import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Schedule from "effect/Schedule";
+import * as Stream from "effect/Stream";
 import { DeskApi, type ProjectSummary } from "./page-api";
 import { decode } from "./service-info";
 
@@ -29,14 +29,20 @@ const registered = (home: string) =>
 	Effect.tryPromise(() => readFile(join(home, "service.json"), "utf8")).pipe(
 		Effect.flatMap(decode),
 		// Not up yet: no page to show.
-		Effect.flatMap((info) => (info.url === undefined ? Effect.fail(new Error("the service's page isn't up yet")) : Effect.succeed(info.url))),
+		Effect.flatMap((info) =>
+			info.url === undefined ? Effect.fail(new Error("the service's page isn't up yet")) : Effect.succeed(info.url),
+		),
 	);
 
 /** One service's statuses, until it goes. */
 const from = (url: string): Stream.Stream<Status, unknown> =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
 		Stream.map((view) => ({ url, projects: view.projects, deskMode: view.deskMode })),
-		Stream.provide(RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))),
+		Stream.provide(
+			RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
+				Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+			),
+		),
 	);
 
 /** Fails once the service at `url` is no longer the registered one (a stream from one that hangs might never end). */
@@ -48,8 +54,13 @@ const replaced = (home: string, url: string, every: Schedule.Schedule<unknown>) 
 	);
 
 /** The desk's status, again after every change; `undefined` while no service answers. */
-export const watch = (home: string, every: Schedule.Schedule<unknown> = Schedule.spaced("2 seconds")): Stream.Stream<Status | undefined> =>
-	Stream.unwrap(Effect.map(registered(home), (url) => Stream.merge(from(url), Stream.fromEffect(replaced(home, url, every))))).pipe(
+export const watch = (
+	home: string,
+	every: Schedule.Schedule<unknown> = Schedule.spaced("2 seconds"),
+): Stream.Stream<Status | undefined> =>
+	Stream.unwrap(
+		Effect.map(registered(home), (url) => Stream.merge(from(url), Stream.fromEffect(replaced(home, url, every)))),
+	).pipe(
 		// A stream that ends means the service went too: look for the next one.
 		Stream.concat(Stream.fail("gone")),
 		Stream.catch(() => Stream.concat(Stream.make(undefined), Stream.fail("retry"))),

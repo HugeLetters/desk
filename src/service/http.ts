@@ -31,7 +31,8 @@ const Guard = HttpRouter.middleware(
 			const host = request.headers.host ?? "";
 			const origin = request.headers.origin;
 			if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) return HttpServerResponse.text("wrong host", { status: 421 });
-			if (request.method !== "GET" && origin !== undefined && origin !== `http://${host}`) return HttpServerResponse.text("forbidden", { status: 403 });
+			if (request.method !== "GET" && origin !== undefined && origin !== `http://${host}`)
+				return HttpServerResponse.text("forbidden", { status: 403 });
 			return yield* app;
 		}),
 	{ global: true },
@@ -65,8 +66,11 @@ const Files = HttpRouter.add("GET", "/files/*", (request) =>
 		if (!entry) return HttpServerResponse.text("no such entry", { status: 404 });
 		const path = resolve(entry.directory, decodeURIComponent(rest.join("/")));
 		const inside = relative(entry.directory, path);
-		if (inside.startsWith("..") || isAbsolute(inside)) return HttpServerResponse.text("outside the entry's directory", { status: 403 });
-		return yield* HttpServerResponse.file(path).pipe(Effect.catch(() => Effect.succeed(HttpServerResponse.text("not found", { status: 404 }))));
+		if (inside.startsWith("..") || isAbsolute(inside))
+			return HttpServerResponse.text("outside the entry's directory", { status: 403 });
+		return yield* HttpServerResponse.file(path).pipe(
+			Effect.catch(() => Effect.succeed(HttpServerResponse.text("not found", { status: 404 }))),
+		);
 	}),
 );
 

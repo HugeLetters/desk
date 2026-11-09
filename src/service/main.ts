@@ -39,6 +39,12 @@ if (import.meta.main) {
 		Effect.catchTag("AlreadyRunning", () => Effect.log("desk: another service is running; exiting")),
 		// Done (idle, a signal, or another service): exit, whatever still holds the process open (an open page's
 		// connection, say). Shutting down is bounded on its own (`App.layer`).
-		BunRuntime.runMain({ teardown: (exit, onExit) => Runtime.defaultTeardown(exit, (code) => { onExit(code); process.exit(code); }) }),
+		BunRuntime.runMain({
+			teardown: (exit, onExit) =>
+				Runtime.defaultTeardown(exit, (code) => {
+					onExit(code);
+					process.exit(code);
+				}),
+		}),
 	);
 }

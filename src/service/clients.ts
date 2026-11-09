@@ -23,15 +23,18 @@ export class Clients extends Context.Service<
 >()("desk/Clients") {
 	static layer(after: Duration.Input) {
 		return Layer.effect(
-			this,
+			Clients,
 			Effect.gen(function* () {
 				const idle = yield* Deferred.make<void>();
 				const scope = yield* Effect.scope;
 				let count = 0;
 				let timer: Fiber.Fiber<void> | undefined;
-				const arm = Effect.map(Effect.forkIn(Effect.andThen(Effect.sleep(after), Effect.asVoid(Deferred.succeed(idle, undefined))), scope), (fiber) => {
-					timer = fiber;
-				});
+				const arm = Effect.map(
+					Effect.forkIn(Effect.andThen(Effect.sleep(after), Effect.asVoid(Deferred.succeed(idle, undefined))), scope),
+					(fiber) => {
+						timer = fiber;
+					},
+				);
 				const disarm = Effect.suspend(() => {
 					const running = timer;
 					timer = undefined;

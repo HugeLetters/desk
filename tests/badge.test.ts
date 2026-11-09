@@ -8,8 +8,8 @@ import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { count, type Status, watch } from "../src/badge";
-import { eventually, type Service, startService } from "./support/service";
 import { P, S } from "./support/ids";
+import { eventually, type Service, startService } from "./support/service";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -19,12 +19,18 @@ afterEach(async () => {
 /** Every status `watch` gives for `home`, as they come. */
 const watching = (home: string) => {
 	const seen: Array<Status | undefined> = [];
-	const fiber = Effect.runFork(Stream.runForEach(watch(home, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))));
+	const fiber = Effect.runFork(
+		Stream.runForEach(watch(home, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))),
+	);
 	cleanup.push(() => Effect.runPromise(Fiber.interrupt(fiber)));
 	return { seen, latest: () => seen.at(-1) };
 };
 
-const register = (service: Service) => writeFile(join(service.store, "service.json"), JSON.stringify({ pid: process.pid, protocol: "test", url: service.url }));
+const register = (service: Service) =>
+	writeFile(
+		join(service.store, "service.json"),
+		JSON.stringify({ pid: process.pid, protocol: "test", url: service.url }),
+	);
 
 test("the badge counts a project's entries waiting on the user, knows the sessions in desk mode, and follows the service through a restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "desk-badge-"));

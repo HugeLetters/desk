@@ -12,7 +12,10 @@ export type Placement = typeof Placement.Type;
 const folderPrefix = "folder:";
 
 /** A placement as one string: the page's URLs (`/projects/<key>`) and the view's `project`. */
-export const key = (placement: Placement): string => (placement._tag === "Project" ? placement.id : `${folderPrefix}${placement.directory}`);
+export const key = (placement: Placement): string =>
+	placement._tag === "Project" ? placement.id : `${folderPrefix}${placement.directory}`;
 /** The placement a key names. */
 export const fromKey = (key: string): Placement =>
-	key.startsWith(folderPrefix) ? { _tag: "Folder", directory: key.slice(folderPrefix.length) } : { _tag: "Project", id: key as ProjectID };
+	key.startsWith(folderPrefix)
+		? { _tag: "Folder", directory: key.slice(folderPrefix.length) }
+		: { _tag: "Project", id: key as ProjectID };

@@ -48,11 +48,16 @@ export class Projects extends Context.Service<
 >()("desk/Projects") {
 	static get layer() {
 		return Layer.effect(
-			this,
+			Projects,
 			Effect.gen(function* () {
 				const opencode = yield* OpenCode;
-				const state = yield* SubscriptionRef.make<State>({ sessions: new Map(), stale: new Set(), directories: new Map() });
-				const staleAll = (pick: (now: State) => Iterable<SessionID>) => SubscriptionRef.update(state, (now) => ({ ...now, stale: new Set([...now.stale, ...pick(now)]) }));
+				const state = yield* SubscriptionRef.make<State>({
+					sessions: new Map(),
+					stale: new Set(),
+					directories: new Map(),
+				});
+				const staleAll = (pick: (now: State) => Iterable<SessionID>) =>
+					SubscriptionRef.update(state, (now) => ({ ...now, stale: new Set([...now.stale, ...pick(now)]) }));
 
 				yield* opencode.moved.pipe(
 					Stream.runForEach((session) => staleAll(() => [session])),
@@ -63,7 +68,8 @@ export class Projects extends Context.Service<
 					Effect.forkScoped,
 				);
 
-				const placed = (project: ProjectID | null | undefined, directory: string): Placement => (project ? { _tag: "Project", id: project } : { _tag: "Folder", directory });
+				const placed = (project: ProjectID | null | undefined, directory: string): Placement =>
+					project ? { _tag: "Project", id: project } : { _tag: "Folder", directory };
 
 				return Projects.of({
 					of: ({ session, directory }) =>
@@ -80,21 +86,35 @@ export class Projects extends Context.Service<
 								else stale.delete(session);
 								const directories = new Map(now.directories);
 								// A name for a project no plugin instance has reported yet: the session's folder.
-								if (lookup._tag === "Known" && !directories.has(lookup.session.projectID)) directories.set(lookup.session.projectID, lookup.session.directory);
+								if (lookup._tag === "Known" && !directories.has(lookup.session.projectID))
+									directories.set(lookup.session.projectID, lookup.session.directory);
 								return { sessions: new Map(now.sessions).set(session, project), stale, directories };
 							});
 							return placed(project, directory);
 						}),
 					remember: (project, directory) =>
-						SubscriptionRef.update(state, (now) => (now.directories.get(project) === directory ? now : { ...now, directories: new Map(now.directories).set(project, directory) })),
+						SubscriptionRef.update(state, (now) =>
+							now.directories.get(project) === directory
+								? now
+								: { ...now, directories: new Map(now.directories).set(project, directory) },
+						),
 					name: (placement, fallbackDirectory) =>
 						Effect.map(SubscriptionRef.get(state), (now) =>
-							basename(placement._tag === "Folder" ? placement.directory : (now.directories.get(placement.id) ?? fallbackDirectory ?? placement.id)),
+							basename(
+								placement._tag === "Folder"
+									? placement.directory
+									: (now.directories.get(placement.id) ?? fallbackDirectory ?? placement.id),
+							),
 						),
 					// News: a project or a name changed, or a session is to be asked again. `of` remembering what it was just
 					// told isn't, or every view would be worked out twice.
 					changes: SubscriptionRef.changes(state).pipe(
-						Stream.changesWith((before, after) => same(before.sessions, after.sessions) && same(before.directories, after.directories) && [...after.stale].every((session) => before.stale.has(session))),
+						Stream.changesWith(
+							(before, after) =>
+								same(before.sessions, after.sessions) &&
+								same(before.directories, after.directories) &&
+								[...after.stale].every((session) => before.stale.has(session)),
+						),
 						Stream.as(undefined),
 					),
 				});
@@ -103,4 +123,5 @@ export class Projects extends Context.Service<
 	}
 }
 
-const same = <K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>) => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+const same = <K, V>(a: ReadonlyMap<K, V>, b: ReadonlyMap<K, V>) =>
+	a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);

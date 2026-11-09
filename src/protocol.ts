@@ -8,15 +8,21 @@
  * `ServiceCall`s, and the plugin answers each with `reply`. So the service needs no endpoint or password of its own.
  * Everything else is an ordinary request; what the desk refuses comes back as a typed `Refusal`.
  */
-import { ProjectID } from "@opencode/schema/project-id";
+
 import { readFileSync } from "node:fs";
-import * as Schema from "effect/Schema";
+import { ProjectID } from "@opencode/schema/project-id";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
+import * as Schema from "effect/Schema";
 import { Delivery, EntryId, MessageID, Priority, SessionID } from "./entry";
 import { Refusal } from "./errors";
 
-export const SessionInfo = Schema.Struct({ id: SessionID, parentID: Schema.optional(SessionID), projectID: ProjectID, directory: Schema.String });
+export const SessionInfo = Schema.Struct({
+	id: SessionID,
+	parentID: Schema.optional(SessionID),
+	projectID: ProjectID,
+	directory: Schema.String,
+});
 export type SessionInfo = typeof SessionInfo.Type;
 
 export const Prompt = Schema.Struct({
@@ -46,7 +52,9 @@ export const Outcome = Schema.TaggedUnion({
 export type Outcome = typeof Outcome.Type;
 
 /** The two sides speak different versions; `side` is the outdated one. */
-export class Outdated extends Schema.TaggedError<Outdated>()("Outdated", { side: Schema.Literals(["plugin", "service"]) }) {}
+export class Outdated extends Schema.TaggedError<Outdated>()("Outdated", {
+	side: Schema.Literals(["plugin", "service"]),
+}) {}
 
 export const Asker = Schema.Struct({ session: SessionID, directory: Schema.String });
 export const Question = Schema.Struct({
@@ -59,7 +67,11 @@ export const Question = Schema.Struct({
 export type Question = typeof Question.Type;
 
 export const PluginApi = RpcGroup.make(
-	Rpc.make("hello", { payload: { protocol: Schema.String }, success: Schema.Struct({ url: Schema.String }), error: Outdated }),
+	Rpc.make("hello", {
+		payload: { protocol: Schema.String },
+		success: Schema.Struct({ url: Schema.String }),
+		error: Outdated,
+	}),
 	/** The plugin instance's location's project (for the project's name) and the sessions in desk mode there. */
 	Rpc.make("attach", {
 		payload: { project: Schema.Struct({ id: ProjectID, directory: Schema.String }), sessions: Schema.Array(SessionID) },
@@ -71,13 +83,21 @@ export const PluginApi = RpcGroup.make(
 	Rpc.make("modes", { payload: { sessions: Schema.Array(SessionID) } }),
 	/** A session in this OpenCode moved to another directory (perhaps another project). */
 	Rpc.make("moved", { payload: { session: SessionID } }),
-	Rpc.make("ask", { payload: { asker: Asker, question: Question }, success: Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }), error: Refusal }),
+	Rpc.make("ask", {
+		payload: { asker: Asker, question: Question },
+		success: Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }),
+		error: Refusal,
+	}),
 	Rpc.make("adopt", { payload: { id: EntryId, parent: EntryId }, error: Refusal }),
 	Rpc.make("answer", { payload: { id: EntryId, body: Schema.String }, error: Refusal }),
 	Rpc.make("resolve", { payload: { id: EntryId }, error: Refusal }),
 	Rpc.make("prioritize", { payload: { id: EntryId, priority: Priority, subtree: Schema.Boolean }, error: Refusal }),
 	/** The desk of `session`'s project, or one entry in full. */
-	Rpc.make("list", { payload: { session: SessionID, id: Schema.optional(EntryId) }, success: Schema.String, error: Refusal }),
+	Rpc.make("list", {
+		payload: { session: SessionID, id: Schema.optional(EntryId) },
+		success: Schema.String,
+		error: Refusal,
+	}),
 	/** The page for `session`'s project. */
 	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
 );
@@ -87,15 +107,13 @@ export const PluginApi = RpcGroup.make(
  * OpenCode schemas). Only these: a change to either side's own code doesn't make the other side outdated, so the
  * service can be restarted on its own, and the plugin reloaded on its own.
  */
-const contract = ["src/protocol.ts", "src/entry.ts", "src/errors.ts", "bun.lock"].map((file) => new URL(`../${file}`, import.meta.url).pathname);
+const contract = ["src/protocol.ts", "src/entry.ts", "src/errors.ts", "bun.lock"].map(
+	(file) => new URL(`../${file}`, import.meta.url).pathname,
+);
 
 /** The contract's version as it's on disk now: a hash of its code. Nothing is bumped by hand. */
 export const build = () =>
-	Bun.hash(
-		contract
-			.map((file) => `${file}\0${readFileSync(file, "utf8")}`)
-			.join("\0"),
-	).toString(36);
+	Bun.hash(contract.map((file) => `${file}\0${readFileSync(file, "utf8")}`).join("\0")).toString(36);
 
 /**
  * The version this side speaks: the contract's code it loaded. Plugin and service compare it on `hello`. A hash can't

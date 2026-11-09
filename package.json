@@ -12,6 +12,8 @@
 		"pretest": "vite build page",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit",
+		"lint": "biome check .",
+		"format": "biome check --write .",
 		"service": "bun src/service/main.ts",
 		"predemo": "vite build page",
 		"demo": "bun demo/run.ts"
@@ -24,6 +26,7 @@
 		"effect": "4.1.0"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "2.6.6",
 		"@opencode/theme": "2.2.6",
 		"@opentui/core": "0.8.2",
 		"@opentui/solid": "0.8.2",

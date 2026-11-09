@@ -66,22 +66,15 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 export default Plugin.define({
 	id: "desk",
 	setup(context) {
-		const home = String(
-			context.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk"),
-		).replace(/^~(?=\/|$)/, homedir());
-		const [status, setStatus] = createSignal<Status>();
-		const watching = Effect.runFork(
-			Stream.runForEach(watch(home), (next) => Effect.sync(() => setStatus(next))),
+		const home = String(context.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(
+			/^~(?=\/|$)/,
+			homedir(),
 		);
+		const [status, setStatus] = createSignal<Status>();
+		const watching = Effect.runFork(Stream.runForEach(watch(home), (next) => Effect.sync(() => setStatus(next))));
 		const unslot = context.ui.slot({
 			append: "prompt.footer.status",
-			render: (slot) => (
-				<Badge
-					context={context}
-					status={status()}
-					sessionID={slot.sessionID}
-				/>
-			),
+			render: (slot) => <Badge context={context} status={status()} sessionID={slot.sessionID} />,
 		});
 		return () => {
 			unslot();

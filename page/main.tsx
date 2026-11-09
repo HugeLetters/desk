@@ -5,24 +5,36 @@
  * Moving to another project, like every link here, stays on the page: the view and the drafts follow the route.
  * Drafts live in the browser until Submit (all of them, one message per session), ⌘↵ (the same, then Next) or Send now (one, steering).
  */
+
+import { MetaProvider, Title } from "@solidjs/meta";
+import { A, Route, Router, useLocation, useNavigate, useParams } from "@solidjs/router";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
-import * as Schedule from "effect/Schedule";
-import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import { MetaProvider, Title } from "@solidjs/meta";
-import { A, Route, Router, useLocation, useNavigate, useParams } from "@solidjs/router";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, type ParentProps, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { render } from "solid-js/web";
-import { DeskApi, type Draft, type View } from "../src/page-api";
-import { type Entry, type EntryId, newId, next, openBelow, openUnder, ordered, shortId, waitingFor, waitingOn } from "../src/entry";
-import * as Schema from "effect/Schema";
+import {
+	type Entry,
+	type EntryId,
+	newId,
+	next,
+	openBelow,
+	openUnder,
+	ordered,
+	shortId,
+	waitingFor,
+	waitingOn,
+} from "../src/entry";
 import { Refusal } from "../src/errors";
+import { DeskApi, type Draft, type View } from "../src/page-api";
 import { deliveryFailed, refusal } from "../src/wording";
 import * as Attachments from "./attachments";
 import { type Local, render as markdown, renderDiagrams } from "./markdown";
@@ -30,12 +42,16 @@ import { type Local, render as markdown, renderDiagrams } from "./markdown";
 const isRefusal = Schema.is(Refusal);
 
 const runtime = ManagedRuntime.make(
-	RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson])),
+	RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
+		Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+	),
 );
 const client = RpcClient.make(DeskApi);
-const withClient = <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => Effect.scoped(Effect.flatMap(client, f));
+const withClient = <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
+	Effect.scoped(Effect.flatMap(client, f));
 /** Calls the desk; rejects with the desk's message. */
-const call = <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => runtime.runPromise(withClient(f));
+const call = <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
+	runtime.runPromise(withClient(f));
 
 /** Small inline icons (Lucide-style strokes), so buttons need no icon font. */
 const icons = {
@@ -53,7 +69,8 @@ const Icon = (props: { name: keyof typeof icons }) => (
 );
 
 /** The project in a path (`/projects/<id>/…`), if any. */
-const projectIn = (pathname: string) => ((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/projects\/([^/]+)/)?.[1]);
+const projectIn = (pathname: string) =>
+	((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/projects\/([^/]+)/)?.[1]);
 /** The project the page shows, following the route; drafts are kept per project. */
 const [project, setProject] = createSignal(projectIn(location.pathname));
 const draftsPrefix = "desk.drafts.";
@@ -134,7 +151,10 @@ function App() {
 							}),
 						),
 					),
-				).pipe(Effect.tapError(() => Effect.sync(() => setState("online", false))), Effect.retry(Schedule.spaced("1 second"))),
+				).pipe(
+					Effect.tapError(() => Effect.sync(() => setState("online", false))),
+					Effect.retry(Schedule.spaced("1 second")),
+				),
 			);
 			onCleanup(() => runtime.runFork(Fiber.interrupt(subscription)));
 		}),
@@ -146,9 +166,13 @@ function App() {
 	const theirs = createMemo(() => waitingFor(entries(), "agent"));
 	const yours = (entry: Entry) => waitingOn(entry) === "user";
 	// Drafts are kept by the id of an entry on the desk, so their keys are entry ids.
-	const pending = (): Array<{ entry: EntryId; text: string }> => Object.entries(drafts).flatMap(([entry, text]) => (text?.trim() ? [{ entry: entry as EntryId, text }] : []));
+	const pending = (): Array<{ entry: EntryId; text: string }> =>
+		Object.entries(drafts).flatMap(([entry, text]) => (text?.trim() ? [{ entry: entry as EntryId, text }] : []));
 	/** A draft as sent: its text and the attachments it still references. */
-	const outgoing = async (draft: { entry: EntryId; text: string }): Promise<Draft> => ({ ...draft, files: await Attachments.outgoing(draft.text, (id) => files[id]) });
+	const outgoing = async (draft: { entry: EntryId; text: string }): Promise<Draft> => ({
+		...draft,
+		files: await Attachments.outgoing(draft.text, (id) => files[id]),
+	});
 	const local: Local = (id) => files[id];
 	/** Waiting on you, and you've started an answer: shown instead of the plain status. */
 	const drafted = (entry: Entry) => yours(entry) && !!drafts[entry.id]?.trim();
@@ -160,13 +184,17 @@ function App() {
 		setTimeout(() => toast() === shown && setToast(undefined), error ? 6000 : 2500);
 	}
 	const attempt = (action: () => Promise<string>) =>
-		action().then(notify, (error: unknown) => notify(isRefusal(error) ? refusal(error) : String((error as { message?: unknown })?.message ?? error), true));
+		action().then(notify, (error: unknown) =>
+			notify(isRefusal(error) ? refusal(error) : String((error as { message?: unknown })?.message ?? error), true),
+		);
 
 	/** Keeps the files with the draft and inserts their Markdown at `at` (default: the end); they're uploaded when it's sent. */
 	const attach = (entry: string, added: ReadonlyArray<File>, at?: number) =>
 		attempt(async () => {
 			await loaded;
-			const stored = added.map((file): Attachments.Local => ({ id: newId(), name: file.name || "file", type: file.type, blob: file }));
+			const stored = added.map(
+				(file): Attachments.Local => ({ id: newId(), name: file.name || "file", type: file.type, blob: file }),
+			);
 			await Promise.all(stored.map(Attachments.save));
 			stored.forEach(keep);
 			const markdown = stored.map(Attachments.link).join("\n");
@@ -193,7 +221,9 @@ function App() {
 
 	const Pills = (props: { entry: Entry }) => (
 		<>
-			<span class={`pill ${drafted(props.entry) ? "drafted" : props.entry.status}`}>{drafted(props.entry) ? "drafted" : props.entry.status}</span>
+			<span class={`pill ${drafted(props.entry) ? "drafted" : props.entry.status}`}>
+				{drafted(props.entry) ? "drafted" : props.entry.status}
+			</span>
 			<Show when={props.entry.pending !== null}>
 				<span
 					class={`pill undelivered${failure(props.entry) ? " failed" : ""}`}
@@ -212,7 +242,11 @@ function App() {
 				<span class="pill yours">your turn</span>
 			</Show>
 			<Show when={props.entry.labels.includes("review") && openUnder(entries(), props.entry).length}>
-				{(count) => <span class="below" title="Entries below this one that aren't resolved yet">{count()} open below</span>}
+				{(count) => (
+					<span class="below" title="Entries below this one that aren't resolved yet">
+						{count()} open below
+					</span>
+				)}
 			</Show>
 		</>
 	);
@@ -227,13 +261,20 @@ function App() {
 				<div class="list">
 					<For each={props.entries}>
 						{(entry) => (
-							<A class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`} href={entryPath(entry.id)}>
+							<A
+								class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`}
+								href={entryPath(entry.id)}
+							>
 								<span class="id">#{shortId(entry.id)}</span>
 								<Show when={entry.priority === "critical"}>
-									<span class="crit" title="Critical: blocking work right now">▲▲</span>
+									<span class="crit" title="Critical: blocking work right now">
+										▲▲
+									</span>
 								</Show>
 								<Show when={entry.priority === "high"}>
-									<span class="high" title="High priority">▲</span>
+									<span class="high" title="High priority">
+										▲
+									</span>
 								</Show>
 								<span class="title">{entry.title}</span>
 								<Pills entry={entry} />
@@ -245,11 +286,15 @@ function App() {
 		);
 		return (
 			<Show when={project() !== undefined} fallback={<Projects />}>
-			<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
-				<Section title="Waiting on you" entries={mine()} note={`${mine().filter(drafted).length} of ${mine().length} drafted`} />
-				<Section title="Waiting on the agents" entries={theirs()} />
-				<Section title="Resolved" entries={ordered(entries()).filter((entry) => entry.status === "resolved")} />
-			</Show>
+				<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
+					<Section
+						title="Waiting on you"
+						entries={mine()}
+						note={`${mine().filter(drafted).length} of ${mine().length} drafted`}
+					/>
+					<Section title="Waiting on the agents" entries={theirs()} />
+					<Section title="Resolved" entries={ordered(entries()).filter((entry) => entry.status === "resolved")} />
+				</Show>
 			</Show>
 		);
 	}
@@ -265,10 +310,14 @@ function App() {
 							<A class={`item${other.waiting ? " turn" : ""}`} href={projectPath(other.id)}>
 								<span class="title">{other.name}</span>
 								<Show when={other.placement._tag === "Folder"}>
-									<span class="label" title="Guessed from the folder: no connected OpenCode knows these sessions yet">folder</span>
+									<span class="label" title="Guessed from the folder: no connected OpenCode knows these sessions yet">
+										folder
+									</span>
 								</Show>
 								<Show when={other.critical}>
-									<span class="crit" title="Critical: blocking work right now">▲▲ {other.critical}</span>
+									<span class="crit" title="Critical: blocking work right now">
+										▲▲ {other.critical}
+									</span>
 								</Show>
 								<Show when={other.waiting}>
 									<span class="pill yours">{other.waiting} waiting on you</span>
@@ -286,7 +335,11 @@ function App() {
 		const navigate = useNavigate();
 		const entry = () => byId(params.id);
 		/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
-		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>((previous) => (entry() ? { parent: entry()!.parent, created: entry()!.created, priority: entry()!.priority } : previous), { parent: null, created: "", priority: "normal" });
+		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>(
+			(previous) =>
+				entry() ? { parent: entry()!.parent, created: entry()!.created, priority: entry()!.priority } : previous,
+			{ parent: null, created: "", priority: "normal" },
+		);
 		const goNext = () => {
 			// Only compared with the entries' ids: a bad one in the URL is simply not among them.
 			const following = next(entries(), { id: params.id as EntryId, ...place() });
@@ -306,7 +359,8 @@ function App() {
 		onCleanup(() => window.removeEventListener("keydown", onKey));
 		// Files dropped anywhere on the window join this entry's draft, when it has a draft box.
 		const [dragging, setDragging] = createSignal(false);
-		const droppable = (event: DragEvent) => entry()?.status !== "resolved" && !!event.dataTransfer?.types.includes("Files");
+		const droppable = (event: DragEvent) =>
+			entry()?.status !== "resolved" && !!event.dataTransfer?.types.includes("Files");
 		const drag = (event: DragEvent) => {
 			if (!droppable(event)) return;
 			event.preventDefault();
@@ -334,10 +388,20 @@ function App() {
 						<A href={home()}>← All entries</A>
 					</aside>
 					<aside class="side right">
-						<button class="secondary" title={params.id} onClick={() => void attempt(() => navigator.clipboard.writeText(params.id).then(() => "Id copied"))}>
+						<button
+							type="button"
+							class="secondary"
+							title={params.id}
+							onClick={() => void attempt(() => navigator.clipboard.writeText(params.id).then(() => "Id copied"))}
+						>
 							<Icon name="copy" /> Copy id
 						</button>
-						<button class="primary" title="Go to the next entry, leaving this one and its draft as they are (Ctrl+Shift+Enter)" onClick={goNext}>
+						<button
+							type="button"
+							class="primary"
+							title="Go to the next entry, leaving this one and its draft as they are (Ctrl+Shift+Enter)"
+							onClick={goNext}
+						>
 							Next <Icon name="next" /> <small class="keys">⇧⌘↵</small>
 						</button>
 					</aside>
@@ -352,10 +416,14 @@ function App() {
 									<div class="head">
 										<span class="id">#{shortId(entry().id)}</span>
 										<Show when={entry().priority === "critical"}>
-											<span class="crit" title="Critical: blocking work right now">▲▲</span>
+											<span class="crit" title="Critical: blocking work right now">
+												▲▲
+											</span>
 										</Show>
 										<Show when={entry().priority === "high"}>
-											<span class="high" title="High priority">▲</span>
+											<span class="high" title="High priority">
+												▲
+											</span>
 										</Show>
 										<span class="title">{entry().title}</span>
 										<Pills entry={entry()} />
@@ -363,18 +431,37 @@ function App() {
 									</div>
 									<div class="muted">{entry().asker === "agent" ? "agents → you" : "you → agents"}</div>
 									<Show when={failure(entry())}>
-										{(reason) => <div class="failure">Not delivered: the last try failed: {deliveryFailed(reason())}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
+										{(reason) => (
+											<div class="failure">
+												Not delivered: the last try failed: {deliveryFailed(reason())}. It's tried again on every
+												change, when an OpenCode connects, and every 30 s.
+											</div>
+										)}
 									</Show>
 									<Show when={entry().pending !== null}>
 										<div class="undelivered-actions">
-											<span class="muted">{outOfDeskMode(entry()) ? "Your text waits for its session to turn desk mode on." : "Your text hasn't reached its session yet."}</span>
+											<span class="muted">
+												{outOfDeskMode(entry())
+													? "Your text waits for its session to turn desk mode on."
+													: "Your text hasn't reached its session yet."}
+											</span>
 											<button
+												type="button"
 												class="link"
 												title="Stop trying to deliver it, e.g. when its session was deleted. The text stays on the entry, and the entry can be resolved."
 												onClick={() => {
 													const id = entry().id;
-													if (!confirm("Stop delivering your text? It stays on the entry, but its session never receives it. Anything sent in the same message is dropped too.")) return;
-													void attempt(() => call((client) => client.discard({ entry: id })).then(() => `#${shortId(id)}: delivery discarded`));
+													if (
+														!confirm(
+															"Stop delivering your text? It stays on the entry, but its session never receives it. Anything sent in the same message is dropped too.",
+														)
+													)
+														return;
+													void attempt(() =>
+														call((client) => client.discard({ entry: id })).then(
+															() => `#${shortId(id)}: delivery discarded`,
+														),
+													);
 												}}
 											>
 												Discard delivery
@@ -384,7 +471,11 @@ function App() {
 									<Show when={parent()}>
 										{(parent) => (
 											<div class="relation">
-												Follow-up to <A href={entryPath(parent().id)}>#{shortId(parent().id)} {parent().title}</A> <Pills entry={parent()} />
+												Follow-up to{" "}
+												<A href={entryPath(parent().id)}>
+													#{shortId(parent().id)} {parent().title}
+												</A>{" "}
+												<Pills entry={parent()} />
 											</div>
 										)}
 									</Show>
@@ -402,7 +493,11 @@ function App() {
 									<Show when={entry().status !== "resolved"}>
 										<div class="actions">
 											<textarea
-												placeholder={entry().asker === "agent" && entry().status === "open" ? "Your answer (Markdown)" : "A follow-up question (Markdown)"}
+												placeholder={
+													entry().asker === "agent" && entry().status === "open"
+														? "Your answer (Markdown)"
+														: "A follow-up question (Markdown)"
+												}
 												value={drafts[entry().id] ?? ""}
 												onInput={(event) => setDrafts(entry().id, event.currentTarget.value)}
 												onPaste={(event) => {
@@ -429,10 +524,16 @@ function App() {
 														void attach(entry().id, [...input.files!]).then(() => (input.value = ""));
 													}}
 												/>
-												<button class="secondary" title="Attach files, or paste or drop them into the box" onClick={() => picker.click()}>
+												<button
+													type="button"
+													class="secondary"
+													title="Attach files, or paste or drop them into the box"
+													onClick={() => picker.click()}
+												>
 													<Icon name="attach" /> Attach
 												</button>
 												<button
+													type="button"
 													class="secondary"
 													title="Urgent: deliver now, steering the session's current turn"
 													onClick={() => {
@@ -450,17 +551,25 @@ function App() {
 												</button>
 												<Show when={entry().asker === "user"}>
 													<button
+														type="button"
 														class="secondary"
 														onClick={() => {
 															const id = entry().id;
-															void attempt(() => call((client) => client.resolve({ id })).then(() => `#${shortId(id)} marked done`));
+															void attempt(() =>
+																call((client) => client.resolve({ id })).then(() => `#${shortId(id)} marked done`),
+															);
 														}}
 													>
 														<Icon name="done" /> Mark done
 													</button>
 												</Show>
 												<span class="spacer" />
-												<button class="primary" title="Submit all drafts, then go to the next entry (Ctrl+Enter)" onClick={sendAndNext}>
+												<button
+													type="button"
+													class="primary"
+													title="Submit all drafts, then go to the next entry (Ctrl+Enter)"
+													onClick={sendAndNext}
+												>
 													<Icon name="send" /> Send & next <small class="keys">⌘↵</small>
 												</button>
 											</div>
@@ -494,7 +603,14 @@ function App() {
 																#{shortId(deep.id)} {deep.title}
 															</A>{" "}
 															<Pills entry={deep} />
-															<Show when={byId(deep.parent!)}>{(parent) => <span class="muted"> · under #{shortId(parent().id)} {parent().title}</span>}</Show>
+															<Show when={byId(deep.parent!)}>
+																{(parent) => (
+																	<span class="muted">
+																		{" "}
+																		· under #{shortId(parent().id)} {parent().title}
+																	</span>
+																)}
+															</Show>
 														</li>
 													)}
 												</For>
@@ -515,69 +631,96 @@ function App() {
 		const route = useLocation();
 		createEffect(() => setProject(projectIn(route.pathname)));
 		return (
-		<Show when={state.view} fallback={<div class="empty">Connecting…</div>}>
-			<header>
-				<div class="bar">
-					<h1>
-						<A href="/">Desk</A>
-					</h1>
-					<Show when={state.view!.projects.length > 1 || state.view!.project} fallback={<span class="muted">{state.view!.project?.name}</span>}>
-						<select
-							ref={(select) => createEffect(() => {
-								// After the options for this view exist: a value set before them doesn't stick.
-								void state.view!.projects.length;
-								const id = project() ?? "";
-								queueMicrotask(() => (select.value = id));
-							})}
-							class="project"
-							title="Each project has its own desk"
-							onChange={(event) => navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")}
+			<Show when={state.view} fallback={<div class="empty">Connecting…</div>}>
+				<header>
+					<div class="bar">
+						<h1>
+							<A href="/">Desk</A>
+						</h1>
+						<Show
+							when={state.view!.projects.length > 1 || state.view!.project}
+							fallback={<span class="muted">{state.view!.project?.name}</span>}
 						>
-							<Show when={project() === undefined}>
-								<option value="" selected>Choose a project</option>
-							</Show>
-							<Show when={state.view!.project && !state.view!.projects.some((other) => other.id === project())}>
-								<option value={project()} selected>{state.view!.project!.name}</option>
-							</Show>
-							<For each={state.view!.projects}>
-								{(other) => (
-									<option value={other.id} selected={other.id === project()}>
-										{other.name}
-										{other.placement._tag === "Folder" ? " (folder)" : ""}
-										{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
+							<select
+								ref={(select) =>
+									createEffect(() => {
+										// After the options for this view exist: a value set before them doesn't stick.
+										void state.view!.projects.length;
+										const id = project() ?? "";
+										queueMicrotask(() => (select.value = id));
+									})
+								}
+								class="project"
+								title="Each project has its own desk"
+								onChange={(event) => navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")}
+							>
+								<Show when={project() === undefined}>
+									<option value="" selected>
+										Choose a project
 									</option>
-								)}
-							</For>
-						</select>
-					</Show>
-					<span class="spacer" />
-					<span
-						class={`connection${state.view!.deskMode.length === 0 ? " none" : ""}`}
-						title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
-					>
-						{state.view!.deskMode.length === 0 ? "No session in desk mode" : `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
-					</span>
-					<Show when={!state.online}>
-						<span class="offline">reconnecting…</span>
-					</Show>
-					<button class="primary" disabled={pending().length === 0} title="Send every draft, one queued message per session" onClick={submit}>
-						<Icon name="send" /> {pending().length ? `Submit ${pending().length} draft${pending().length === 1 ? "" : "s"}` : "Submit"}
-					</button>
-				</div>
-			</header>
-			<main>
-				<Show when={state.view!.deskMode.length === 0 || state.view!.project?.placement._tag === "Folder" || (project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))}>
-					<div class="notice">
-						<Show when={state.view!.deskMode.length === 0}>No session is in desk mode: answers wait as <em>not delivered</em> until one is. </Show>
-						Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected OpenCode knows their session yet.
+								</Show>
+								<Show when={state.view!.project && !state.view!.projects.some((other) => other.id === project())}>
+									<option value={project()} selected>
+										{state.view!.project!.name}
+									</option>
+								</Show>
+								<For each={state.view!.projects}>
+									{(other) => (
+										<option value={other.id} selected={other.id === project()}>
+											{other.name}
+											{other.placement._tag === "Folder" ? " (folder)" : ""}
+											{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
+										</option>
+									)}
+								</For>
+							</select>
+						</Show>
+						<span class="spacer" />
+						<span
+							class={`connection${state.view!.deskMode.length === 0 ? " none" : ""}`}
+							title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
+						>
+							{state.view!.deskMode.length === 0
+								? "No session in desk mode"
+								: `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
+						</span>
+						<Show when={!state.online}>
+							<span class="offline">reconnecting…</span>
+						</Show>
+						<button
+							type="button"
+							class="primary"
+							disabled={pending().length === 0}
+							title="Send every draft, one queued message per session"
+							onClick={submit}
+						>
+							<Icon name="send" />{" "}
+							{pending().length ? `Submit ${pending().length} draft${pending().length === 1 ? "" : "s"}` : "Submit"}
+						</button>
 					</div>
+				</header>
+				<main>
+					<Show
+						when={
+							state.view!.deskMode.length === 0 ||
+							state.view!.project?.placement._tag === "Folder" ||
+							(project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))
+						}
+					>
+						<div class="notice">
+							<Show when={state.view!.deskMode.length === 0}>
+								No session is in desk mode: answers wait as <em>not delivered</em> until one is.{" "}
+							</Show>
+							Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected
+							OpenCode knows their session yet.
+						</div>
+					</Show>
+					{props.children}
+				</main>
+				<Show when={toast()} keyed>
+					{(toast) => <div class={`toast${toast.error ? " error" : ""}`}>{toast.message}</div>}
 				</Show>
-				{props.children}
-			</main>
-			<Show when={toast()} keyed>
-				{(toast) => <div class={`toast${toast.error ? " error" : ""}`}>{toast.message}</div>}
 			</Show>
-		</Show>
 		);
 	};
 

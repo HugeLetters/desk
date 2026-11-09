@@ -35,7 +35,7 @@ export class Store extends Context.Service<
 >()("desk/Store") {
 	static layer(root: string) {
 		return Layer.effect(
-			this,
+			Store,
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
 				const path = yield* Path.Path;
@@ -75,7 +75,12 @@ export class Store extends Context.Service<
 							yield* io(fs.writeFile(path.join(root, relative), data));
 							return relative;
 						}),
-					detach: (files) => Effect.forEach([...files], (relative) => Effect.ignore(fs.remove(path.join(root, relative), { force: true })), { discard: true }),
+					detach: (files) =>
+						Effect.forEach(
+							[...files],
+							(relative) => Effect.ignore(fs.remove(path.join(root, relative), { force: true })),
+							{ discard: true },
+						),
 					changed: fs.watch(root).pipe(
 						Stream.orDie,
 						Stream.filter((event) => idOf(path.basename(event.path)) !== undefined),

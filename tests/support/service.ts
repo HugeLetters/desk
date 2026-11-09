@@ -12,16 +12,16 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import { Refusal } from "../../src/errors";
+import { OpenCode } from "../../src/opencode";
 import { DeskApi } from "../../src/page-api";
 import * as Connection from "../../src/plugin/connection";
-import { Refusal } from "../../src/errors";
-import { refusal } from "../../src/wording";
-import * as Schema from "effect/Schema";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
-import { OpenCode } from "../../src/opencode";
+import { refusal } from "../../src/wording";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 import { P } from "./ids";
 
@@ -31,13 +31,25 @@ type Request = Exclude<keyof Connection.Client, "hello" | "attach" | "reply">;
 type Answer<Tag extends Request> = Effect.Success<ReturnType<Connection.Client[Tag]>>;
 const isRefusal = Schema.is(Refusal);
 
-export async function startService(options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode>; outdated?: () => boolean } = {}) {
+export async function startService(
+	options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode>; outdated?: () => boolean } = {},
+) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
 	const fake = options.fake ?? fakeOpenCode();
 	const socket = join(store, "desk.sock");
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
-		Layer.buildWithScope(App.layer({ store, socket, port: 0, idle: options.idle ?? 60_000, retry: "50 millis", outdated: options.outdated ?? (() => false) }), scope),
+		Layer.buildWithScope(
+			App.layer({
+				store,
+				socket,
+				port: 0,
+				idle: options.idle ?? 60_000,
+				retry: "50 millis",
+				outdated: options.outdated ?? (() => false),
+			}),
+			scope,
+		),
 	)) as Context.Context<Api | Clients | OpenCode>;
 	const url = Context.get(services, Api).url;
 	const plugins: Array<Scope.Closeable> = [];
@@ -51,16 +63,34 @@ export async function startService(options: { store?: string; idle?: number; fak
 		fake,
 		services,
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `project`. */
-		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: P("prj_default"), directory: "/work/default" }) {
+		plugin(
+			opencode: FakeServer = fake.server(`blank-${++blank}`),
+			project = { id: P("prj_default"), directory: "/work/default" },
+		) {
 			const held = Effect.runSync(Scope.make());
-			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, project, modes: Effect.sync(() => [...opencode.sessions.keys()]), serve: fake.serve(opencode), timeout: 1000 }), held));
+			const live = Effect.runSync(
+				Scope.provide(
+					Connection.make({
+						socket,
+						start: Effect.void,
+						project,
+						modes: Effect.sync(() => [...opencode.sessions.keys()]),
+						serve: fake.serve(opencode),
+						timeout: 1000,
+					}),
+					held,
+				),
+			);
 			const connection = {
 				/** A request to the service, as the plugin makes it; a refusal rejects with its wording. */
-				request: <Tag extends Request>(method: Tag, input: Parameters<Connection.Client[Tag]>[0]): Promise<Answer<Tag>> =>
+				request: <Tag extends Request>(
+					method: Tag,
+					input: Parameters<Connection.Client[Tag]>[0],
+				): Promise<Answer<Tag>> =>
 					Effect.runPromise(
-						Effect.flatMap(live.client, (client) => (client[method] as (input: unknown) => Effect.Effect<Answer<Tag>, unknown>)(input)).pipe(
-							Effect.mapError((error) => (isRefusal(error) ? new Error(refusal(error)) : error)),
-						),
+						Effect.flatMap(live.client, (client) =>
+							(client[method] as (input: unknown) => Effect.Effect<Answer<Tag>, unknown>)(input),
+						).pipe(Effect.mapError((error) => (isRefusal(error) ? new Error(refusal(error)) : error))),
 					),
 				url: () => Effect.runPromise(live.url),
 				/** Unloads the plugin instance: hangs up. */
@@ -90,7 +120,11 @@ const client = RpcClient.make(DeskApi);
 export const rpc = <A, E>(url: string, f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
 	Effect.runPromise(
 		Effect.scoped(Effect.flatMap(client, f)).pipe(
-			Effect.provide(RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))),
+			Effect.provide(
+				RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
+					Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+				),
+			),
 		),
 	);
 

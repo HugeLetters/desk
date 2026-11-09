@@ -11,22 +11,48 @@ export class HasParent extends Schema.TaggedError<HasParent>()("HasParent", { id
 /** Adopting `id` under `parent` would put it in its own subtree. */
 export class WouldCycle extends Schema.TaggedError<WouldCycle>()("WouldCycle", { id: EntryId, parent: EntryId }) {}
 /** Only the answerer answers: `by` asked it. */
-export class NotTheAnswerer extends Schema.TaggedError<NotTheAnswerer>()("NotTheAnswerer", { id: EntryId, by: Party }) {}
+export class NotTheAnswerer extends Schema.TaggedError<NotTheAnswerer>()("NotTheAnswerer", {
+	id: EntryId,
+	by: Party,
+}) {}
 /** Only the asker resolves. */
 export class NotTheAsker extends Schema.TaggedError<NotTheAsker>()("NotTheAsker", { id: EntryId, asker: Party }) {}
 export class AlreadyResolved extends Schema.TaggedError<AlreadyResolved>()("AlreadyResolved", { id: EntryId }) {}
 /** The user's text on it hasn't reached the session yet. */
 export class Undelivered extends Schema.TaggedError<Undelivered>()("Undelivered", { id: EntryId }) {}
 /** Unresolved entries below it. */
-export class OpenBelow extends Schema.TaggedError<OpenBelow>()("OpenBelow", { id: EntryId, below: Schema.Array(EntryId) }) {}
+export class OpenBelow extends Schema.TaggedError<OpenBelow>()("OpenBelow", {
+	id: EntryId,
+	below: Schema.Array(EntryId),
+}) {}
 export class EmptyText extends Schema.TaggedError<EmptyText>()("EmptyText", { id: EntryId }) {}
 /** The draft's text points at an attachment the draft doesn't carry. */
-export class MissingAttachment extends Schema.TaggedError<MissingAttachment>()("MissingAttachment", { id: EntryId, attachment: Schema.String }) {}
+export class MissingAttachment extends Schema.TaggedError<MissingAttachment>()("MissingAttachment", {
+	id: EntryId,
+	attachment: Schema.String,
+}) {}
 /** Nothing on it waits to be delivered (it may have just gone out). */
-export class NothingUndelivered extends Schema.TaggedError<NothingUndelivered>()("NothingUndelivered", { id: EntryId }) {}
+export class NothingUndelivered extends Schema.TaggedError<NothingUndelivered>()("NothingUndelivered", {
+	id: EntryId,
+}) {}
 
-export const Refusal = Schema.Union([NoSuchEntry, HasParent, WouldCycle, NotTheAnswerer, NotTheAsker, AlreadyResolved, Undelivered, OpenBelow, EmptyText, MissingAttachment, NothingUndelivered]);
+export const Refusal = Schema.Union([
+	NoSuchEntry,
+	HasParent,
+	WouldCycle,
+	NotTheAnswerer,
+	NotTheAsker,
+	AlreadyResolved,
+	Undelivered,
+	OpenBelow,
+	EmptyText,
+	MissingAttachment,
+	NothingUndelivered,
+]);
 export type Refusal = typeof Refusal.Type;
 
 /** OpenCode didn't take a message: what it (or the plugin carrying it) said. */
-export class DeliveryFailed extends Schema.TaggedError<DeliveryFailed>()("DeliveryFailed", { session: Schema.String, cause: Schema.String }) {}
+export class DeliveryFailed extends Schema.TaggedError<DeliveryFailed>()("DeliveryFailed", {
+	session: Schema.String,
+	cause: Schema.String,
+}) {}

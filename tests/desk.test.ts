@@ -4,21 +4,21 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunServices from "@effect/platform-bun/BunServices";
+import * as Cause from "effect/Cause";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Desk, type Question } from "../src/desk";
-import { Store } from "../src/store";
-import { eventually } from "./support/service";
-import * as Cause from "effect/Cause";
-import * as Schema from "effect/Schema";
 import { Refusal } from "../src/errors";
+import { Store } from "../src/store";
 import { refusal } from "../src/wording";
 import { E, S } from "./support/ids";
+import { eventually } from "./support/service";
 
 let root: string;
 let scope: Scope.Closeable;
@@ -26,10 +26,16 @@ let services: Context.Context<Desk>;
 
 async function open() {
 	scope = Effect.runSync(Scope.make());
-	services = (await Effect.runPromise(Layer.buildWithScope(Desk.layer.pipe(Layer.provideMerge(Store.layer(root)), Layer.provideMerge(BunServices.layer)), scope))) as typeof services;
+	services = (await Effect.runPromise(
+		Layer.buildWithScope(
+			Desk.layer.pipe(Layer.provideMerge(Store.layer(root)), Layer.provideMerge(BunServices.layer)),
+			scope,
+		),
+	)) as typeof services;
 }
 const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
-const desk = <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) => Effect.runPromise(Effect.provideContext(Desk.use(f), services));
+const desk = <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) =>
+	Effect.runPromise(Effect.provideContext(Desk.use(f), services));
 const failure = async <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) => {
 	const exit = await Effect.runPromiseExit(Effect.provideContext(Desk.use(f), services));
 	if (Exit.isSuccess(exit)) return "succeeded";
@@ -38,7 +44,8 @@ const failure = async <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) 
 	return Schema.is(Refusal)(error) ? refusal(error) : String(error);
 };
 const entries = () => desk((d) => d.entries);
-const ask = (title: string, extra: Partial<Question> = {}) => desk((d) => d.ask({ session: S("ses_a"), directory: "/w" }, { title, body: "", ...extra }));
+const ask = (title: string, extra: Partial<Question> = {}) =>
+	desk((d) => d.ask({ session: S("ses_a"), directory: "/w" }, { title, body: "", ...extra }));
 const files = async () => (await readdir(root)).filter((name) => name.endsWith(".md")).sort();
 const attachments = async () => (await readdir(join(root, "attachments")).catch(() => [])).sort();
 
@@ -130,7 +137,9 @@ test("replies are all or nothing, and a refused one stores no attachments", asyn
 	expect(error).toContain("No desk entry gone");
 	expect((await entries())[0]).toMatchObject({ status: "open", pending: null });
 	expect(await attachments()).toEqual([]);
-	expect(await failure((d) => d.reply([{ entry: entry.id, text: `![b](attachment:${crypto.randomUUID()})` }], "queue"))).toContain("missing from the draft");
+	expect(
+		await failure((d) => d.reply([{ entry: entry.id, text: `![b](attachment:${crypto.randomUUID()})` }], "queue")),
+	).toContain("missing from the draft");
 });
 
 test("only referenced attachments are stored, and they go with the last entry pointing at them", async () => {
@@ -164,13 +173,26 @@ test("a reply's entries share one pending message per session; delivered clears 
 	const a = await ask("A?");
 	const b = await desk((d) => d.ask({ session: S("ses_b"), directory: "/w" }, { title: "B?", body: "" }));
 	const c = await ask("C?");
-	await desk((d) => d.reply([{ entry: a.id, text: "1" }, { entry: b.id, text: "2" }, { entry: c.id, text: "3" }], "queue"));
+	await desk((d) =>
+		d.reply(
+			[
+				{ entry: a.id, text: "1" },
+				{ entry: b.id, text: "2" },
+				{ entry: c.id, text: "3" },
+			],
+			"queue",
+		),
+	);
 	const byId = async (id: string) => (await entries()).find((entry) => entry.id === id)!;
 	const [ea, eb, ec] = [await byId(a.id), await byId(b.id), await byId(c.id)];
 	expect(ea!.pending!.message).toBe(ec!.pending!.message);
 	expect(eb!.pending!.message).not.toBe(ea!.pending!.message);
 	await desk((d) => d.delivered(ea!.pending!.message));
-	expect([(await byId(a.id)).pending, (await byId(b.id)).pending, (await byId(c.id)).pending].map((pending) => pending === null)).toEqual([true, false, true]);
+	expect(
+		[(await byId(a.id)).pending, (await byId(b.id)).pending, (await byId(c.id)).pending].map(
+			(pending) => pending === null,
+		),
+	).toEqual([true, false, true]);
 });
 
 test("the files are the state: a file put back to an earlier version is what the desk reads, and its rules apply to it", async () => {
@@ -187,12 +209,20 @@ test("the files are the state: a file put back to an earlier version is what the
 
 test("changes says when to read again: at the start, after the desk's own changes, and after edits by anyone", async () => {
 	const signals: Array<number> = [];
-	const fiber = Effect.runFork(Effect.provideContext(Desk.use((d) => d.changes.pipe(Stream.runForEach(() => Effect.sync(() => signals.push(Date.now()))))), services));
+	const fiber = Effect.runFork(
+		Effect.provideContext(
+			Desk.use((d) => d.changes.pipe(Stream.runForEach(() => Effect.sync(() => signals.push(Date.now()))))),
+			services,
+		),
+	);
 	await eventually(() => signals.length >= 1);
 	const asked = await ask("Signalled?");
 	await eventually(() => signals.length >= 2);
 	const count = signals.length;
-	await writeFile(join(root, `${asked.id}.md`), (await readFile(join(root, `${asked.id}.md`), "utf8")).replace("Signalled?", "Edited"));
+	await writeFile(
+		join(root, `${asked.id}.md`),
+		(await readFile(join(root, `${asked.id}.md`), "utf8")).replace("Signalled?", "Edited"),
+	);
 	await eventually(() => signals.length > count);
 	await Effect.runPromise(Fiber.interrupt(fiber));
 });

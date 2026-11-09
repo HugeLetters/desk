@@ -6,7 +6,8 @@ import type { Mermaid } from "mermaid";
 
 const video = /\.(mp4|webm|mov|m4v)$/i;
 /** Paths relative to the entry's directory load through `base` (`/files/<entry id>/`); `/attachments/…` and URLs as they are. */
-const asset = (url: string, base: string) => (/^([a-z]+:|#|\/)/i.test(url) ? url : `${base}${url.replace(/^\.\//, "")}`);
+const asset = (url: string, base: string) =>
+	/^([a-z]+:|#|\/)/i.test(url) ? url : `${base}${url.replace(/^\.\//, "")}`;
 
 /** A draft's attachment, still in the browser: its object URL and MIME type. */
 export type Local = (id: string) => { readonly url: string; readonly type: string } | undefined;
@@ -15,8 +16,11 @@ export type Local = (id: string) => { readonly url: string; readonly type: strin
 export function render(text: string, base: string, local?: Local): string {
 	const template = document.createElement("template");
 	// `attachment:` isn't a scheme DOMPurify keeps, but a fragment is; the object URL goes in after sanitizing.
-	template.innerHTML = DOMPurify.sanitize(marked.parse(text.replaceAll("](attachment:", "](#attachment:"), { async: false }));
-	const attached = (url: string) => (url.startsWith("#attachment:") ? local?.(url.slice("#attachment:".length)) : undefined);
+	template.innerHTML = DOMPurify.sanitize(
+		marked.parse(text.replaceAll("](attachment:", "](#attachment:"), { async: false }),
+	);
+	const attached = (url: string) =>
+		url.startsWith("#attachment:") ? local?.(url.slice("#attachment:".length)) : undefined;
 	for (const img of template.content.querySelectorAll("img")) {
 		const file = attached(img.getAttribute("src") ?? "");
 		const src = file?.url ?? asset(img.getAttribute("src") ?? "", base);
@@ -24,7 +28,13 @@ export function render(text: string, base: string, local?: Local): string {
 			img.src = src;
 			continue;
 		}
-		const player = Object.assign(document.createElement("video"), { src, controls: true, loop: true, muted: true, title: img.alt });
+		const player = Object.assign(document.createElement("video"), {
+			src,
+			controls: true,
+			loop: true,
+			muted: true,
+			title: img.alt,
+		});
 		img.replaceWith(player);
 	}
 	for (const link of template.content.querySelectorAll("a")) {
@@ -37,7 +47,10 @@ export function render(text: string, base: string, local?: Local): string {
 			hljs.highlightElement(code as HTMLElement);
 			continue;
 		}
-		const diagram = Object.assign(document.createElement("div"), { className: "mermaid", textContent: code.textContent });
+		const diagram = Object.assign(document.createElement("div"), {
+			className: "mermaid",
+			textContent: code.textContent,
+		});
 		code.parentElement!.replaceWith(diagram);
 	}
 	return template.innerHTML;

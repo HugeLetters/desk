@@ -25,7 +25,10 @@ export type { Prompt, SessionInfo };
  * What the attached OpenCode instances say about a session: one knows it; all of them answered and none does; or none
  * knows it and one couldn't answer, so it may yet. Only `Unknown` is an answer to remember.
  */
-export type Lookup = { readonly _tag: "Known"; readonly session: SessionInfo } | { readonly _tag: "Unknown" } | { readonly _tag: "Unreachable" };
+export type Lookup =
+	| { readonly _tag: "Known"; readonly session: SessionInfo }
+	| { readonly _tag: "Unknown" }
+	| { readonly _tag: "Unreachable" };
 
 /** The plugin instance couldn't do what was asked (OpenCode said no, or the plugin didn't answer): what was said. */
 export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly cause: string }> {}
@@ -71,7 +74,7 @@ export class OpenCode extends Context.Service<
 >()("desk/OpenCode") {
 	static get layer() {
 		return Layer.effect(
-			this,
+			OpenCode,
 			Effect.gen(function* () {
 				/** The attached clients, in the order they came: the one state; the counts and desk-mode sessions follow from it. */
 				const state = yield* SubscriptionRef.make<ReadonlyArray<Attached>>([]);
@@ -79,8 +82,10 @@ export class OpenCode extends Context.Service<
 				const joined = yield* PubSub.unbounded<void>();
 				const count = (all: ReadonlyArray<Attached>) => all.length;
 				// Instances of one OpenCode report the same sessions, so they're counted once.
-				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> => [...new Set(all.flatMap((attached) => attached.deskMode))].sort();
-				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) => a.length === b.length && a.every((session, index) => session === b[index]);
+				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> =>
+					[...new Set(all.flatMap((attached) => attached.deskMode))].sort();
+				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) =>
+					a.length === b.length && a.every((session, index) => session === b[index]);
 
 				/** The first attached client that knows the session. One that can't answer is skipped, and remembered. */
 				const find = (sessionID: SessionID) =>
@@ -97,7 +102,10 @@ export class OpenCode extends Context.Service<
 							);
 							if (session) return { client, lookup: { _tag: "Known", session } as Lookup };
 						}
-						return { client: undefined, lookup: (unreachable ? { _tag: "Unreachable" } : { _tag: "Unknown" }) as Lookup };
+						return {
+							client: undefined,
+							lookup: (unreachable ? { _tag: "Unreachable" } : { _tag: "Unknown" }) as Lookup,
+						};
 					});
 
 				return OpenCode.of({
@@ -112,7 +120,10 @@ export class OpenCode extends Context.Service<
 					attached: Stream.changes(Stream.map(SubscriptionRef.changes(state), count)),
 					connected: Effect.map(SubscriptionRef.get(state), count),
 					joined: Stream.fromPubSub(joined),
-					modes: (client, sessions) => SubscriptionRef.update(state, (all) => all.map((attached) => (attached.client === client ? { client, deskMode: sessions } : attached))),
+					modes: (client, sessions) =>
+						SubscriptionRef.update(state, (all) =>
+							all.map((attached) => (attached.client === client ? { client, deskMode: sessions } : attached)),
+						),
 					deskMode: Stream.changesWith(Stream.map(SubscriptionRef.changes(state), inDeskMode), sameSessions),
 					inDeskMode: Effect.map(SubscriptionRef.get(state), inDeskMode),
 					session: (sessionID) => Effect.map(find(sessionID), (found) => found.lookup),

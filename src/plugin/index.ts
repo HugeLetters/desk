@@ -12,6 +12,9 @@
  * `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one when it's taken)
  * and `timeout` (how long a desk call may take before the agent is told the service seems stuck; default 30 seconds).
  */
+
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
 import { flow } from "effect";
@@ -22,8 +25,6 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { EntryId, Priority, SessionID } from "../entry";
 import { Refusal } from "../errors";
 import type { Question } from "../protocol";
@@ -45,9 +46,10 @@ export default Plugin.define({
 	id: "desk",
 	effect: (ctx) =>
 		Effect.gen(function* () {
-			const home = String(
-				ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk"),
-			).replace(/^~(?=\/|$)/, homedir());
+			const home = String(ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(
+				/^~(?=\/|$)/,
+				homedir(),
+			);
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
 			const timeout = Duration.fromInputUnsafe(ctx.options.timeout ?? "30 seconds");
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
@@ -61,9 +63,7 @@ export default Plugin.define({
 				}
 				const where = yield* Effect.forEach(sessions, (id) =>
 					ctx.session.get({ sessionID: id }).pipe(
-						Effect.map((session) =>
-							session.location.directory === ctx.location.directory ? "here" : "elsewhere",
-						),
+						Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
 						Effect.catchIf(notFound, () => Effect.succeed("gone" as const)),
 						Effect.orElseSucceed(() => "elsewhere" as const),
 					),
@@ -120,9 +120,7 @@ export default Plugin.define({
 						if (held) yield* Scope.close(held.scope, Exit.void);
 						held = undefined;
 					} else if (held)
-						yield* Effect.ignore(
-							Effect.flatMap(held.connection.client, (client) => client.modes({ sessions: mine })),
-						);
+						yield* Effect.ignore(Effect.flatMap(held.connection.client, (client) => client.modes({ sessions: mine })));
 					else {
 						const scope = yield* Scope.fork(pluginScope);
 						held = { scope, connection: yield* Scope.provide(Connection.make(options), scope) };
@@ -145,10 +143,7 @@ export default Plugin.define({
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				// A session moving in or out of this directory may connect or hang up this instance, too.
 				Stream.runForEach((event) =>
-					Effect.andThen(
-						Effect.ignore(service((client) => client.moved({ session: event.data.sessionID }))),
-						sync,
-					),
+					Effect.andThen(Effect.ignore(service((client) => client.moved({ session: event.data.sessionID }))), sync),
 				),
 				Effect.ignore,
 				Effect.forkScoped,
@@ -160,9 +155,7 @@ export default Plugin.define({
 				const known = roots.get(sessionID);
 				if (known) return Effect.succeed(known);
 				return ctx.session.get({ sessionID }).pipe(
-					Effect.flatMap((session) =>
-						session.parentID ? root(session.parentID) : Effect.succeed(session.id),
-					),
+					Effect.flatMap((session) => (session.parentID ? root(session.parentID) : Effect.succeed(session.id))),
 					Effect.tap((found) => Effect.sync(() => roots.set(sessionID, found))),
 				);
 			};
@@ -223,9 +216,7 @@ export default Plugin.define({
 							if (now) yield* ctx.storage.set(key(rootID), true);
 							else yield* ctx.storage.remove(key(rootID));
 							yield* sync;
-							const url = now
-								? (yield* service((client) => client.page({ session: rootID }))).url
-								: undefined;
+							const url = now ? (yield* service((client) => client.page({ session: rootID }))).url : undefined;
 							const text = url
 								? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
 								: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
@@ -243,9 +234,7 @@ export default Plugin.define({
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
-						labels: Schema.optional(
-							described(Schema.Array(Schema.String), "Short topic tags, e.g. glossary, review."),
-						),
+						labels: Schema.optional(described(Schema.Array(Schema.String), "Short topic tags, e.g. glossary, review.")),
 						parent: Schema.optional(described(EntryId, "The id of the entry this follows up on.")),
 						priority: Schema.optional(
 							described(
@@ -283,9 +272,7 @@ export default Plugin.define({
 					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
 					options: { codemode: true },
 					execute: tool((input: { id: EntryId; parent: EntryId }) =>
-						service((client) => client.adopt(input)).pipe(
-							Effect.as(`Filed ${input.id} under ${input.parent}.`),
-						),
+						service((client) => client.adopt(input)).pipe(Effect.as(`Filed ${input.id} under ${input.parent}.`)),
 					),
 				});
 				editor.add({
@@ -318,9 +305,7 @@ export default Plugin.define({
 						service((client) =>
 							client.prioritize({ id: input.id, priority: input.priority, subtree: input.subtree ?? false }),
 						).pipe(
-							Effect.as(
-								`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`,
-							),
+							Effect.as(`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`),
 						),
 					),
 				});
@@ -331,9 +316,7 @@ export default Plugin.define({
 					input: Schema.Struct({ id: Schema.optional(EntryId) }),
 					options: { codemode: false },
 					execute: tool((input: { id?: EntryId | undefined }, sessionID) =>
-						Effect.flatMap(root(sessionID), (session) =>
-							service((client) => client.list({ session, id: input.id })),
-						),
+						Effect.flatMap(root(sessionID), (session) => service((client) => client.list({ session, id: input.id }))),
 					),
 				});
 			});

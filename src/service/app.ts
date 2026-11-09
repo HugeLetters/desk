@@ -8,8 +8,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
-import { Desk } from "../desk";
 import * as Delivery from "../delivery";
+import { Desk } from "../desk";
 import { OpenCode } from "../opencode";
 import { Projects } from "../projects";
 import { Store } from "../store";
@@ -53,7 +53,10 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(Clients.layer(config.idle)),
 		Layer.provideMerge(BunServices.layer),
 	);
-	const server = bounded(config.port === 0 ? Http.server(0) : Http.server(config.port).pipe(Layer.catchCause(() => Http.server(0))), "1 second");
+	const server = bounded(
+		config.port === 0 ? Http.server(0) : Http.server(config.port).pipe(Layer.catchCause(() => Http.server(0))),
+		"1 second",
+	);
 	// Once the page and the socket are up, the registration says where.
 	const publish = Layer.effectDiscard(
 		Effect.gen(function* () {
@@ -61,7 +64,11 @@ export const layer = (config: Config) => {
 			yield* (yield* Registration).publish({ url: api.url, socket: config.socket });
 		}),
 	);
-	return Layer.mergeAll(Http.layer(config.store), Socket.layer(config.socket, config.outdated), Delivery.layer(config.retry)).pipe(
+	return Layer.mergeAll(
+		Http.layer(config.store),
+		Socket.layer(config.socket, config.outdated),
+		Delivery.layer(config.retry),
+	).pipe(
 		Layer.provideMerge(publish),
 		Layer.provideMerge(Api.layer),
 		Layer.provideMerge(server),

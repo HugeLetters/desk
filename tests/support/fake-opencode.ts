@@ -4,11 +4,12 @@
  * instance of one answers the service's calls from it (`serve`) and reports its moves (`watch`), as the plugin does
  * in its OpenCode.
  */
+
+import type { ProjectID } from "@opencode/schema/project-id";
 import * as Effect from "effect/Effect";
+import type { SessionID } from "../../src/entry";
 import type { Options } from "../../src/plugin/connection";
 import type { Prompt, SessionInfo } from "../../src/protocol";
-import type { ProjectID } from "@opencode/schema/project-id";
-import type { SessionID } from "../../src/entry";
 import { P } from "./ids";
 
 export interface FakeServer {
@@ -59,7 +60,9 @@ export function fakeOpenCode() {
 	/** What a plugin instance in `fake` answers the service's calls with. */
 	const serve = (fake: FakeServer): Options["serve"] => ({
 		session: (sessionID) =>
-			Effect.suspend(() => (fake.down ? Effect.fail(new Error("connection refused")) : Effect.succeed(fake.sessions.get(sessionID) ?? null))),
+			Effect.suspend(() =>
+				fake.down ? Effect.fail(new Error("connection refused")) : Effect.succeed(fake.sessions.get(sessionID) ?? null),
+			),
 		prompt: (prompt) =>
 			Effect.suspend(() => {
 				fake.calls.push(prompt);

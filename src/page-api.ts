@@ -13,11 +13,21 @@ export type Attachment = typeof Attachment.Type;
  * The user's text for an entry: an answer, or (on their own question) a follow-up. `files` holds the attachments the
  * text references (`attachment:<id>` in its Markdown, `data` base64); sending stores them as `attachments/<uuid>.<ext>`.
  */
-export const Draft = Schema.Struct({ entry: EntryId, text: Schema.String, files: Schema.optional(Schema.Array(Attachment)) });
+export const Draft = Schema.Struct({
+	entry: EntryId,
+	text: Schema.String,
+	files: Schema.optional(Schema.Array(Attachment)),
+});
 export type Draft = typeof Draft.Type;
 
 /** A project with entries. `id` is its placement's key (its URL); a `Folder` is a guess: no connected OpenCode knows its sessions. */
-export const ProjectSummary = Schema.Struct({ id: Schema.String, name: Schema.String, placement: Placement, waiting: Schema.Int, critical: Schema.Int });
+export const ProjectSummary = Schema.Struct({
+	id: Schema.String,
+	name: Schema.String,
+	placement: Placement,
+	waiting: Schema.Int,
+	critical: Schema.Int,
+});
 export type ProjectSummary = typeof ProjectSummary.Type;
 
 /** One project's desk, every project with entries (for switching), and how many OpenCode instances are connected. */

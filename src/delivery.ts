@@ -70,21 +70,43 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 				yield* Effect.forEach(
 					due(entries, new Set(yield* opencode.inDeskMode)),
 					(message) => {
-						const files = message.files.map(({ file, name }) => ({ uri: pathToFileURL(`${store.root}/${file}`).href, name }));
-						return opencode.prompt({ sessionID: message.session, id: message.id, text: message.text, delivery: message.delivery, files }).pipe(
-							Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
-							Effect.andThen(failures.set(message.id, undefined)),
-							Effect.catch((failed) => Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed))),
-						);
+						const files = message.files.map(({ file, name }) => ({
+							uri: pathToFileURL(`${store.root}/${file}`).href,
+							name,
+						}));
+						return opencode
+							.prompt({
+								sessionID: message.session,
+								id: message.id,
+								text: message.text,
+								delivery: message.delivery,
+								files,
+							})
+							.pipe(
+								Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
+								Effect.andThen(failures.set(message.id, undefined)),
+								Effect.catch((failed) =>
+									Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed)),
+								),
+							);
 					},
 					{ concurrency: "unbounded", discard: true },
 				);
 				// Messages that left the outbox (delivered, or their entry went) have nothing to report.
-				for (const outbox of (yield* failures.current).keys()) if (!pending.some((message) => message.id === outbox)) yield* failures.set(outbox, undefined);
+				for (const outbox of (yield* failures.current).keys())
+					if (!pending.some((message) => message.id === outbox)) yield* failures.set(outbox, undefined);
 			});
 
 			// One flush at a time; triggers that pile up meanwhile only need one more.
-			yield* Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(opencode.attached, () => undefined), Stream.map(opencode.deskMode, () => undefined), Stream.tick(Duration.fromInputUnsafe(retry))], { concurrency: "unbounded" }).pipe(
+			yield* Stream.mergeAll(
+				[
+					Stream.map(desk.changes, () => undefined),
+					Stream.map(opencode.attached, () => undefined),
+					Stream.map(opencode.deskMode, () => undefined),
+					Stream.tick(Duration.fromInputUnsafe(retry)),
+				],
+				{ concurrency: "unbounded" },
+			).pipe(
 				Stream.debounce("20 millis"),
 				Stream.runForEach(() => flush),
 				Effect.forkScoped,

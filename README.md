@@ -86,20 +86,20 @@ flowchart LR
   how many sessions are in desk mode. An answer for a session whose OpenCode has nothing in desk mode waits until something is. The page shows one project at a time (`/projects/<id>`, an entry at
   `/projects/<id>/questions/<entry id>`); `/` lists the projects.
 
-| Module | What it is |
-|---|---|
-| `src/entry.ts` | the entry, its file format, whose turn it is, the desk's order |
-| `src/store.ts` | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename) |
-| `src/desk.ts` | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first |
-| `src/outbox.ts` | outbox entries → the messages to send |
-| `src/delivery.ts` | sends outbox messages, retrying on reconnect and every 30 s |
-| `src/opencode.ts` | OpenCode as the service reaches it: the connected plugin instances (`Client`) |
-| `src/projects.ts` | entry → project, cached |
-| `src/service/` | `api.ts` (what each request does), `socket.ts`, `http.ts`, `clients.ts` (idle exit), `app.ts` (assembly), `main.ts` |
-| `src/plugin/` | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service) |
-| `src/tui.tsx`, `src/badge.ts` | the TUI's footer badge, and its data: the registered service's project list, through restarts |
-| `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts |
-| `page/` | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use |
+| Module                               | What it is                                                                                                                      |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/entry.ts`                       | the entry, its file format, whose turn it is, the desk's order                                                                  |
+| `src/store.ts`                       | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename)                        |
+| `src/desk.ts`                        | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first |
+| `src/outbox.ts`                      | outbox entries → the messages to send                                                                                           |
+| `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                     |
+| `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                   |
+| `src/projects.ts`                    | entry → project, cached                                                                                                         |
+| `src/service/`                       | `api.ts` (what each request does), `socket.ts`, `http.ts`, `clients.ts` (idle exit), `app.ts` (assembly), `main.ts`             |
+| `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service)                                   |
+| `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's project list, through restarts                                   |
+| `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts                                                                                           |
+| `page/`                              | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                          |
 
 ## Entries
 
@@ -107,6 +107,7 @@ One Markdown file per entry, `<store>/<id>.md`, ids random UUIDs never reused. O
 
 ```md
 ---
+
 parent: 3f2b8c1e-6b1e-4c2a-9d4e-1f2a3b4c5d6e
 asker: agent
 status: answered
@@ -137,7 +138,7 @@ The answer.
 - **Priority:** `critical`, `high`, `normal` (absent), `low`. Follow-ups inherit their parent's unless given one.
 - **Order:** priority, then each tree post-order (follow-ups before what they hang under), trees by `created`.
 
-The page works as Phantom's did: *Waiting on you* / *Waiting on the agents* / *Resolved*, drafts kept in the browser
+The page works as Phantom's did: _Waiting on you_ / _Waiting on the agents_ / _Resolved_, drafts kept in the browser
 (with attachments in IndexedDB), **Send & next** (⌘↵), **Next** (⇧⌘↵), **Send now** (steers the session), **Submit**
 (every draft, queued). Attachments are stored as `<store>/attachments/<uuid>.<ext>`, linked as `/attachments/…`, and
 passed to the session as files.
@@ -148,6 +149,7 @@ passed to the session as files.
 bun install
 bun run test        # builds the page, then all tests (a bare `bun test` uses whatever page/dist/ holds)
 bunx tsc --noEmit
+bun run lint        # Biome: lint, formatting, import order (`bun run format` applies them)
 bun run page        # rebuild the page on save
 bun run demo        # docs/demo/: stills and the GIF (needs Google Chrome and ffmpeg)
 ```

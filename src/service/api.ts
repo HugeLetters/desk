@@ -6,20 +6,22 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HttpServer from "effect/http/HttpServer";
 import * as Layer from "effect/Layer";
-import * as Stream from "effect/Stream";
 import type * as Rpc from "effect/rpc/Rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
-import { Desk } from "../desk";
+import * as Stream from "effect/Stream";
 import { Failures } from "../delivery";
+import { Desk } from "../desk";
 import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
 import type { Refusal } from "../errors";
+import { OpenCode } from "../opencode";
 import type { Draft, View } from "../page-api";
 import { fromKey, key, type Placement, Projects } from "../projects";
-import { OpenCode } from "../opencode";
 import type { PluginApi } from "../protocol";
 
 /** The plugin's request `Tag`, as `PluginApi` defines it. */
-type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof PluginApi>, Tag>> = (payload: Rpc.Payload<R>) => Effect.Effect<Rpc.Success<R>, Rpc.Error<R>>;
+type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof PluginApi>, Tag>> = (
+	payload: Rpc.Payload<R>,
+) => Effect.Effect<Rpc.Success<R>, Rpc.Error<R>>;
 
 export class Api extends Context.Service<
 	Api,
@@ -42,7 +44,7 @@ export class Api extends Context.Service<
 	/** Needs the page's `HttpServer`, for its URL (`http://127.0.0.1:<port>/`). */
 	static get layer() {
 		return Layer.effect(
-			this,
+			Api,
 			Effect.gen(function* () {
 				const server = yield* HttpServer.HttpServer;
 				const url = server.address._tag === "UnixPathAddress" ? "" : `http://127.0.0.1:${server.address.port}/`;
@@ -50,7 +52,8 @@ export class Api extends Context.Service<
 				const projects = yield* Projects;
 				const opencode = yield* OpenCode;
 				const failures = yield* Failures;
-				const link = (project: Placement, entry?: string) => `${url}projects/${encodeURIComponent(key(project))}${entry ? `/questions/${entry}` : ""}`;
+				const link = (project: Placement, entry?: string) =>
+					`${url}projects/${encodeURIComponent(key(project))}${entry ? `/questions/${entry}` : ""}`;
 
 				/** Each entry's project (one lookup per root session; `Projects` remembers them). */
 				const placed = (entries: ReadonlyArray<Entry>) =>
@@ -80,11 +83,20 @@ export class Api extends Context.Service<
 								const mine = entries.filter((entry) => keyOf(entry) === id);
 								const waiting = waitingFor(mine, "user");
 								const name = yield* projects.name(placement, mine[0]?.directory);
-								return { id, name, placement, waiting: waiting.length, critical: waiting.filter((entry) => entry.priority === "critical").length };
+								return {
+									id,
+									name,
+									placement,
+									waiting: waiting.length,
+									critical: waiting.filter((entry) => entry.priority === "critical").length,
+								};
 							}),
 						);
 						const shown = project === undefined ? undefined : (placements.get(project) ?? fromKey(project));
-						const name = project === undefined ? undefined : (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown!)));
+						const name =
+							project === undefined
+								? undefined
+								: (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown!)));
 						return {
 							project: project === undefined ? null : { id: project, name: name!, placement: shown! },
 							entries: project === undefined ? [] : entries.filter((entry) => keyOf(entry) === project),
@@ -109,7 +121,15 @@ export class Api extends Context.Service<
 					list: ({ session, id }) => Effect.flatMap(scope(session), ({ scope: mine }) => desk.describe(id, mine)),
 					page: ({ session }) => Effect.map(scope(session), ({ project }) => ({ url: link(project) })),
 					view: (project) =>
-						Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(projects.changes, () => undefined), Stream.map(failures.changes, () => undefined), Stream.map(opencode.deskMode, () => undefined)], { concurrency: "unbounded" }).pipe(
+						Stream.mergeAll(
+							[
+								Stream.map(desk.changes, () => undefined),
+								Stream.map(projects.changes, () => undefined),
+								Stream.map(failures.changes, () => undefined),
+								Stream.map(opencode.deskMode, () => undefined),
+							],
+							{ concurrency: "unbounded" },
+						).pipe(
 							Stream.debounce("10 millis"),
 							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(project, entries))),
 							// The desk is read again every few seconds anyway: send a view only when it differs.

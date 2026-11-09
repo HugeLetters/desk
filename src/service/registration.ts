@@ -17,7 +17,10 @@ import * as Schedule from "effect/Schedule";
 import { protocol } from "../protocol";
 import { decode, encode, type Info } from "../service-info";
 
-export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{ readonly path: string; readonly pid: number }> {}
+export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
+	readonly path: string;
+	readonly pid: number;
+}> {}
 
 /** Whether a process exists. Effect has no way to ask, so this is `kill(pid, 0)`. */
 const alive = (pid: number) => {
@@ -42,11 +45,15 @@ export class Registration extends Context.Service<
 		const path = join(store, "service.json");
 		const own: Info = { pid: process.pid, protocol };
 		return Layer.effect(
-			this,
+			Registration,
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
 				/** The registration there now; undefined when there's none or it isn't one. */
-				const read = fs.readFileString(path).pipe(Effect.flatMap(decode), Effect.option, Effect.map((info) => (info._tag === "Some" ? info.value : undefined)));
+				const read = fs.readFileString(path).pipe(
+					Effect.flatMap(decode),
+					Effect.option,
+					Effect.map((info) => (info._tag === "Some" ? info.value : undefined)),
+				);
 				// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
 				// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
 				const create = Effect.gen(function* () {
@@ -73,11 +80,21 @@ export class Registration extends Context.Service<
 					yield* create;
 					const kept = yield* read;
 					if (kept?.pid !== process.pid) return yield* taken(kept?.pid ?? 0);
-				}).pipe(Effect.catchIf((error) => error._tag !== "AlreadyRunning", () => Effect.flatMap(read, (holder) => Effect.fail(taken(holder?.pid ?? 0)))));
-				const release = Effect.flatMap(read, (holder) => (holder?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void));
+				}).pipe(
+					Effect.catchIf(
+						(error) => error._tag !== "AlreadyRunning",
+						() => Effect.flatMap(read, (holder) => Effect.fail(taken(holder?.pid ?? 0))),
+					),
+				);
+				const release = Effect.flatMap(read, (holder) =>
+					holder?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void,
+				);
 
 				// A service that's shutting down still holds the file for a moment after its socket closes: wait it out.
-				yield* Effect.acquireRelease(acquire.pipe(Effect.retry({ schedule: Schedule.spaced("100 millis"), times: 30 })), () => release);
+				yield* Effect.acquireRelease(
+					acquire.pipe(Effect.retry({ schedule: Schedule.spaced("100 millis"), times: 30 })),
+					() => release,
+				);
 				return Registration.of({
 					publish: (where) =>
 						Effect.gen(function* () {

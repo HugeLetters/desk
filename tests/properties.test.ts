@@ -24,7 +24,10 @@ import { E, M, S } from "./support/ids";
 const runs = Number(process.env.PROPERTY_RUNS ?? 200);
 
 /** Runs a property; a counterexample fails the test with the shrunk input and how to replay it. */
-const check = async <A>(arbitrary: Arbitrary.Arbitrary<A>, property: (value: A) => boolean | Effect.Effect<boolean, unknown>) => {
+const check = async <A>(
+	arbitrary: Arbitrary.Arbitrary<A>,
+	property: (value: A) => boolean | Effect.Effect<boolean, unknown>,
+) => {
 	const result = await Effect.runPromise(Arbitrary.checkEffect(arbitrary, property, { runs }));
 	expect(Arbitrary.formatCheckFailure(result) ?? "passed").toBe("passed");
 };
@@ -32,33 +35,51 @@ const check = async <A>(arbitrary: Arbitrary.Arbitrary<A>, property: (value: A) 
 const pick = Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 })));
 
 /** A desk: entry i hangs under an earlier one or none, so it's a forest, as the desk's rules keep it. */
-const Shape = Schema.Struct({ root: Schema.Boolean, parent: Schema.Int, asker: Party, status: Status, priority: Priority });
+const Shape = Schema.Struct({
+	root: Schema.Boolean,
+	parent: Schema.Int,
+	asker: Party,
+	status: Status,
+	priority: Priority,
+});
 const desks = Arbitrary.array(
-	Arbitrary.map(Arbitrary.all({ root: Arbitrary.schema(Schema.Boolean), parent: pick, asker: Arbitrary.schema(Party), status: Arbitrary.schema(Status), priority: Arbitrary.schema(Priority) }), (shape) => shape as typeof Shape.Type),
+	Arbitrary.map(
+		Arbitrary.all({
+			root: Arbitrary.schema(Schema.Boolean),
+			parent: pick,
+			asker: Arbitrary.schema(Party),
+			status: Arbitrary.schema(Status),
+			priority: Arbitrary.schema(Priority),
+		}),
+		(shape) => shape as typeof Shape.Type,
+	),
 	{ maxLength: 12 },
 ).pipe(
-	Arbitrary.map((shapes): Array<Entry> =>
-		shapes.map((shape, index) => ({
-			id: E(`e${index}`),
-			parent: index === 0 || shape.root ? null : E(`e${shape.parent % index}`),
-			asker: shape.asker,
-			status: shape.status,
-			session: S("ses_a"),
-			directory: "/w",
-			labels: [],
-			priority: shape.priority,
-			created: String(index).padStart(4, "0"),
-			title: `e${index}`,
-			question: "",
-			answer: shape.status === "open" ? null : "a",
-			pending: null,
-		})),
+	Arbitrary.map(
+		(shapes): Array<Entry> =>
+			shapes.map((shape, index) => ({
+				id: E(`e${index}`),
+				parent: index === 0 || shape.root ? null : E(`e${shape.parent % index}`),
+				asker: shape.asker,
+				status: shape.status,
+				session: S("ses_a"),
+				directory: "/w",
+				labels: [],
+				priority: shape.priority,
+				created: String(index).padStart(4, "0"),
+				title: `e${index}`,
+				question: "",
+				answer: shape.status === "open" ? null : "a",
+				pending: null,
+			})),
 	),
 );
 
 // The reference model: the definitions, written the plain way.
-const below = (all: ReadonlyArray<Entry>, entry: Entry): Array<Entry> => all.filter((other) => other.parent === entry.id).flatMap((child) => [child, ...below(all, child)]);
-const turn = (entry: Entry) => (entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker);
+const below = (all: ReadonlyArray<Entry>, entry: Entry): Array<Entry> =>
+	all.filter((other) => other.parent === entry.id).flatMap((child) => [child, ...below(all, child)]);
+const turn = (entry: Entry) =>
+	entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker;
 const rank = (entry: Entry) => Priority.literals.indexOf(entry.priority);
 
 test("whose turn it is: nobody once resolved, else the answerer while open and the asker once answered, whatever is below", () =>
@@ -72,7 +93,9 @@ test("the order: every entry once, priority first, and within a priority an entr
 			order.length === all.length &&
 			all.every((entry) => order.includes(entry)) &&
 			order.every((entry, index) => index === 0 || rank(order[index - 1]!) <= rank(entry)) &&
-			all.every((entry) => below(all, entry).every((other) => other.priority !== entry.priority || at(other) < at(entry)))
+			all.every((entry) =>
+				below(all, entry).every((other) => other.priority !== entry.priority || at(other) < at(entry)),
+			)
 		);
 	}));
 
@@ -93,7 +116,12 @@ let services: Context.Context<Desk>;
 beforeAll(async () => {
 	root = await mkdtemp(join(tmpdir(), "desk-properties-"));
 	scope = Effect.runSync(Scope.make());
-	services = (await Effect.runPromise(Layer.buildWithScope(Desk.layer.pipe(Layer.provideMerge(Store.layer(root)), Layer.provideMerge(BunServices.layer)), scope))) as typeof services;
+	services = (await Effect.runPromise(
+		Layer.buildWithScope(
+			Desk.layer.pipe(Layer.provideMerge(Store.layer(root)), Layer.provideMerge(BunServices.layer)),
+			scope,
+		),
+	)) as typeof services;
 });
 afterAll(async () => {
 	await Effect.runPromise(Scope.close(scope, Exit.void));
@@ -110,7 +138,12 @@ const Change = Schema.Union([
 ]);
 type Change = typeof Change.Type;
 const changes = Arbitrary.array(
-	Arbitrary.schema(Change).pipe(Arbitrary.map((change): Change => JSON.parse(JSON.stringify(change, (_, value) => (typeof value === "number" ? Math.abs(value) % 1000 : value))))),
+	Arbitrary.schema(Change).pipe(
+		Arbitrary.map(
+			(change): Change =>
+				JSON.parse(JSON.stringify(change, (_, value) => (typeof value === "number" ? Math.abs(value) % 1000 : value))),
+		),
+	),
 	{ minLength: 10, maxLength: 40 },
 );
 
@@ -131,7 +164,11 @@ const outboxes = Arbitrary.all({
 		const entries = desk.map((entry, index): Entry => {
 			const seed = seeds[index]!;
 			const at = session(seed % 3);
-			return { ...entry, session: at, pending: seed % 2 === 0 ? null : { message: M(`msg_${at}_${seed % 4}`), delivery: "queue" } };
+			return {
+				...entry,
+				session: at,
+				pending: seed % 2 === 0 ? null : { message: M(`msg_${at}_${seed % 4}`), delivery: "queue" },
+			};
 		});
 		return { entries, deskMode: new Set([0, 1, 2].filter((i) => on[i]).map(session)) };
 	}),
@@ -140,60 +177,77 @@ const outboxes = Arbitrary.all({
 test("delivery: a session gets its pending text only while in desk mode, and then all of it", () =>
 	check(outboxes, ({ entries, deskMode }) => {
 		const sent = due(entries, deskMode);
-		const covered = new Set(sent.flatMap((message) => entries.filter((entry) => entry.pending?.message === message.id)));
+		const covered = new Set(
+			sent.flatMap((message) => entries.filter((entry) => entry.pending?.message === message.id)),
+		);
 		const expected = entries.filter((entry) => entry.pending !== null && deskMode.has(entry.session));
-		return sent.every((message) => deskMode.has(message.session)) && covered.size === expected.length && expected.every((entry) => covered.has(entry));
+		return (
+			sent.every((message) => deskMode.has(message.session)) &&
+			covered.size === expected.length &&
+			expected.every((entry) => covered.has(entry))
+		);
 	}));
 
-test("whatever happens, every entry's parent is on the desk, no entry is below itself, and a refused change writes nothing", () =>
-	check(changes, (sequence) =>
-		Effect.gen(function* () {
-			const desk = yield* Desk;
-			// A fresh desk for each sequence.
-			for (const entry of yield* desk.entries) yield* Effect.promise(() => rm(join(root, `${entry.id}.md`)));
-			for (const change of sequence) {
-				const all = yield* desk.entries;
-				const nth = (n: number) => all[n % Math.max(all.length, 1)];
-				const before = yield* Effect.promise(snapshot);
-				const result = yield* Effect.exit(
-					Effect.gen(function* () {
-						switch (change.do) {
-							case "ask":
-								return yield* desk.ask({ session: S("ses_a"), directory: "/w" }, { title: "q", body: "", parent: change.parent === null ? undefined : nth(change.parent)?.id });
-							case "adopt":
-								if (!nth(change.id) || !nth(change.parent)) return;
-								return yield* desk.adopt(nth(change.id)!.id, nth(change.parent)!.id);
-							case "answer":
-								if (!nth(change.id)) return;
-								return yield* desk.answer(nth(change.id)!.id, "an answer");
-							case "reply": {
-								if (!nth(change.id)) return;
-								const also = change.also === null ? [] : [{ entry: nth(change.also)?.id ?? E(crypto.randomUUID()), text: "more" }];
-								return yield* desk.reply([{ entry: nth(change.id)!.id, text: "a reply" }, ...also], "queue");
+test(
+	"whatever happens, every entry's parent is on the desk, no entry is below itself, and a refused change writes nothing",
+	() =>
+		check(changes, (sequence) =>
+			Effect.gen(function* () {
+				const desk = yield* Desk;
+				// A fresh desk for each sequence.
+				for (const entry of yield* desk.entries) yield* Effect.promise(() => rm(join(root, `${entry.id}.md`)));
+				for (const change of sequence) {
+					const all = yield* desk.entries;
+					const nth = (n: number) => all[n % Math.max(all.length, 1)];
+					const before = yield* Effect.promise(snapshot);
+					const result = yield* Effect.exit(
+						Effect.gen(function* () {
+							switch (change.do) {
+								case "ask":
+									return yield* desk.ask(
+										{ session: S("ses_a"), directory: "/w" },
+										{ title: "q", body: "", parent: change.parent === null ? undefined : nth(change.parent)?.id },
+									);
+								case "adopt":
+									if (!nth(change.id) || !nth(change.parent)) return;
+									return yield* desk.adopt(nth(change.id)!.id, nth(change.parent)!.id);
+								case "answer":
+									if (!nth(change.id)) return;
+									return yield* desk.answer(nth(change.id)!.id, "an answer");
+								case "reply": {
+									if (!nth(change.id)) return;
+									const also =
+										change.also === null
+											? []
+											: [{ entry: nth(change.also)?.id ?? E(crypto.randomUUID()), text: "more" }];
+									return yield* desk.reply([{ entry: nth(change.id)!.id, text: "a reply" }, ...also], "queue");
+								}
+								case "delivered": {
+									const pending = nth(change.id)?.pending;
+									if (pending) yield* desk.delivered(pending.message);
+									return;
+								}
+								case "resolve":
+									if (!nth(change.id)) return;
+									return yield* desk.resolve(nth(change.id)!.id, change.by);
 							}
-							case "delivered": {
-								const pending = nth(change.id)?.pending;
-								if (pending) yield* desk.delivered(pending.message);
-								return;
-							}
-							case "resolve":
-								if (!nth(change.id)) return;
-								return yield* desk.resolve(nth(change.id)!.id, change.by);
+						}),
+					);
+					if (Exit.isFailure(result) && (yield* Effect.promise(snapshot)).join("\0") !== before.join("\0"))
+						return false;
+					const now = yield* desk.entries;
+					const ids = new Set(now.map((entry) => entry.id));
+					if (now.some((entry) => entry.parent !== null && !ids.has(entry.parent))) return false;
+					for (const entry of now) {
+						const seen = new Set<string>();
+						for (let at: Entry | undefined = entry; at; at = now.find((other) => other.id === at!.parent)) {
+							if (seen.has(at.id)) return false;
+							seen.add(at.id);
 						}
-					}),
-				);
-				if (Exit.isFailure(result) && (yield* Effect.promise(snapshot)).join("\0") !== before.join("\0")) return false;
-				const now = yield* desk.entries;
-				const ids = new Set(now.map((entry) => entry.id));
-				if (now.some((entry) => entry.parent !== null && !ids.has(entry.parent))) return false;
-				for (const entry of now) {
-					const seen = new Set<string>();
-					for (let at: Entry | undefined = entry; at; at = now.find((other) => other.id === at!.parent)) {
-						if (seen.has(at.id)) return false;
-						seen.add(at.id);
 					}
 				}
-			}
-			return true;
-		}).pipe(Effect.provideContext(services)),
-	), 60_000);
+				return true;
+			}).pipe(Effect.provideContext(services)),
+		),
+	60_000,
+);

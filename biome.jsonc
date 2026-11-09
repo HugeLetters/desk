@@ -1,0 +1,27 @@
+{
+	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+	"files": { "includes": ["**", "!!**/page/dist"] },
+	"formatter": { "indentStyle": "tab", "lineWidth": 120 },
+	"javascript": { "formatter": { "quoteStyle": "double" } },
+	"linter": {
+		"rules": {
+			"preset": "recommended",
+			// `!` is used where a lookup can't miss (an index just built, a regex group that always matches).
+			"style": {
+				"noNonNullAssertion": "off",
+				// The page's components each style their own `.title`; their selectors don't compete.
+				"noDescendingSpecificity": "off"
+			}
+		},
+		"domains": { "solid": "recommended" }
+	},
+	"overrides": [
+		{
+			// OpenTUI's elements, not the DOM's: the browser's a11y rules don't apply.
+			"includes": ["src/tui.tsx"],
+			"linter": { "rules": { "a11y": "off" } }
+		}
+	],
+	"assist": { "actions": { "source": { "organizeImports": "on" } } }
+}
