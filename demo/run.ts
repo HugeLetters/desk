@@ -88,15 +88,16 @@ try {
 		console.log("links stay on the page");
 	}
 
-	const stills: Array<[name: string, url: string, scheme: "light" | "dark"]> = [
+	const stills: Array<[name: string, url: string, scheme: "light" | "dark", width?: number]> = [
 		["desk-projects", page(), "light"],
 		["desk-list", page("prj_phantom"), "light"],
 		["desk-entry-mermaid", "mermaid", "light"],
 		["desk-entry-image", "image", "light"],
-		["desk-review-dark", page("prj_phantom", review.id), "dark"],
+		// Wide: the entry's back link and actions sit beside it.
+		["desk-review-dark", page("prj_phantom", review.id), "dark", 1500],
 	];
-	for (const [name, target, scheme] of stills) {
-		const context = await browser.newContext({ viewport: { width: 1000, height: 900 }, deviceScaleFactor: 2, colorScheme: scheme });
+	for (const [name, target, scheme, width = 1000] of stills) {
+		const context = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2, colorScheme: scheme });
 		const tab = await context.newPage();
 		if (target === "mermaid" || target === "image") {
 			await tab.goto(page("prj_phantom"));

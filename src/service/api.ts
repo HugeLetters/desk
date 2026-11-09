@@ -84,6 +84,7 @@ export class Api extends Context.Service<
 							entries: project === undefined ? [] : entries.filter((entry) => projectOf(entry) === project),
 							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
 							opencode: yield* opencode.connected,
+							deskMode: yield* opencode.inDeskMode,
 							failures: Object.fromEntries(yield* failures.current),
 						} satisfies View;
 					});
@@ -103,7 +104,7 @@ export class Api extends Context.Service<
 					list: ({ session, id }) => Effect.flatMap(scope(session), ({ scope: mine }) => desk.describe(id, mine)),
 					page: ({ session }) => Effect.map(scope(session), ({ project }) => ({ url: link(project) })),
 					view: (project) =>
-						Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(projects.changes, () => undefined), Stream.map(failures.changes, () => undefined)], { concurrency: "unbounded" }).pipe(
+						Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(projects.changes, () => undefined), Stream.map(failures.changes, () => undefined), Stream.map(opencode.deskMode, () => undefined)], { concurrency: "unbounded" }).pipe(
 							Stream.debounce("10 millis"),
 							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(project, entries))),
 							// The desk is read again every few seconds anyway: send a view only when it differs.

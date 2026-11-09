@@ -26,6 +26,8 @@ export interface Options {
 	/** Starts the service; run when nothing answers on the socket. */
 	readonly start: Effect.Effect<void>;
 	readonly hello: Methods["hello"]["input"];
+	/** The sessions in desk mode, reported after every hello (the service holds them only while connected). */
+	readonly modes?: Effect.Effect<ReadonlyArray<string>> | undefined;
 	/** Answers the service's calls. */
 	readonly serve: { readonly [C in CallMethod]: (input: Calls[C]["input"]) => Effect.Effect<Calls[C]["output"], unknown> };
 	/** How long to wait for a started service to answer. */
@@ -130,6 +132,7 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 			);
 			socket = dialed;
 			const { url } = yield* send(dialed, "hello", options.hello);
+			if (options.modes) yield* send(dialed, "modes", { sessions: yield* options.modes });
 			return { socket: dialed, url, closed } satisfies Live;
 		});
 

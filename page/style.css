@@ -47,7 +47,17 @@ main { max-width: 980px; margin: 0 auto; padding: 16px 20px 80px; }
 .item.critical, .item.critical:hover { box-shadow: 6px 0 0 var(--crit) inset; background: color-mix(in srgb, var(--crit) 8%, var(--card)); }
 .item.critical .title { font-weight: 700; }
 
-.nav { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; font-size: 14px; }
+/* An entry: "All entries" on its left and its actions stacked on its right, both sticky below the header; on a narrow window, one row above it. */
+.entry-layout { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; font-size: 14px; }
+.entry-layout > :not(aside) { order: 2; flex-basis: 100%; }
+.side.right { margin-left: auto; display: flex; gap: 12px; }
+@media (min-width: 1380px) {
+	.entry-layout { display: grid; grid-template-columns: 170px minmax(0, 1fr) 170px; gap: 20px; align-items: start; margin: 0 -190px; }
+	.entry-layout > :not(aside) { grid-column: 2; grid-row: 1; }
+	.side { position: sticky; top: 76px; grid-row: 1; }
+	.side.left { grid-column: 1; text-align: right; }
+	.side.right { grid-column: 3; margin: 0; flex-direction: column; align-items: stretch; }
+}
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px 20px; }
 .card.turn { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .head { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: baseline; }

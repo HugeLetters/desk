@@ -41,6 +41,7 @@ function fakeContext(home: string, sessions: Array<Session>) {
 			get: (key: string) => Effect.sync(() => storage.get(key)),
 			set: (key: string, value: unknown) => Effect.sync(() => void storage.set(key, value)),
 			remove: (key: string) => Effect.sync(() => void storage.delete(key)),
+			scan: ({ prefix }: { prefix: string }) => Effect.sync(() => ({ entries: [...storage].filter(([key]) => key.startsWith(prefix)).map(([key, value]) => ({ key, value })) })),
 		},
 		session: {
 			get: ({ sessionID }: { sessionID: string }) =>
@@ -109,13 +110,13 @@ afterAll(async () => {
 	await rm(home, { recursive: true, force: true });
 });
 
-test("off by default: a session sees no desk tools until /desk turns the desk on, for its subagents too", async () => {
+test("off by default: a session sees no desk tools until /desk-mode turns it on, for its subagents too", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
-	await first.command("desk", "ses_main");
+	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
-	expect(first.synthetic.at(-1)!.text).toMatch(/The desk is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//);
+	expect(first.synthetic.at(-1)!.text).toMatch(/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//);
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
-	expect(first.synthetic.at(-1)!.description).toMatch(/^Desk on: http:\/\/127\.0\.0\.1:\d+\/projects\//);
+	expect(first.synthetic.at(-1)!.description).toMatch(/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/projects\//);
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
 	expect(await first.visible("ses_sub")).toEqual([...desk, "read"]);
 	expect(await first.visible("ses_other")).toEqual(["read"]);
@@ -158,13 +159,17 @@ test("a second plugin instance (another OpenCode) shares the one service and the
 	expect((await second.tool("desk_list", "ses_main", {})).content).toContain("From a subagent?");
 	const log = await readFile(join(home, "service.log"), "utf8");
 	expect(log.match(/desk: serving/g)).toHaveLength(1);
+	// The page counts sessions in desk mode, not plugin instances: both report ses_main, which counts once.
+	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
+	const view = await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect));
+	expect(Array.from(view)[0]!).toMatchObject({ opencode: 2, deskMode: 1 });
 });
 
-test("/desk again turns it off", async () => {
-	await first.command("desk", "ses_sub");
+test("/desk-mode again turns it off", async () => {
+	await first.command("desk-mode", "ses_sub");
 	expect(first.storage.has("on/ses_main")).toBe(false);
-	expect(first.synthetic.at(-1)!.text).toContain("The desk is off");
-	expect(first.synthetic.at(-1)!.description).toBe("Desk off");
+	expect(first.synthetic.at(-1)!.text).toContain("Desk mode is off");
+	expect(first.synthetic.at(-1)!.description).toBe("Desk mode off");
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 });
 

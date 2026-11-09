@@ -46,6 +46,8 @@ export const methods = {
 	page: method(Schema.Struct({ session: Schema.String }), Schema.Struct({ url: Schema.String })),
 	/** A session in this OpenCode moved to another directory (perhaps another project). */
 	moved: method(Schema.Struct({ session: Schema.String }), Schema.Null),
+	/** The sessions in desk mode in this OpenCode, all of them: after hello and whenever one turns it on or off. */
+	modes: method(Schema.Struct({ sessions: Schema.Array(Schema.String) }), Schema.Null),
 };
 
 export const SessionInfo = Schema.Struct({ id: Schema.String, parentID: Schema.optional(Schema.String), projectID: Schema.String, directory: Schema.String });

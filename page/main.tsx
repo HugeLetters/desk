@@ -318,180 +318,184 @@ function App() {
 				<Show when={dragging()}>
 					<div class="dropzone">Drop to attach</div>
 				</Show>
-				<div class="nav">
-					<A href={home()}>← All entries</A>
-					<span class="spacer" />
-					<button class="secondary" title={params.id} onClick={() => void attempt(() => navigator.clipboard.writeText(params.id).then(() => "Id copied"))}>
-						<Icon name="copy" /> Copy id
-					</button>
-					<button class="primary" title="Go to the next entry, leaving this one and its draft as they are (Ctrl+Shift+Enter)" onClick={goNext}>
-						Next <Icon name="next" /> <small class="keys">⇧⌘↵</small>
-					</button>
-				</div>
-				<Show when={entry()} fallback={<div class="empty">#{shortId(params.id)} is no longer on the desk.</div>}>
-					{(entry) => {
-						const parent = () => (entry().parent === null ? undefined : byId(entry().parent!));
-						const children = () => entries().filter((other) => other.parent === entry().id);
-						const further = () => openBelow(entries(), entry());
-						let picker!: HTMLInputElement;
-						return (
-							<div class={`card${yours(entry()) ? " turn" : ""}`}>
-								<div class="head">
-									<span class="id">#{shortId(entry().id)}</span>
-									<Show when={entry().priority === "critical"}>
-										<span class="crit" title="Critical: blocking work right now">▲▲</span>
-									</Show>
-									<Show when={entry().priority === "high"}>
-										<span class="high" title="High priority">▲</span>
-									</Show>
-									<span class="title">{entry().title}</span>
-									<Pills entry={entry()} />
-									<For each={entry().labels}>{(label) => <span class="label">{label}</span>}</For>
-								</div>
-								<div class="muted">{entry().asker === "agent" ? "agents → you" : "you → agents"}</div>
-								<Show when={failure(entry())}>
-									{(reason) => <div class="failure">Not delivered: the last try failed: {reason()}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
-								</Show>
-								<Show when={entry().outbox !== null}>
-									<div class="undelivered-actions">
-										<span class="muted">Your text hasn't reached its session yet.</span>
-										<button
-											class="link"
-											title="Stop trying to deliver it, e.g. when its session was deleted. The text stays on the entry, and the entry can be resolved."
-											onClick={() => {
-												const id = entry().id;
-												if (!confirm("Stop delivering your text? It stays on the entry, but its session never receives it. Anything sent in the same message is dropped too.")) return;
-												void attempt(() => call((client) => client.discard({ entry: id })).then(() => `#${shortId(id)}: delivery discarded`));
-											}}
-										>
-											Discard delivery
-										</button>
-									</div>
-								</Show>
-								<Show when={parent()}>
-									{(parent) => (
-										<div class="relation">
-											Follow-up to <A href={entryPath(parent().id)}>#{shortId(parent().id)} {parent().title}</A> <Pills entry={parent()} />
-										</div>
-									)}
-								</Show>
-								<div class="body">
-									<Markdown text={entry().question} entry={entry().id} />
-								</div>
-								<Show when={entry().answer}>
-									{(answer) => (
-										<div class="answer">
-											<div class="caption">Answer from {entry().asker === "agent" ? "you" : "the agents"}</div>
-											<Markdown text={answer()} entry={entry().id} />
-										</div>
-									)}
-								</Show>
-								<Show when={entry().status !== "resolved"}>
-									<div class="actions">
-										<textarea
-											placeholder={entry().asker === "agent" && entry().status === "open" ? "Your answer (Markdown)" : "A follow-up question (Markdown)"}
-											value={drafts[entry().id] ?? ""}
-											onInput={(event) => setDrafts(entry().id, event.currentTarget.value)}
-											onPaste={(event) => {
-												const files = [...(event.clipboardData?.files ?? [])];
-												if (files.length === 0) return;
-												event.preventDefault();
-												void attach(entry().id, files, event.currentTarget.selectionStart);
-											}}
-										/>
-										<Show when={Attachments.referenced(drafts[entry().id] ?? "").size > 0}>
-											<div class="preview">
-												<div class="caption">Preview</div>
-												<Markdown text={drafts[entry().id] ?? ""} entry={entry().id} local={local} />
-											</div>
+				{/* Beside the entry and sticky: back on the left, its actions stacked on the right (above it on a narrow window). */}
+				<div class="entry-layout">
+					<aside class="side left">
+						<A href={home()}>← All entries</A>
+					</aside>
+					<aside class="side right">
+						<button class="secondary" title={params.id} onClick={() => void attempt(() => navigator.clipboard.writeText(params.id).then(() => "Id copied"))}>
+							<Icon name="copy" /> Copy id
+						</button>
+						<button class="primary" title="Go to the next entry, leaving this one and its draft as they are (Ctrl+Shift+Enter)" onClick={goNext}>
+							Next <Icon name="next" /> <small class="keys">⇧⌘↵</small>
+						</button>
+					</aside>
+					<Show when={entry()} fallback={<div class="empty">#{shortId(params.id)} is no longer on the desk.</div>}>
+						{(entry) => {
+							const parent = () => (entry().parent === null ? undefined : byId(entry().parent!));
+							const children = () => entries().filter((other) => other.parent === entry().id);
+							const further = () => openBelow(entries(), entry());
+							let picker!: HTMLInputElement;
+							return (
+								<div class={`card${yours(entry()) ? " turn" : ""}`}>
+									<div class="head">
+										<span class="id">#{shortId(entry().id)}</span>
+										<Show when={entry().priority === "critical"}>
+											<span class="crit" title="Critical: blocking work right now">▲▲</span>
 										</Show>
-										<div class="row">
-											<input
-												ref={picker}
-												type="file"
-												multiple
-												hidden
-												onChange={(event) => {
-													const input = event.currentTarget;
-													void attach(entry().id, [...input.files!]).then(() => (input.value = ""));
-												}}
-											/>
-											<button class="secondary" title="Attach files, or paste or drop them into the box" onClick={() => picker.click()}>
-												<Icon name="attach" /> Attach
-											</button>
+										<Show when={entry().priority === "high"}>
+											<span class="high" title="High priority">▲</span>
+										</Show>
+										<span class="title">{entry().title}</span>
+										<Pills entry={entry()} />
+										<For each={entry().labels}>{(label) => <span class="label">{label}</span>}</For>
+									</div>
+									<div class="muted">{entry().asker === "agent" ? "agents → you" : "you → agents"}</div>
+									<Show when={failure(entry())}>
+										{(reason) => <div class="failure">Not delivered: the last try failed: {reason()}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
+									</Show>
+									<Show when={entry().outbox !== null}>
+										<div class="undelivered-actions">
+											<span class="muted">Your text hasn't reached its session yet.</span>
 											<button
-												class="secondary"
-												title="Urgent: deliver now, steering the session's current turn"
+												class="link"
+												title="Stop trying to deliver it, e.g. when its session was deleted. The text stays on the entry, and the entry can be resolved."
 												onClick={() => {
-													const draft = { entry: entry().id, text: drafts[entry().id] ?? "" };
-													void attempt(async () => {
-														const sent = await outgoing(draft);
-														await call((client) => client.send(sent));
-														setDrafts(draft.entry, undefined!);
-														await prune();
-														return "Sent to the agents";
-													});
+													const id = entry().id;
+													if (!confirm("Stop delivering your text? It stays on the entry, but its session never receives it. Anything sent in the same message is dropped too.")) return;
+													void attempt(() => call((client) => client.discard({ entry: id })).then(() => `#${shortId(id)}: delivery discarded`));
 												}}
 											>
-												<Icon name="now" /> Send now
-											</button>
-											<Show when={entry().asker === "user"}>
-												<button
-													class="secondary"
-													onClick={() => {
-														const id = entry().id;
-														void attempt(() => call((client) => client.resolve({ id })).then(() => `#${shortId(id)} marked done`));
-													}}
-												>
-													<Icon name="done" /> Mark done
-												</button>
-											</Show>
-											<span class="spacer" />
-											<button class="primary" title="Submit all drafts, then go to the next entry (Ctrl+Enter)" onClick={sendAndNext}>
-												<Icon name="send" /> Send & next <small class="keys">⌘↵</small>
+												Discard delivery
 											</button>
 										</div>
+									</Show>
+									<Show when={parent()}>
+										{(parent) => (
+											<div class="relation">
+												Follow-up to <A href={entryPath(parent().id)}>#{shortId(parent().id)} {parent().title}</A> <Pills entry={parent()} />
+											</div>
+										)}
+									</Show>
+									<div class="body">
+										<Markdown text={entry().question} entry={entry().id} />
 									</div>
-								</Show>
-								<Show when={children().length > 0}>
-									<div class="children">
-										<div class="caption">Follow-ups</div>
-										<ul>
-											<For each={children()}>
-												{(child) => (
-													<li>
-														<A href={entryPath(child.id)}>
-															#{shortId(child.id)} {child.title}
-														</A>{" "}
-														<Pills entry={child} />
-													</li>
-												)}
-											</For>
-										</ul>
-									</div>
-								</Show>
-								<Show when={further().length > 0}>
-									<div class="children">
-										<div class="caption">Open further down</div>
-										<ul>
-											<For each={further()}>
-												{(deep) => (
-													<li>
-														<A href={entryPath(deep.id)}>
-															#{shortId(deep.id)} {deep.title}
-														</A>{" "}
-														<Pills entry={deep} />
-														<Show when={byId(deep.parent!)}>{(parent) => <span class="muted"> · under #{shortId(parent().id)} {parent().title}</span>}</Show>
-													</li>
-												)}
-											</For>
-										</ul>
-									</div>
-								</Show>
-							</div>
-						);
-					}}
-				</Show>
+									<Show when={entry().answer}>
+										{(answer) => (
+											<div class="answer">
+												<div class="caption">Answer from {entry().asker === "agent" ? "you" : "the agents"}</div>
+												<Markdown text={answer()} entry={entry().id} />
+											</div>
+										)}
+									</Show>
+									<Show when={entry().status !== "resolved"}>
+										<div class="actions">
+											<textarea
+												placeholder={entry().asker === "agent" && entry().status === "open" ? "Your answer (Markdown)" : "A follow-up question (Markdown)"}
+												value={drafts[entry().id] ?? ""}
+												onInput={(event) => setDrafts(entry().id, event.currentTarget.value)}
+												onPaste={(event) => {
+													const files = [...(event.clipboardData?.files ?? [])];
+													if (files.length === 0) return;
+													event.preventDefault();
+													void attach(entry().id, files, event.currentTarget.selectionStart);
+												}}
+											/>
+											<Show when={Attachments.referenced(drafts[entry().id] ?? "").size > 0}>
+												<div class="preview">
+													<div class="caption">Preview</div>
+													<Markdown text={drafts[entry().id] ?? ""} entry={entry().id} local={local} />
+												</div>
+											</Show>
+											<div class="row">
+												<input
+													ref={picker}
+													type="file"
+													multiple
+													hidden
+													onChange={(event) => {
+														const input = event.currentTarget;
+														void attach(entry().id, [...input.files!]).then(() => (input.value = ""));
+													}}
+												/>
+												<button class="secondary" title="Attach files, or paste or drop them into the box" onClick={() => picker.click()}>
+													<Icon name="attach" /> Attach
+												</button>
+												<button
+													class="secondary"
+													title="Urgent: deliver now, steering the session's current turn"
+													onClick={() => {
+														const draft = { entry: entry().id, text: drafts[entry().id] ?? "" };
+														void attempt(async () => {
+															const sent = await outgoing(draft);
+															await call((client) => client.send(sent));
+															setDrafts(draft.entry, undefined!);
+															await prune();
+															return "Sent to the agents";
+														});
+													}}
+												>
+													<Icon name="now" /> Send now
+												</button>
+												<Show when={entry().asker === "user"}>
+													<button
+														class="secondary"
+														onClick={() => {
+															const id = entry().id;
+															void attempt(() => call((client) => client.resolve({ id })).then(() => `#${shortId(id)} marked done`));
+														}}
+													>
+														<Icon name="done" /> Mark done
+													</button>
+												</Show>
+												<span class="spacer" />
+												<button class="primary" title="Submit all drafts, then go to the next entry (Ctrl+Enter)" onClick={sendAndNext}>
+													<Icon name="send" /> Send & next <small class="keys">⌘↵</small>
+												</button>
+											</div>
+										</div>
+									</Show>
+									<Show when={children().length > 0}>
+										<div class="children">
+											<div class="caption">Follow-ups</div>
+											<ul>
+												<For each={children()}>
+													{(child) => (
+														<li>
+															<A href={entryPath(child.id)}>
+																#{shortId(child.id)} {child.title}
+															</A>{" "}
+															<Pills entry={child} />
+														</li>
+													)}
+												</For>
+											</ul>
+										</div>
+									</Show>
+									<Show when={further().length > 0}>
+										<div class="children">
+											<div class="caption">Open further down</div>
+											<ul>
+												<For each={further()}>
+													{(deep) => (
+														<li>
+															<A href={entryPath(deep.id)}>
+																#{shortId(deep.id)} {deep.title}
+															</A>{" "}
+															<Pills entry={deep} />
+															<Show when={byId(deep.parent!)}>{(parent) => <span class="muted"> · under #{shortId(parent().id)} {parent().title}</span>}</Show>
+														</li>
+													)}
+												</For>
+											</ul>
+										</div>
+									</Show>
+								</div>
+							);
+						}}
+					</Show>
+				</div>
 			</>
 		);
 	}
@@ -539,9 +543,9 @@ function App() {
 					<span class="spacer" />
 					<span
 						class={`connection${state.view!.opencode === 0 ? " none" : ""}`}
-						title="OpenCode instances whose desk plugin is connected: answers go out through them, and they tell which project each question is in"
+						title="Answers go out through connected OpenCode instances, which also tell which project each question is in. The count is sessions with desk mode on."
 					>
-						{state.view!.opencode === 0 ? "No OpenCode connected" : `OpenCode connected${state.view!.opencode > 1 ? ` (${state.view!.opencode})` : ""}`}
+						{state.view!.opencode === 0 ? "No OpenCode connected" : `OpenCode connected · ${state.view!.deskMode} in desk mode`}
 					</span>
 					<Show when={!state.online}>
 						<span class="offline">reconnecting…</span>

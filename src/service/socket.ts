@@ -86,6 +86,8 @@ export const layer = (path: string, outdated: () => boolean = changedSinceStart(
 							return { url: api.url };
 						});
 					}
+					case "modes":
+						return Effect.flatMap(input("modes"), ({ sessions }) => opencode.modes(connection.client, sessions)).pipe(Effect.as(null));
 					case "moved":
 						return Effect.flatMap(input("moved"), ({ session }) => opencode.move(session)).pipe(Effect.as(null));
 					case "ask":

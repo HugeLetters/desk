@@ -3,7 +3,8 @@
 	"private": true,
 	"type": "module",
 	"exports": {
-		".": "./src/plugin/index.ts"
+		".": "./src/plugin/index.ts",
+		"./tui": "./src/tui.tsx"
 	},
 	"scripts": {
 		"postinstall": "vite build page",
@@ -22,6 +23,8 @@
 		"effect": "4.1.0"
 	},
 	"devDependencies": {
+		"@opentui/core": "0.8.2",
+		"@opentui/solid": "0.8.2",
 		"@solidjs/meta": "0.29.8",
 		"@solidjs/router": "1.0.1",
 		"@types/bun": "^1.4.2",

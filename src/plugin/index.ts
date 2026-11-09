@@ -1,7 +1,7 @@
 /**
  * The desk in OpenCode: a thin, stateless client of the desk service. It adds
  *
- * - `/desk`, which turns the desk on or off for the current session (off by default), kept in the plugin's storage
+ * - `/desk-mode`, which turns desk mode on or off for the current session (off by default), kept in the plugin's storage
  *   as `on/<root session id>`, so a session's subagents follow it;
  * - the `desk_*` tools, which forward to the service and which only sessions with the desk on get to see.
  *
@@ -36,10 +36,24 @@ export default Plugin.define({
 		Effect.gen(function* () {
 			const home = String(ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(/^~(?=\/|$)/, homedir());
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
+			/** The sessions in desk mode here (`on/<id>` in the plugin's storage), forgetting deleted ones. */
+			const modes = Effect.gen(function* () {
+				const sessions: Array<string> = [];
+				for (let after: string | undefined; ; ) {
+					const page = yield* ctx.storage.scan({ prefix: "on/", after });
+					sessions.push(...page.entries.map((entry) => entry.key.slice("on/".length)));
+					if (page.next === undefined) break;
+					after = page.next;
+				}
+				const gone = yield* Effect.filter(sessions, (id) => ctx.session.get({ sessionID: id as never }).pipe(Effect.as(false), Effect.catchIf(notFound, () => Effect.succeed(true)), Effect.orElseSucceed(() => false)));
+				yield* Effect.forEach(gone, (id) => ctx.storage.remove(`on/${id}`));
+				return sessions.filter((id) => !gone.includes(id));
+			});
 			const service = yield* Connection.make({
 				socket: join(home, "desk.sock"),
 				start: Connection.startService({ DESK_HOME: home, DESK_PORT: port }),
 				hello: { protocol, project: { id: ctx.location.project.id, directory: ctx.location.project.directory } },
+				modes,
 				serve: {
 					session: ({ sessionID }) =>
 						ctx.session.get({ sessionID: sessionID as never }).pipe(
@@ -77,14 +91,14 @@ export default Plugin.define({
 				<I>(run: (input: I, sessionID: string) => Effect.Effect<string, unknown>) =>
 				(input: I, context: Tool.Context) =>
 					Effect.gen(function* () {
-						if (!(yield* on(context.sessionID))) return yield* Effect.fail(new Error("The desk is off for this session; the user turns it on with /desk."));
+						if (!(yield* on(context.sessionID))) return yield* Effect.fail(new Error("The desk is off for this session; the user turns it on with /desk-mode."));
 						return { content: yield* run(input, context.sessionID) };
 					}).pipe(Effect.mapError((error) => (error instanceof Tool.Error ? error : new Tool.Error({ message: Connection.errorMessage(error) }))));
 
 			yield* ctx.command.transform((editor) => {
 				editor.add({
-					name: "desk",
-					description: "Turn the desk on or off for this session: agents ask you questions there instead of in chat",
+					name: "desk-mode",
+					description: "Turn desk mode on or off for this session: agents ask you questions on the desk instead of in chat",
 					execute: ({ sessionID }) =>
 						Effect.gen(function* () {
 							const rootID = yield* root(sessionID);
@@ -93,10 +107,11 @@ export default Plugin.define({
 							else yield* ctx.storage.remove(key(rootID));
 							const url = now ? (yield* service.request("page", { session: rootID })).url : undefined;
 							const text = url
-								? `The desk is on for this session: agents may ask the user there (desk_ask) instead of in chat. The user answers on <${url}>\n`
-								: "The desk is off for this session: the desk_* tools are gone; ask the user in chat.";
+								? `Desk mode is on for this session. Every question, decision or review you need from the user goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. A critical one may also be mentioned in chat, by its title. The user answers on <${url}>\n`
+								: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
 							// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
-							const description = url ? `Desk on: ${url}` : "Desk off";
+							const description = url ? `Desk mode on: ${url}` : "Desk mode off";
+							yield* Effect.ignore(Effect.flatMap(modes, (sessions) => service.request("modes", { sessions })));
 							yield* ctx.session.synthetic({ sessionID, text, description, resume: false });
 						}),
 				});
@@ -105,7 +120,7 @@ export default Plugin.define({
 			yield* ctx.tool.transform((editor) => {
 				editor.add({
 					name: "desk_ask",
-					description: `Ask the user a question (or request a review) on the desk instead of in chat. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. ${media}`,
+					description: `Ask the user a question (or request a review) on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. ${media}`,
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),

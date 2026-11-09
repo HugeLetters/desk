@@ -35,6 +35,11 @@ export class OpenCode extends Context.Service<
 		readonly attached: Stream.Stream<number>;
 		/** How many clients are attached now. */
 		readonly connected: Effect.Effect<number>;
+		/** A client reports the sessions in desk mode in its OpenCode (all of them, each time). */
+		readonly modes: (client: Client, sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+		/** How many sessions are in desk mode across the attached clients, now and after every change. */
+		readonly deskMode: Stream.Stream<number>;
+		readonly inDeskMode: Effect.Effect<number>;
 		/** The session, from the first attached client that knows it; undefined when none does. */
 		readonly session: (sessionID: string) => Effect.Effect<SessionInfo | undefined>;
 		/** Delivers through the attached client that knows the session: false when none does (nothing was sent). */
@@ -53,7 +58,12 @@ export class OpenCode extends Context.Service<
 				const clients: Array<Client> = [];
 				const attached = yield* SubscriptionRef.make(0);
 				const moved = yield* PubSub.unbounded<string>();
-				const publish = Effect.suspend(() => SubscriptionRef.set(attached, clients.length));
+				/** Each client's sessions in desk mode; instances of one OpenCode report the same ones, so they're counted once. */
+				const modes = new Map<Client, ReadonlyArray<string>>();
+				const deskMode = yield* SubscriptionRef.make(0);
+				const publish = Effect.suspend(() =>
+					Effect.andThen(SubscriptionRef.set(attached, clients.length), SubscriptionRef.set(deskMode, new Set([...modes.values()].flat()).size)),
+				);
 
 				const find = (sessionID: string) =>
 					Effect.promise(async () => {
@@ -74,10 +84,19 @@ export class OpenCode extends Context.Service<
 							() =>
 								Effect.suspend(() => {
 									clients.splice(clients.indexOf(client), 1);
+									modes.delete(client);
 									return publish;
 								}),
 						),
 					attached: SubscriptionRef.changes(attached),
+					modes: (client, sessions) =>
+						Effect.suspend(() => {
+							if (!clients.includes(client)) return Effect.void;
+							modes.set(client, sessions);
+							return publish;
+						}),
+					deskMode: SubscriptionRef.changes(deskMode),
+					inDeskMode: SubscriptionRef.get(deskMode),
 					connected: SubscriptionRef.get(attached),
 					session: (sessionID) => Effect.map(find(sessionID), (found) => found?.session),
 					prompt: (prompt) =>
