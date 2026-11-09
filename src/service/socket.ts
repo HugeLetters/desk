@@ -87,6 +87,7 @@ const handlers = (outdated: () => boolean) =>
 					yield* opencode.attach(client);
 					yield* opencode.modes(client, sessions);
 					yield* projects.remember(project.id, project.directory);
+					yield* Effect.logInfo(`desk: a plugin attached in ${project.directory} (project ${project.id}), ${sessions.length} in desk mode`);
 					return Stream.fromQueue(calls);
 				});
 
