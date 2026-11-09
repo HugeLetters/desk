@@ -122,6 +122,8 @@ describe("delivery", () => {
 		await eventually(() => server.admitted.length === 2);
 		const [toA, toB] = [server.admitted.find((p) => p.sessionID === "ses_a")!, server.admitted.find((p) => p.sessionID === "ses_b")!];
 		expect(toA.text).toContain(`## ${a.id} Answered: A?\n\nyes`);
+		// Where to reply is said with it: on the desk, under the entry.
+		expect(toA.text).toContain("Reply there too: a follow-up under the entry (desk_ask with its id as parent)");
 		expect(toA.text).toContain(`## ${a2.id} Answered: A2?\n\nalso`);
 		expect(toA.id).toStartWith("msg_");
 		expect(toA.delivery).toBe("queue");

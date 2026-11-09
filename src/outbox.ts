@@ -28,8 +28,9 @@ export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 			session: sent[0]!.session,
 			delivery: sent.some((entry) => entry.pending?.delivery === "steer") ? "steer" : "queue",
 			text: [
-				"Desk: the user replied on the desk.",
-				// What to do with it is in the desk_* tools' descriptions; repeating it in every message only fills the context.
+				// Where the reply goes, said where the agent decides it: elsewhere, it would answer in chat. The rest is in the
+				// desk_* tools' descriptions.
+				"Desk: the user replied on the desk. Reply there too: a follow-up under the entry (desk_ask with its id as parent), or desk_answer for a question of theirs. In chat, name it by its title at most.",
 				...sections.map((section) => section.text),
 			].join("\n\n"),
 			files: sections.flatMap((section) => attachmentsIn(section.body)),

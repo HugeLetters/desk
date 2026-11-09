@@ -167,7 +167,7 @@ export default Plugin.define({
 							yield* sync;
 							const url = now ? (yield* service((client) => client.page({ session: rootID }))).url : undefined;
 							const text = url
-								? `Desk mode is on for this session. Every question, decision or review you need from the user goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. A critical one may also be mentioned in chat, by its title. The user answers on <${url}>\n`
+								? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
 								: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
 							// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
 							const description = url ? `Desk mode on: ${url}` : "Desk mode off";
@@ -179,7 +179,7 @@ export default Plugin.define({
 			yield* ctx.tool.transform((editor) => {
 				editor.add({
 					name: "desk_ask",
-					description: `Ask the user a question (or request a review) on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. ${media}`,
+					description: `Ask the user a question, request a review, or reply to them, on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. ${media}`,
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
