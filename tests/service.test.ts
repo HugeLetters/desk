@@ -39,7 +39,7 @@ describe("entries", () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/work/phantom" }, question: question("Which icon?") });
 		expect(await entryFiles()).toEqual([`${asked.id}.md`]);
-		expect(await read(asked.id)).toMatchObject({ session: S("ses_a"), directory: "/work/phantom", asker: "agent", status: "open", title: "Which icon?", outbox: null });
+		expect(await read(asked.id)).toMatchObject({ session: S("ses_a"), directory: "/work/phantom", asker: "agent", status: "open", title: "Which icon?", pending: null });
 		expect(asked.url).toBe(`${service.url}projects/${encodeURIComponent(folder("/work/phantom"))}/questions/${asked.id}`);
 	});
 
@@ -94,8 +94,8 @@ describe("delivery", () => {
 		const b = await plugin.request("ask", { asker: { session: S("ses_b"), directory: "/w" }, question: question("B?") });
 		await service.rpc((client) => client.submit({ drafts: [{ entry: a.id, text: "yes" }, { entry: b.id, text: "no" }] }));
 		await eventually(() => fine.admitted.length === 1);
-		const outbox = (await read(a.id))!.outbox!;
-		await eventually(async () => (await view()).failures[outbox]?.cause.includes("Session is archived"));
+		const message = (await read(a.id))!.pending!.message;
+		await eventually(async () => (await view()).failures[message]?.cause.includes("Session is archived"));
 		refusing.refuse = undefined;
 		await eventually(() => refusing.admitted.length === 1);
 		await eventually(async () => Object.keys((await view()).failures).length === 0);
@@ -118,8 +118,8 @@ describe("delivery", () => {
 		expect(toA.id).toStartWith("msg_");
 		expect(toA.delivery).toBe("queue");
 		expect(toB.text).toContain("no");
-		await eventually(async () => (await read(a.id))?.outbox === null);
-		expect(await read(a.id)).toMatchObject({ status: "answered", answer: "yes", outbox: null, delivery: null });
+		await eventually(async () => (await read(a.id))?.pending === null);
+		expect(await read(a.id)).toMatchObject({ status: "answered", answer: "yes", pending: null });
 		await Bun.sleep(200);
 		expect(server.calls).toHaveLength(2);
 	});
@@ -130,7 +130,7 @@ describe("delivery", () => {
 		await service.rpc((client) => client.send({ entry: asked.id, text: "Too late" }));
 		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
 		await service.rpc((client) => client.discard({ entry: asked.id }));
-		expect(await read(asked.id)).toMatchObject({ status: "answered", answer: "Too late", outbox: null, delivery: null });
+		expect(await read(asked.id)).toMatchObject({ status: "answered", answer: "Too late", pending: null });
 		await expect(service.rpc((client) => client.discard({ entry: asked.id }))).rejects.toMatchObject({ _tag: "NothingUndelivered", id: asked.id });
 		const server = service.fake.server("http://opencode-late");
 		server.session({ id: S("ses_gone") });
@@ -146,17 +146,17 @@ describe("delivery", () => {
 		await service.rpc((client) => client.send({ entry: asked.id, text: "now" }));
 		await Bun.sleep(200);
 		const pending = await read(asked.id);
-		expect(pending).toMatchObject({ status: "answered", delivery: "steer" });
-		expect(pending?.outbox).toStartWith("msg_");
-		expect((await view(folder("/w"))).entries[0]!.outbox).toBe(pending!.outbox);
+		expect(pending).toMatchObject({ status: "answered", pending: { delivery: "steer" } });
+		expect(pending?.pending?.message).toStartWith("msg_");
+		expect((await view(folder("/w"))).entries[0]!.pending).toEqual(pending!.pending);
 		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
 
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a") });
 		service.plugin(server);
 		await eventually(() => server.admitted.length === 1);
-		expect(server.admitted[0]).toMatchObject({ sessionID: S("ses_a"), id: pending!.outbox!, delivery: "steer" });
-		await eventually(async () => (await read(asked.id))?.outbox === null);
+		expect(server.admitted[0]).toMatchObject({ sessionID: S("ses_a"), id: pending!.pending!.message, delivery: "steer" });
+		await eventually(async () => (await read(asked.id))?.pending === null);
 	});
 
 	test("a lost reply is retried under the same message id, so the session gets it once", async () => {
@@ -166,7 +166,7 @@ describe("delivery", () => {
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Once?") });
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "once" }] }));
-		await eventually(async () => (await read(asked.id))?.outbox === null);
+		await eventually(async () => (await read(asked.id))?.pending === null);
 		expect(server.calls.length).toBeGreaterThanOrEqual(2);
 		expect(new Set(server.calls.map((call) => call.id)).size).toBe(1);
 		expect(server.admitted).toHaveLength(1);
@@ -175,14 +175,14 @@ describe("delivery", () => {
 	test("an undelivered message survives a restart of the service", async () => {
 		const asked = await service.plugin().request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Restart?") });
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "kept" }] }));
-		const outbox = await eventually(async () => (await read(asked.id))?.outbox);
+		const message = await eventually(async () => (await read(asked.id))?.pending?.message);
 		await service.close(false);
 		service = await startService({ store: service.store });
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a") });
 		service.plugin(server);
 		await eventually(() => server.admitted.length === 1);
-		expect(server.admitted[0]!.id).toBe(outbox);
+		expect(server.admitted[0]!.id).toBe(message);
 	});
 
 	test("the user's reply on an entry not waiting for an answer is a follow-up in the same session", async () => {
@@ -197,7 +197,7 @@ describe("delivery", () => {
 		expect(followUp).toMatchObject({ parent: asked.id, session: S("ses_a"), directory: "/w", title: "A question back?" });
 		expect(server.admitted[1]!.text).toContain(`## ${followUp.id} New question from the user (follow-up to ${asked.id})`);
 		await plugin.request("answer", { id: followUp.id, body: "Here." });
-		await eventually(async () => (await read(followUp.id))?.outbox === null);
+		await eventually(async () => (await read(followUp.id))?.pending === null);
 		await service.rpc((client) => client.resolve({ id: followUp.id }));
 		expect(await entryFiles()).toEqual([`${asked.id}.md`]);
 	});

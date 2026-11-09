@@ -72,7 +72,15 @@ export type Delivery = typeof Delivery.Type;
 /** open: waiting on the answerer. answered: waiting on the asker (either: unless blocked by an unresolved follow-up, see `waitingOn`). resolved: the asker marked it done. */
 export const Status = Schema.Literals(["open", "answered", "resolved"]);
 
-const Header = Schema.Struct({
+/**
+ * The user's text on an entry (an answer, or their own question) that hasn't reached the session yet: the message it
+ * goes out as, fixed before the first try so a retry is the same message and OpenCode admits it once, and how.
+ * Entries sharing a message go out together, as one.
+ */
+export const Pending = Schema.Struct({ message: MessageID, delivery: Delivery });
+export type Pending = typeof Pending.Type;
+
+const Fields = {
 	/** An entry's parent, once set, never changes; a top-level entry may be adopted once (never into its own subtree): no cycles, no orphans. */
 	parent: Schema.NullOr(EntryId),
 	asker: Party,
@@ -84,17 +92,18 @@ const Header = Schema.Struct({
 	labels: Schema.Array(Schema.String),
 	priority: Priority.pipe(Schema.withDecodingDefaultKey(Effect.succeed("normal" as const))),
 	created: Schema.String,
-	/**
-	 * Set while the user's text on this entry (an answer, or their own question) hasn't reached the session: the
-	 * message id it goes out as. Fixed before the first try, so a retry is the same message and OpenCode admits it once.
-	 * Entries sharing an outbox go out together, as one message.
-	 */
+};
+
+/** The file's header: `Fields`, and the pending text flat, as `outbox` (its message) and `delivery`, both or neither. */
+const Header = Schema.Struct({
+	...Fields,
 	outbox: Schema.NullOr(MessageID).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
-	delivery: Schema.NullOr(Delivery).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+	delivery: Delivery.pipe(Schema.withDecodingDefaultKey(Effect.succeed("queue" as const))),
 });
 
 export const Entry = Schema.Struct({
-	...Header.fields,
+	...Fields,
+	pending: Schema.NullOr(Pending),
 	id: EntryId,
 	title: Schema.String,
 	question: Schema.String,
@@ -186,7 +195,7 @@ export function serialize(entry: Entry): string {
 		`labels: [${entry.labels.join(", ")}]`,
 		...(entry.priority === "normal" ? [] : [`priority: ${entry.priority}`]),
 		`created: "${entry.created}"`,
-		...(entry.outbox === null ? [] : [`outbox: ${entry.outbox}`, `delivery: ${entry.delivery ?? "queue"}`]),
+		...(entry.pending === null ? [] : [`outbox: ${entry.pending.message}`, `delivery: ${entry.pending.delivery}`]),
 	];
 	const answer = entry.answer === null ? [] : [answerMarker, entry.answer];
 	return `${["---", ...header, "---"].join("\n")}\n\n${[`# ${entry.title}`, entry.question, ...answer].filter(Boolean).join("\n\n")}\n`;
@@ -197,8 +206,9 @@ export function parse(id: EntryId, text: string): Option.Option<Entry> {
 	if (!match) return Option.none();
 	const [, head, title, body] = match as unknown as [string, string, string, string];
 	const [question, answer] = body.split(answerMarker);
-	return Option.map(decodeHeader(Bun.YAML.parse(head)), (header) => ({
+	return Option.map(decodeHeader(Bun.YAML.parse(head)), ({ outbox, delivery, ...header }) => ({
 		...header,
+		pending: outbox === null ? null : { message: outbox, delivery },
 		id,
 		title: title.trim(),
 		question: question!.trim(),

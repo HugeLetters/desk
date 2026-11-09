@@ -17,7 +17,7 @@ import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { AlreadyResolved, EmptyText, HasParent, MissingAttachment, NoSuchEntry, NotTheAnswerer, NotTheAsker, NothingUndelivered, OpenBelow, type Refusal, Undelivered, WouldCycle } from "./errors";
-import { answerer, attachmentsIn, type Delivery, descendants, type Entry, type EntryId, type MessageID, newId, openUnder, ordered, type Party, type Priority, type SessionID, waitingOn } from "./entry";
+import { answerer, attachmentsIn, type Delivery, descendants, type Entry, type EntryId, type MessageID, newId, type Pending, openUnder, ordered, type Party, type Priority, type SessionID, waitingOn } from "./entry";
 import type { Attachment, Draft } from "./page-api";
 import { Store } from "./store";
 
@@ -79,8 +79,8 @@ export class Desk extends Context.Service<
 		 * reference are stored on the way, and only if every draft is taken. Returns how many were.
 		 */
 		readonly reply: (drafts: ReadonlyArray<Draft>, delivery: Delivery) => Effect.Effect<number, Refusal>;
-		/** The message `outbox` reached its session: its entries leave the outbox. */
-		readonly delivered: (outbox: MessageID) => Effect.Effect<void>;
+		/** `message` reached its session: its entries' text is no longer pending. */
+		readonly delivered: (message: MessageID) => Effect.Effect<void>;
 		/**
 		 * The user gives up on delivering `id`'s undelivered text (its session is gone, say): it and the entries going out
 		 * in the same message leave the outbox, keeping their text, and can be resolved.
@@ -99,8 +99,8 @@ export class Desk extends Context.Service<
 			const lock = yield* Semaphore.make(1);
 			const ours = yield* PubSub.unbounded<void>();
 			/** One change: reads the files, decides (writing what changes), and says so. Changes run one at a time. */
-			const modify = <A, E = never>(change: (all: Entries) => Effect.Effect<readonly [A, Entries], E>): Effect.Effect<A, E> =>
-				lock.withPermits(1)(Effect.flatMap(store.load, (all) => Effect.map(change(all), ([result]) => result))).pipe(Effect.ensuring(PubSub.publish(ours, undefined)));
+			const modify = <A, E = never>(change: (all: Entries) => Effect.Effect<A, E>): Effect.Effect<A, E> =>
+				lock.withPermits(1)(Effect.flatMap(store.load, change)).pipe(Effect.ensuring(PubSub.publish(ours, undefined)));
 
 			const find = (all: Entries, id: string): Effect.Effect<Entry, NoSuchEntry> => {
 				const entry = all.find((candidate) => candidate.id === id);
@@ -122,13 +122,13 @@ export class Desk extends Context.Service<
 				});
 
 			/** The user's draft: the answer when the entry waits on them, otherwise a follow-up question below it. */
-			const replyTo = (all: Entries, draft: Draft, outbox: MessageID, delivery: Delivery): Effect.Effect<Entry, Refusal> =>
+			const replyTo = (all: Entries, draft: Draft, pending: Pending): Effect.Effect<Entry, Refusal> =>
 				Effect.gen(function* () {
 					const entry = yield* find(all, draft.entry);
 					const text = draft.text.trim();
 					if (!text) return yield* new EmptyText({ id: entry.id });
 					if (entry.status === "resolved") return yield* new AlreadyResolved({ id: entry.id });
-					if (entry.asker === "agent" && entry.status === "open") return { ...entry, answer: text, status: "answered", outbox, delivery };
+					if (entry.asker === "agent" && entry.status === "open") return { ...entry, answer: text, status: "answered", pending };
 					return {
 						id: newId(),
 						parent: entry.id,
@@ -142,8 +142,7 @@ export class Desk extends Context.Service<
 						title: text.split("\n")[0]!.slice(0, 100),
 						question: text,
 						answer: null,
-						outbox,
-						delivery,
+						pending,
 					};
 				});
 
@@ -171,11 +170,10 @@ export class Desk extends Context.Service<
 								title: question.title.trim(),
 								question: question.body.trim(),
 								answer: null,
-								outbox: null,
-								delivery: null,
+								pending: null,
 							};
 							yield* store.write(entry);
-							return [entry, [...all, entry]] as const;
+							return entry;
 						}),
 					),
 				adopt: (id, parentID) =>
@@ -187,7 +185,7 @@ export class Desk extends Context.Service<
 							if (parentID === id || descendants(all, entry).some((other) => other.id === parentID)) return yield* new WouldCycle({ id, parent: parentID });
 							const adopted: Entry = { ...entry, parent: parentID };
 							yield* store.write(adopted);
-							return [adopted, replace(all, adopted)] as const;
+							return adopted;
 						}),
 					),
 				answer: (id, body) =>
@@ -198,7 +196,7 @@ export class Desk extends Context.Service<
 							if (entry.status === "resolved") return yield* new AlreadyResolved({ id });
 							const answered: Entry = { ...entry, answer: body.trim(), status: "answered" };
 							yield* store.write(answered);
-							return [answered, replace(all, answered)] as const;
+							return answered;
 						}),
 					),
 				prioritize: (id, priority, subtree) =>
@@ -207,8 +205,7 @@ export class Desk extends Context.Service<
 							yield* find(all, id);
 							const ids = new Set([id, ...(subtree ? descendants(all, { id }).map((entry) => entry.id) : [])]);
 							const changed = all.filter((entry) => ids.has(entry.id)).map((entry): Entry => ({ ...entry, priority }));
-							yield* Effect.forEach(changed, store.write);
-							return [undefined, all.map((entry) => changed.find((other) => other.id === entry.id) ?? entry)] as const;
+							yield* Effect.forEach(changed, store.write, { discard: true });
 						}),
 					),
 				resolve: (id, by) =>
@@ -216,7 +213,7 @@ export class Desk extends Context.Service<
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
 							if (entry.asker !== by) return yield* new NotTheAsker({ id, asker: entry.asker });
-							if (entry.outbox !== null) return yield* new Undelivered({ id });
+							if (entry.pending !== null) return yield* new Undelivered({ id });
 							const open = openUnder(all, entry);
 							if (open.length > 0) return yield* new OpenBelow({ id, below: open.map((other) => other.id) });
 							const resolved: Entry = { ...entry, status: "resolved" };
@@ -234,7 +231,6 @@ export class Desk extends Context.Service<
 							const texts = (list: Entries) => list.flatMap((other) => attachmentsIn(`${other.question}\n${other.answer ?? ""}`).map(({ file }) => file));
 							const still = new Set(texts(kept));
 							yield* store.detach(new Set(texts(pruned).filter((file) => !still.has(file))));
-							return [undefined, kept] as const;
 						}),
 					),
 				describe: (id, scope) =>
@@ -274,10 +270,10 @@ export class Desk extends Context.Service<
 							const uploads: Array<{ draft: number; attachment: Attachment }> = [];
 							for (const [index, draft] of drafts.entries()) {
 								const entry = yield* find(next, draft.entry);
-								const outbox = outboxes.get(entry.session) ?? SessionMessage.ID.create();
-								outboxes.set(entry.session, outbox);
+								const message = outboxes.get(entry.session) ?? SessionMessage.ID.create();
+								outboxes.set(entry.session, message);
 								for (const attachment of yield* attachments(draft)) uploads.push({ draft: index, attachment });
-								next = replace(next, yield* replyTo(next, draft, outbox, delivery));
+								next = replace(next, yield* replyTo(next, draft, { message, delivery }));
 							}
 							// Store the files, then point the texts at them.
 							const stored: Array<string> = [];
@@ -293,26 +289,25 @@ export class Desk extends Context.Service<
 							yield* Effect.forEach(
 								next.filter((entry) => !all.includes(entry)),
 								store.write,
+								{ discard: true },
 							);
-							return [drafts.length, next] as const;
+							return drafts.length;
 						}),
 					),
-				delivered: (outbox) =>
+				delivered: (message) =>
 					modify((all) =>
 						Effect.gen(function* () {
-							const sent = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
-							yield* Effect.forEach(sent, store.write);
-							return [undefined, all.map((entry) => sent.find((other) => other.id === entry.id) ?? entry)] as const;
+							const sent = all.filter((entry) => entry.pending?.message === message).map((entry): Entry => ({ ...entry, pending: null }));
+							yield* Effect.forEach(sent, store.write, { discard: true });
 						}),
 					),
 				discard: (id) =>
 					modify((all) =>
 						Effect.gen(function* () {
-							const { outbox } = yield* find(all, id);
-							if (outbox === null) return yield* new NothingUndelivered({ id });
-							const held = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
-							yield* Effect.forEach(held, store.write);
-							return [undefined, all] as const;
+							const { pending } = yield* find(all, id);
+							if (pending === null) return yield* new NothingUndelivered({ id });
+							const held = all.filter((entry) => entry.pending?.message === pending.message).map((entry): Entry => ({ ...entry, pending: null }));
+							yield* Effect.forEach(held, store.write, { discard: true });
 						}),
 					),
 			});

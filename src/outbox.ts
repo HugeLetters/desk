@@ -1,5 +1,5 @@
 /**
- * What waits to reach the sessions: the entries carrying an outbox, as one message per outbox. Rebuilt from the
+ * What waits to reach the sessions: the entries with pending text, as one message per pending message. Rebuilt from the
  * entries each time, so a retry sends the same text under the same message id.
  */
 import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "./entry";
@@ -15,9 +15,9 @@ export interface Message {
 }
 
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
-	const byOutbox = new Map<MessageID, Array<Entry>>();
-	for (const entry of entries) if (entry.outbox !== null) byOutbox.set(entry.outbox, [...(byOutbox.get(entry.outbox) ?? []), entry]);
-	return [...byOutbox].map(([id, sent]) => {
+	const byMessage = new Map<MessageID, Array<Entry>>();
+	for (const entry of entries) if (entry.pending !== null) byMessage.set(entry.pending.message, [...(byMessage.get(entry.pending.message) ?? []), entry]);
+	return [...byMessage].map(([id, sent]) => {
 		const sections = sent.map((entry) =>
 			entry.asker === "agent"
 				? { text: `## ${entry.id} Answered: ${entry.title}\n\n${entry.answer ?? ""}`, body: entry.answer ?? "" }
@@ -26,7 +26,7 @@ export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 		return {
 			id,
 			session: sent[0]!.session,
-			delivery: sent.some((entry) => entry.delivery === "steer") ? "steer" : "queue",
+			delivery: sent.some((entry) => entry.pending?.delivery === "steer") ? "steer" : "queue",
 			text: [
 				"Desk: the user replied on the desk.",
 				// What to do with it is in the desk_* tools' descriptions; repeating it in every message only fills the context.

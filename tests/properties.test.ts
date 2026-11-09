@@ -50,8 +50,7 @@ const desks = Arbitrary.array(
 			title: `e${index}`,
 			question: "",
 			answer: shape.status === "open" ? null : "a",
-			outbox: null,
-			delivery: null,
+			pending: null,
 		})),
 	),
 );
@@ -148,8 +147,8 @@ test("whatever happens, every entry's parent is on the desk, no entry is below i
 								return yield* desk.reply([{ entry: nth(change.id)!.id, text: "a reply" }, ...also], "queue");
 							}
 							case "delivered": {
-								const outbox = nth(change.id)?.outbox;
-								if (outbox) yield* desk.delivered(outbox);
+								const pending = nth(change.id)?.pending;
+								if (pending) yield* desk.delivered(pending.message);
 								return;
 							}
 							case "resolve":

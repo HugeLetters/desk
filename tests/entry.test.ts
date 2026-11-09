@@ -18,8 +18,7 @@ const entry: Entry = {
 	title: "Which icon?",
 	question: "Pick one:\n\n![a](design/a.png)\n\n## Options\n\n- a\n- b",
 	answer: "The angular one.",
-	outbox: null,
-	delivery: null,
+	pending: null,
 };
 
 test("an entry round-trips through its file", () => {
@@ -37,8 +36,8 @@ test("the file has a YAML header; the id is the file name", () => {
 	expect<unknown>(shortId(id)).toBe("00a7a7");
 });
 
-test("an undelivered reply keeps its outbox and delivery in the header", () => {
-	const pending = { ...entry, outbox: M("msg_01JX"), delivery: "steer" as const };
+test("text still pending is in the header as its message (`outbox`) and delivery", () => {
+	const pending = { ...entry, pending: { message: M("msg_01JX"), delivery: "steer" as const } };
 	expect<unknown>(serialize(pending)).toContain(`created: "2026-11-07T16:30:00.000Z"\noutbox: msg_01JX\ndelivery: steer\n---`);
 	expect<unknown>(parse(id, serialize(pending))).toEqual(Option.some(pending));
 });

@@ -128,7 +128,7 @@ test("replies are all or nothing, and a refused one stores no attachments", asyn
 		),
 	);
 	expect(error).toContain("No desk entry gone");
-	expect((await entries())[0]).toMatchObject({ status: "open", outbox: null });
+	expect((await entries())[0]).toMatchObject({ status: "open", pending: null });
 	expect(await attachments()).toEqual([]);
 	expect(await failure((d) => d.reply([{ entry: entry.id, text: `![b](attachment:${crypto.randomUUID()})` }], "queue"))).toContain("missing from the draft");
 });
@@ -155,22 +155,22 @@ test("only referenced attachments are stored, and they go with the last entry po
 	expect(stored).toMatch(/^[0-9a-f-]{36}\.png$/);
 	const answered = (await entries())[0]!;
 	expect(answered.answer).toBe(`![kept](/attachments/${stored})`);
-	await desk((d) => d.delivered(answered.outbox!));
+	await desk((d) => d.delivered(answered.pending!.message));
 	await desk((d) => d.resolve(entry.id, "agent"));
 	expect(await attachments()).toEqual([]);
 });
 
-test("a reply's entries share one outbox per session; delivered empties it", async () => {
+test("a reply's entries share one pending message per session; delivered clears it", async () => {
 	const a = await ask("A?");
 	const b = await desk((d) => d.ask({ session: S("ses_b"), directory: "/w" }, { title: "B?", body: "" }));
 	const c = await ask("C?");
 	await desk((d) => d.reply([{ entry: a.id, text: "1" }, { entry: b.id, text: "2" }, { entry: c.id, text: "3" }], "queue"));
 	const byId = async (id: string) => (await entries()).find((entry) => entry.id === id)!;
 	const [ea, eb, ec] = [await byId(a.id), await byId(b.id), await byId(c.id)];
-	expect(ea!.outbox).toBe(ec!.outbox);
-	expect(eb!.outbox).not.toBe(ea!.outbox);
-	await desk((d) => d.delivered(ea!.outbox!));
-	expect([(await byId(a.id)).outbox, (await byId(b.id)).outbox, (await byId(c.id)).outbox].map((outbox) => outbox === null)).toEqual([true, false, true]);
+	expect(ea!.pending!.message).toBe(ec!.pending!.message);
+	expect(eb!.pending!.message).not.toBe(ea!.pending!.message);
+	await desk((d) => d.delivered(ea!.pending!.message));
+	expect([(await byId(a.id)).pending, (await byId(b.id)).pending, (await byId(c.id)).pending].map((pending) => pending === null)).toEqual([true, false, true]);
 });
 
 test("the files are the state: a file put back to an earlier version is what the desk reads, and its rules apply to it", async () => {

@@ -188,12 +188,12 @@ function App() {
 		});
 
 	/** Why the last try to deliver the entry's text failed, if it did. */
-	const failure = (entry: Entry) => (entry.outbox === null ? undefined : state.view?.failures[entry.outbox]);
+	const failure = (entry: Entry) => (entry.pending === null ? undefined : state.view?.failures[entry.pending.message]);
 
 	const Pills = (props: { entry: Entry }) => (
 		<>
 			<span class={`pill ${drafted(props.entry) ? "drafted" : props.entry.status}`}>{drafted(props.entry) ? "drafted" : props.entry.status}</span>
-			<Show when={props.entry.outbox !== null}>
+			<Show when={props.entry.pending !== null}>
 				<span
 					class={`pill undelivered${failure(props.entry) ? " failed" : ""}`}
 					title={
@@ -362,7 +362,7 @@ function App() {
 									<Show when={failure(entry())}>
 										{(reason) => <div class="failure">Not delivered: the last try failed: {deliveryFailed(reason())}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
 									</Show>
-									<Show when={entry().outbox !== null}>
+									<Show when={entry().pending !== null}>
 										<div class="undelivered-actions">
 											<span class="muted">Your text hasn't reached its session yet.</span>
 											<button
