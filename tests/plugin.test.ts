@@ -29,7 +29,7 @@ type Run<A = unknown> = Effect.Effect<A, unknown>;
 
 /** The parts of the plugin context the desk uses, recording what the plugin registers and says. */
 function fakeContext(home: string, sessions: Array<Session>, options: Record<string, unknown> = {}) {
-	const tools = new Map<string, { execute: (input: unknown, context: { sessionID: string }) => Run<{ content: string }> }>();
+	const tools = new Map<string, { options?: { codemode?: boolean }; execute: (input: unknown, context: { sessionID: string }) => Run<{ content: string }> }>();
 	const commands = new Map<string, { execute: (input: { sessionID: string }) => Run<void> }>();
 	const hooks: Array<(event: { sessionID: string; tools: Record<string, unknown> }) => Run<void>> = [];
 	const storage = new Map<string, unknown>();
@@ -126,6 +126,8 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
 	expect(first.synthetic.at(-1)!.description).toMatch(/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/projects\//);
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
+	// The rarely needed ones are in Code Mode; the rest are direct tools.
+	expect(desk.filter((name) => first.tools.get(name)!.options?.codemode !== false)).toEqual(["desk_adopt", "desk_prioritize"]);
 	expect(await first.visible("ses_sub")).toEqual([...desk, "read"]);
 	expect(await first.visible("ses_other")).toEqual(["read"]);
 	await expect(first.tool("desk_list", "ses_other", {})).rejects.toThrow("The desk is off for this session");

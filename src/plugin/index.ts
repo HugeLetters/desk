@@ -179,7 +179,7 @@ export default Plugin.define({
 			yield* ctx.tool.transform((editor) => {
 				editor.add({
 					name: "desk_ask",
-					description: `Ask the user a question, request a review, or reply to them, on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. ${media}`,
+					description: `Ask the user a question, request a review, or reply to them, on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. To file an entry under another later (desk_adopt) or change its priority (desk_prioritize), find those tools with Code Mode's search. ${media}`,
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
@@ -203,7 +203,8 @@ export default Plugin.define({
 					name: "desk_adopt",
 					description: "File a top-level entry (one without a parent) under another entry, e.g. a PR's question asked before its review entry existed. Only once: an entry's parent never changes after that.",
 					input: Schema.Struct({ id: EntryId, parent: described(EntryId, "The entry to file it under; not inside the entry's own subtree.") }),
-					options: { codemode: false },
+					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
+					options: { codemode: true },
 					execute: tool((input: { id: EntryId; parent: EntryId }) => service((client) => client.adopt(input)).pipe(Effect.as(`Filed ${input.id} under ${input.parent}.`))),
 				});
 				editor.add({
@@ -224,7 +225,8 @@ export default Plugin.define({
 					name: "desk_prioritize",
 					description: "Change an entry's priority (critical, high, normal, low): the user sees higher priority first, e.g. bump a main PR's review thread. With subtree, the entry and everything below it.",
 					input: Schema.Struct({ id: EntryId, priority: Priority, subtree: Schema.optional(Schema.Boolean) }),
-					options: { codemode: false },
+					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
+					options: { codemode: true },
 					execute: tool((input: { id: EntryId; priority: Priority; subtree?: boolean | undefined }) =>
 						service((client) => client.prioritize({ id: input.id, priority: input.priority, subtree: input.subtree ?? false })).pipe(Effect.as(`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`)),
 					),
