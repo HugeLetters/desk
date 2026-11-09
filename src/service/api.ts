@@ -8,15 +8,18 @@ import * as HttpServer from "effect/http/HttpServer";
 import * as Layer from "effect/Layer";
 import type * as Rpc from "effect/rpc/Rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Failures } from "../delivery";
 import { Desk } from "../desk";
 import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
 import type { Refusal } from "../errors";
 import { OpenCode } from "../opencode";
-import type { Draft, View } from "../page-api";
+import { type Draft, View } from "../page-api";
 import { fromKey, key, type Placement, Projects } from "../projects";
 import type { PluginApi } from "../protocol";
+
+const sameView = Schema.toEquivalence(View);
 
 /** The plugin's request `Tag`, as `PluginApi` defines it. */
 type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof PluginApi>, Tag>> = (
@@ -57,11 +60,15 @@ export class Api extends Context.Service<
 
 				/** Each entry's project (one lookup per root session; `Projects` remembers them). */
 				const placed = (entries: ReadonlyArray<Entry>) =>
-					Effect.gen(function* () {
-						const byEntry = new Map<string, Placement>();
-						for (const entry of entries) byEntry.set(entry.id, yield* projects.of(entry));
-						return (entry: Entry) => byEntry.get(entry.id)!;
-					});
+					Effect.map(
+						Effect.forEach(entries, (entry) =>
+							Effect.map(projects.of(entry), (placement) => [entry.id, placement] as const),
+						),
+						(placements) => {
+							const byEntry = new Map<string, Placement>(placements);
+							return (entry: Entry) => byEntry.get(entry.id)!;
+						},
+					);
 				/** Entries in the same project as `session` (working in `directory`, when known). */
 				const scope = (session: SessionID, directory?: string) =>
 					Effect.gen(function* () {
@@ -133,7 +140,7 @@ export class Api extends Context.Service<
 							Stream.debounce("10 millis"),
 							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(project, entries))),
 							// The desk is read again every few seconds anyway: send a view only when it differs.
-							Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
+							Stream.changesWith(sameView),
 						),
 					submit: (drafts) => desk.reply(drafts, "queue"),
 					send: (draft) => Effect.asVoid(desk.reply([draft], "steer")),

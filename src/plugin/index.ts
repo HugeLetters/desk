@@ -53,7 +53,14 @@ export default Plugin.define({
 				homedir(),
 			);
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
-			const timeout = Duration.fromInputUnsafe(ctx.options.timeout ?? "30 seconds");
+			const timeout = yield* Schema.decodeUnknownEffect(
+				Schema.Union([Schema.DurationFromString, Schema.DurationFromMillis]),
+			)(ctx.options.timeout ?? "30 seconds").pipe(
+				Effect.tapError(() =>
+					Effect.logWarning(`desk: the timeout option isn't a duration (${ctx.options.timeout}); using 30 seconds`),
+				),
+				Effect.orElseSucceed(() => Duration.seconds(30)),
+			);
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
 				const sessions = yield* Stream.paginate(undefined as string | undefined, (after) =>

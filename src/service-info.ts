@@ -15,4 +15,4 @@ export type Info = typeof Info.Type;
 
 /** A registration's text, parsed: fails on anything that isn't one (an empty or half-written file, say). */
 export const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info));
-export const encode = (info: Info) => JSON.stringify(info);
+export const encode = Schema.encodeSync(Schema.fromJsonString(Info));

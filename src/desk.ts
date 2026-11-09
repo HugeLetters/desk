@@ -11,7 +11,7 @@
 import { SessionMessage } from "@opencode/schema/session-message";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -198,7 +198,7 @@ export class Desk extends Context.Service<
 				return Desk.of({
 					changes: Stream.concat(
 						Stream.make(undefined),
-						Stream.mergeAll([Stream.fromPubSub(ours), store.changed, Stream.tick(Duration.fromInputUnsafe(rescan))], {
+						Stream.mergeAll([Stream.fromPubSub(ours), store.changed, Stream.tick(rescan)], {
 							concurrency: "unbounded",
 						}),
 					),

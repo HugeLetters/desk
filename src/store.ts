@@ -48,17 +48,21 @@ export class Store extends Context.Service<
 					root,
 					load: io(
 						Effect.gen(function* () {
-							const entries: Array<Entry> = [];
-							for (const name of yield* fs.readDirectory(root)) {
+							const ids = (yield* fs.readDirectory(root)).flatMap((name) => {
 								const id = idOf(name);
-								if (id === undefined) continue;
-								// Gone since the listing (removed meanwhile): not an entry anymore.
-								const text = yield* Effect.orElseSucceed(fs.readFileString(file(id)), () => undefined);
-								const entry = text === undefined ? undefined : Option.getOrUndefined(parse(id, text));
-								if (entry) entries.push(entry);
-							}
+								return id === undefined ? [] : [id];
+							});
+							const read = yield* Effect.forEach(ids, (id) =>
+								fs.readFileString(file(id)).pipe(
+									// Gone since the listing (removed meanwhile): not an entry anymore.
+									Effect.option,
+									Effect.map(Option.flatMap((text) => parse(id, text))),
+								),
+							);
 							// Same-millisecond entries in a fixed order, whatever order the directory lists them in.
-							return entries.sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
+							return read
+								.flatMap((entry) => (Option.isSome(entry) ? [entry.value] : []))
+								.sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
 						}),
 					),
 					write: (entry) => {

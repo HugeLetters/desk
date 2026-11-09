@@ -12,7 +12,7 @@
  * (`Failures`) for the page to show.
  */
 import * as Context from "effect/Context";
-import * as Duration from "effect/Duration";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -115,7 +115,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 					Stream.map(desk.changes, () => undefined),
 					Stream.map(opencode.attached, () => undefined),
 					Stream.map(opencode.deskMode, () => undefined),
-					Stream.tick(Duration.fromInputUnsafe(retry)),
+					Stream.tick(retry),
 				],
 				{ concurrency: "unbounded" },
 			).pipe(
