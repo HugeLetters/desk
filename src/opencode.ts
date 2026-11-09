@@ -25,10 +25,14 @@ export type { Prompt, SessionInfo };
  * What the attached OpenCode instances say about a session: one knows it; all of them answered and none does; or none
  * knows it and one couldn't answer, so it may yet. Only `Unknown` is an answer to remember.
  */
-export type Lookup =
-	| { readonly _tag: "Known"; readonly session: SessionInfo }
-	| { readonly _tag: "Unknown" }
-	| { readonly _tag: "Unreachable" };
+export type Lookup = Data.TaggedEnum<{
+	Known: { readonly session: SessionInfo };
+	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
+	Unknown: {};
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Unreachable: {};
+}>;
+export const Lookup = Data.taggedEnum<Lookup>();
 
 /** The plugin instance couldn't do what was asked (OpenCode said no, or the plugin didn't answer): what was said. */
 export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly cause: string }> {}
@@ -87,26 +91,29 @@ export class OpenCode extends Context.Service<
 				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) =>
 					a.length === b.length && a.every((session, index) => session === b[index]);
 
+				type Found = { readonly client: Client | undefined; readonly lookup: Lookup };
+				/** Asks `clients` in turn; `unreachable`: one asked before couldn't answer. */
+				const ask = (
+					sessionID: SessionID,
+					clients: ReadonlyArray<Attached>,
+					unreachable: boolean,
+				): Effect.Effect<Found> => {
+					const [first, ...rest] = clients;
+					if (first === undefined)
+						return Effect.succeed({ client: undefined, lookup: unreachable ? Lookup.Unreachable() : Lookup.Unknown() });
+					return first.client.session(sessionID).pipe(
+						Effect.matchEffect({
+							onFailure: () => ask(sessionID, rest, true),
+							onSuccess: (session) =>
+								session
+									? Effect.succeed({ client: first.client, lookup: Lookup.Known({ session }) })
+									: ask(sessionID, rest, unreachable),
+						}),
+					);
+				};
 				/** The first attached client that knows the session. One that can't answer is skipped, and remembered. */
 				const find = (sessionID: SessionID) =>
-					Effect.gen(function* () {
-						let unreachable = false;
-						for (const { client } of yield* SubscriptionRef.get(state)) {
-							const session = yield* client.session(sessionID).pipe(
-								Effect.catch(() =>
-									Effect.sync(() => {
-										unreachable = true;
-										return undefined;
-									}),
-								),
-							);
-							if (session) return { client, lookup: { _tag: "Known", session } as Lookup };
-						}
-						return {
-							client: undefined,
-							lookup: (unreachable ? { _tag: "Unreachable" } : { _tag: "Unknown" }) as Lookup,
-						};
-					});
+					Effect.flatMap(SubscriptionRef.get(state), (all) => ask(sessionID, all, false));
 
 				return OpenCode.of({
 					attach: (client) =>
