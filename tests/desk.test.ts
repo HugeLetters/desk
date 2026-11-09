@@ -14,6 +14,11 @@ import * as Stream from "effect/Stream";
 import { Desk, type Question } from "../src/desk";
 import { Store } from "../src/store";
 import { eventually } from "./support/service";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
+import { Refusal } from "../src/errors";
+import { refusal } from "../src/wording";
+import { E, S } from "./support/ids";
 
 let root: string;
 let scope: Scope.Closeable;
@@ -27,10 +32,13 @@ const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
 const desk = <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) => Effect.runPromise(Effect.provideContext(Desk.use(f), services));
 const failure = async <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) => {
 	const exit = await Effect.runPromiseExit(Effect.provideContext(Desk.use(f), services));
-	return Exit.isFailure(exit) ? String(exit.cause) : "succeeded";
+	if (Exit.isSuccess(exit)) return "succeeded";
+	// A refusal as the user reads it; anything else as it is.
+	const error = Cause.squash(exit.cause);
+	return Schema.is(Refusal)(error) ? refusal(error) : String(error);
 };
 const entries = () => desk((d) => d.entries);
-const ask = (title: string, extra: Partial<Question> = {}) => desk((d) => d.ask({ session: "ses_a", directory: "/w" }, { title, body: "", ...extra }));
+const ask = (title: string, extra: Partial<Question> = {}) => desk((d) => d.ask({ session: S("ses_a"), directory: "/w" }, { title, body: "", ...extra }));
 const files = async () => (await readdir(root)).filter((name) => name.endsWith(".md")).sort();
 const attachments = async () => (await readdir(join(root, "attachments")).catch(() => [])).sort();
 
@@ -91,7 +99,7 @@ test("describe: unresolved entries of the scope, flat with full ids, or one thre
 	const first = await ask("Root", { body: "Details" });
 	await Bun.sleep(2);
 	const second = await ask("Child", { body: "More", parent: first.id });
-	await desk((d) => d.ask({ session: "ses_elsewhere", directory: "/x" }, { title: "Elsewhere", body: "" }));
+	await desk((d) => d.ask({ session: S("ses_elsewhere"), directory: "/x" }, { title: "Elsewhere", body: "" }));
 	expect(await desk((d) => d.describe(undefined, (entry) => entry.session === "ses_a"))).toBe(
 		`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, blocked]`,
 	);
@@ -114,7 +122,7 @@ test("replies are all or nothing, and a refused one stores no attachments", asyn
 		d.reply(
 			[
 				{ entry: entry.id, text: `![a](attachment:${local})`, files: files_ },
-				{ entry: "gone", text: "x" },
+				{ entry: E("gone"), text: "x" },
 			],
 			"queue",
 		),
@@ -154,7 +162,7 @@ test("only referenced attachments are stored, and they go with the last entry po
 
 test("a reply's entries share one outbox per session; delivered empties it", async () => {
 	const a = await ask("A?");
-	const b = await desk((d) => d.ask({ session: "ses_b", directory: "/w" }, { title: "B?", body: "" }));
+	const b = await desk((d) => d.ask({ session: S("ses_b"), directory: "/w" }, { title: "B?", body: "" }));
 	const c = await ask("C?");
 	await desk((d) => d.reply([{ entry: a.id, text: "1" }, { entry: b.id, text: "2" }, { entry: c.id, text: "3" }], "queue"));
 	const byId = async (id: string) => (await entries()).find((entry) => entry.id === id)!;

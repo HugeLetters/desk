@@ -13,50 +13,51 @@
  */
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import { Delivery, Priority } from "./entry";
+import { ProjectID } from "@opencode/schema/project-id";
+import { Delivery, EntryId, MessageID, Priority, SessionID } from "./entry";
 
 const method = <I extends Schema.Top, O extends Schema.Top>(input: I, output: O) => ({ input, output });
 
 export const methods = {
 	/** Who's connecting: the protocol it speaks, and its location's project (for the project's name). */
 	hello: method(
-		Schema.Struct({ protocol: Schema.String, project: Schema.optional(Schema.Struct({ id: Schema.String, directory: Schema.String })) }),
+		Schema.Struct({ protocol: Schema.String, project: Schema.optional(Schema.Struct({ id: ProjectID, directory: Schema.String })) }),
 		Schema.Struct({ url: Schema.String }),
 	),
 	ask: method(
 		Schema.Struct({
-			asker: Schema.Struct({ session: Schema.String, directory: Schema.String }),
+			asker: Schema.Struct({ session: SessionID, directory: Schema.String }),
 			question: Schema.Struct({
 				title: Schema.String,
 				body: Schema.String,
 				labels: Schema.optional(Schema.Array(Schema.String)),
-				parent: Schema.optional(Schema.String),
+				parent: Schema.optional(EntryId),
 				priority: Schema.optional(Priority),
 			}),
 		}),
-		Schema.Struct({ id: Schema.String, parent: Schema.NullOr(Schema.String), url: Schema.String }),
+		Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }),
 	),
-	adopt: method(Schema.Struct({ id: Schema.String, parent: Schema.String }), Schema.Null),
-	answer: method(Schema.Struct({ id: Schema.String, body: Schema.String }), Schema.Null),
-	resolve: method(Schema.Struct({ id: Schema.String }), Schema.Null),
-	prioritize: method(Schema.Struct({ id: Schema.String, priority: Priority, subtree: Schema.Boolean }), Schema.Null),
+	adopt: method(Schema.Struct({ id: EntryId, parent: EntryId }), Schema.Null),
+	answer: method(Schema.Struct({ id: EntryId, body: Schema.String }), Schema.Null),
+	resolve: method(Schema.Struct({ id: EntryId }), Schema.Null),
+	prioritize: method(Schema.Struct({ id: EntryId, priority: Priority, subtree: Schema.Boolean }), Schema.Null),
 	/** The desk of `session`'s project, or one entry's thread. */
-	list: method(Schema.Struct({ session: Schema.String, id: Schema.optional(Schema.String) }), Schema.String),
+	list: method(Schema.Struct({ session: SessionID, id: Schema.optional(EntryId) }), Schema.String),
 	/** The page for `session`'s project. */
-	page: method(Schema.Struct({ session: Schema.String }), Schema.Struct({ url: Schema.String })),
+	page: method(Schema.Struct({ session: SessionID }), Schema.Struct({ url: Schema.String })),
 	/** A session in this OpenCode moved to another directory (perhaps another project). */
-	moved: method(Schema.Struct({ session: Schema.String }), Schema.Null),
+	moved: method(Schema.Struct({ session: SessionID }), Schema.Null),
 	/** The sessions in desk mode in this OpenCode, all of them: after hello and whenever one turns it on or off. */
-	modes: method(Schema.Struct({ sessions: Schema.Array(Schema.String) }), Schema.Null),
+	modes: method(Schema.Struct({ sessions: Schema.Array(SessionID) }), Schema.Null),
 };
 
-export const SessionInfo = Schema.Struct({ id: Schema.String, parentID: Schema.optional(Schema.String), projectID: Schema.String, directory: Schema.String });
+export const SessionInfo = Schema.Struct({ id: SessionID, parentID: Schema.optional(SessionID), projectID: ProjectID, directory: Schema.String });
 export type SessionInfo = typeof SessionInfo.Type;
 
 export const Prompt = Schema.Struct({
-	sessionID: Schema.String,
+	sessionID: SessionID,
 	/** The message id: OpenCode admits each id once, so a retry can't deliver twice. */
-	id: Schema.String,
+	id: MessageID,
 	text: Schema.String,
 	delivery: Delivery,
 	files: Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.String })),
@@ -65,7 +66,7 @@ export type Prompt = typeof Prompt.Type;
 
 export const calls = {
 	/** The session; null when this OpenCode doesn't know it. */
-	session: method(Schema.Struct({ sessionID: Schema.String }), Schema.NullOr(SessionInfo)),
+	session: method(Schema.Struct({ sessionID: SessionID }), Schema.NullOr(SessionInfo)),
 	prompt: method(Prompt, Schema.Null),
 };
 

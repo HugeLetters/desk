@@ -16,8 +16,9 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { DeskError } from "./errors";
-import { answerer, attachmentsIn, type Delivery, descendants, type Entry, newId, openUnder, ordered, type Party, type Priority, waitingOn } from "./entry";
+import { AlreadyResolved, EmptyText, HasParent, MissingAttachment, NoSuchEntry, NotTheAnswerer, NotTheAsker, NothingUndelivered, OpenBelow, type Refusal, Undelivered, WouldCycle } from "./errors";
+import { answerer, attachmentsIn, type Delivery, descendants, type Entry, type EntryId, type MessageID, newId, openUnder, ordered, type Party, type Priority, type SessionID, waitingOn } from "./entry";
+import type { Attachment, Draft } from "./page-api";
 import { Store } from "./store";
 
 type Entries = ReadonlyArray<Entry>;
@@ -27,35 +28,15 @@ export interface Question {
 	readonly body: string;
 	readonly labels?: ReadonlyArray<string> | undefined;
 	/** Omitted with a `pr:<n>` label: the PR's review root, if there is one (see `reviewRoot`). */
-	readonly parent?: string | undefined;
+	readonly parent?: EntryId | undefined;
 	/** Default: the parent's, else normal. */
 	readonly priority?: Priority | undefined;
 }
 
 /** Who asks: the top-level session (the plugin walks up from a subagent's), and where it works. */
 export interface Asker {
-	readonly session: string;
+	readonly session: SessionID;
 	readonly directory: string;
-}
-
-/**
- * A file the user attached to a draft, kept in the browser until the draft is sent: `id` is the draft-local name its
- * Markdown uses, `attachment:<id>`; `data` the bytes, base64.
- */
-export interface Attachment {
-	readonly id: string;
-	readonly name: string;
-	readonly data: string;
-}
-
-/**
- * The user's text for an entry: an answer, or (on their own question) a follow-up. `files` holds the attachments the
- * text references; sending stores them as `attachments/<uuid>.<ext>` and points the text at `/attachments/…`.
- */
-export interface Draft {
-	readonly entry: string;
-	readonly text: string;
-	readonly files?: ReadonlyArray<Attachment> | undefined;
 }
 
 /**
@@ -79,32 +60,32 @@ export class Desk extends Context.Service<
 		/**
 		 * An agent asks. `scope` is the asker's project: a PR's review root is looked for among those entries only.
 		 */
-		readonly ask: (asker: Asker, question: Question, scope?: (entry: Entry) => boolean) => Effect.Effect<Entry, DeskError>;
+		readonly ask: (asker: Asker, question: Question, scope?: (entry: Entry) => boolean) => Effect.Effect<Entry, Refusal>;
 		/** Files a top-level entry under `parent` (not in its own subtree); an entry's parent never changes once set. */
-		readonly adopt: (id: string, parent: string) => Effect.Effect<Entry, DeskError>;
+		readonly adopt: (id: EntryId, parent: EntryId) => Effect.Effect<Entry, Refusal>;
 		/** An agent answers the user's question. */
-		readonly answer: (id: string, body: string) => Effect.Effect<Entry, DeskError>;
+		readonly answer: (id: EntryId, body: string) => Effect.Effect<Entry, Refusal>;
 		/** Sets an entry's priority, and its whole subtree's when `subtree`. */
-		readonly prioritize: (id: string, priority: Priority, subtree: boolean) => Effect.Effect<void, DeskError>;
+		readonly prioritize: (id: EntryId, priority: Priority, subtree: boolean) => Effect.Effect<void, Refusal>;
 		/**
 		 * The asker marks an entry done (refused while anything below it is unresolved, or while the user's text on it
 		 * hasn't reached the session); it leaves the desk once it has no follow-ups, and so on up its parents.
 		 */
-		readonly resolve: (id: string, by: Party) => Effect.Effect<void, DeskError>;
+		readonly resolve: (id: EntryId, by: Party) => Effect.Effect<void, Refusal>;
 		/** Unresolved entries of `scope`, one per line, or one entry's thread in full. */
-		readonly describe: (id: string | undefined, scope: (entry: Entry) => boolean) => Effect.Effect<string, DeskError>;
+		readonly describe: (id: EntryId | undefined, scope: (entry: Entry) => boolean) => Effect.Effect<string, Refusal>;
 		/**
 		 * The user's drafts, all or nothing, into the outbox: one message per session. The attachments their texts
 		 * reference are stored on the way, and only if every draft is taken. Returns how many were.
 		 */
-		readonly reply: (drafts: ReadonlyArray<Draft>, delivery: Delivery) => Effect.Effect<number, DeskError>;
+		readonly reply: (drafts: ReadonlyArray<Draft>, delivery: Delivery) => Effect.Effect<number, Refusal>;
 		/** The message `outbox` reached its session: its entries leave the outbox. */
-		readonly delivered: (outbox: string) => Effect.Effect<void, DeskError>;
+		readonly delivered: (outbox: MessageID) => Effect.Effect<void>;
 		/**
-		 * The user gives up on delivering the message `outbox` (its session is gone, say): its entries leave the outbox,
-		 * keeping their text, and can be resolved.
+		 * The user gives up on delivering `id`'s undelivered text (its session is gone, say): it and the entries going out
+		 * in the same message leave the outbox, keeping their text, and can be resolved.
 		 */
-		readonly discard: (outbox: string) => Effect.Effect<void, DeskError>;
+		readonly discard: (id: EntryId) => Effect.Effect<void, Refusal>;
 	}
 >()("desk/Desk") {
 	static readonly layer = Desk.layerWith();
@@ -118,12 +99,12 @@ export class Desk extends Context.Service<
 			const lock = yield* Semaphore.make(1);
 			const ours = yield* PubSub.unbounded<void>();
 			/** One change: reads the files, decides (writing what changes), and says so. Changes run one at a time. */
-			const modify = <A>(change: (all: Entries) => Effect.Effect<readonly [A, Entries], DeskError>): Effect.Effect<A, DeskError> =>
+			const modify = <A, E = never>(change: (all: Entries) => Effect.Effect<readonly [A, Entries], E>): Effect.Effect<A, E> =>
 				lock.withPermits(1)(Effect.flatMap(store.load, (all) => Effect.map(change(all), ([result]) => result))).pipe(Effect.ensuring(PubSub.publish(ours, undefined)));
 
-			const find = (all: Entries, id: string) => {
+			const find = (all: Entries, id: string): Effect.Effect<Entry, NoSuchEntry> => {
 				const entry = all.find((candidate) => candidate.id === id);
-				return entry ? Effect.succeed(entry) : Effect.fail(new DeskError({ message: `No desk entry ${id}.` }));
+				return entry ? Effect.succeed(entry) : Effect.fail(new NoSuchEntry({ id }));
 			};
 			const replace = (all: Entries, entry: Entry) =>
 				all.some((other) => other.id === entry.id) ? all.map((other) => (other.id === entry.id ? entry : other)) : [...all, entry];
@@ -134,19 +115,19 @@ export class Desk extends Context.Service<
 					const uploads: Array<Attachment> = [];
 					for (const id of new Set([...draft.text.matchAll(/\]\(attachment:([0-9a-f-]{36})\)/g)].map(([, id]) => id!))) {
 						const attachment = draft.files?.find((candidate) => candidate.id === id);
-						if (!attachment) return yield* new DeskError({ message: `Entry ${draft.entry}: attachment ${id} is missing from the draft; attach the file again.` });
+						if (!attachment) return yield* new MissingAttachment({ id: draft.entry, attachment: id });
 						uploads.push(attachment);
 					}
 					return uploads;
 				});
 
 			/** The user's draft: the answer when the entry waits on them, otherwise a follow-up question below it. */
-			const replyTo = (all: Entries, draft: Draft, outbox: string, delivery: Delivery): Effect.Effect<Entry, DeskError> =>
+			const replyTo = (all: Entries, draft: Draft, outbox: MessageID, delivery: Delivery): Effect.Effect<Entry, Refusal> =>
 				Effect.gen(function* () {
 					const entry = yield* find(all, draft.entry);
 					const text = draft.text.trim();
-					if (!text) return yield* new DeskError({ message: `Entry ${entry.id}: the text is empty.` });
-					if (entry.status === "resolved") return yield* new DeskError({ message: `Entry ${entry.id} is already resolved.` });
+					if (!text) return yield* new EmptyText({ id: entry.id });
+					if (entry.status === "resolved") return yield* new AlreadyResolved({ id: entry.id });
 					if (entry.asker === "agent" && entry.status === "open") return { ...entry, answer: text, status: "answered", outbox, delivery };
 					return {
 						id: newId(),
@@ -202,8 +183,8 @@ export class Desk extends Context.Service<
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
 							yield* find(all, parentID);
-							if (entry.parent !== null) return yield* new DeskError({ message: `Entry ${id} already has a parent (${entry.parent}); a parent never changes.` });
-							if (parentID === id || descendants(all, entry).some((other) => other.id === parentID)) return yield* new DeskError({ message: `Entry ${parentID} is in the subtree of ${id}; adopting it there would make a cycle.` });
+							if (entry.parent !== null) return yield* new HasParent({ id, parent: entry.parent });
+							if (parentID === id || descendants(all, entry).some((other) => other.id === parentID)) return yield* new WouldCycle({ id, parent: parentID });
 							const adopted: Entry = { ...entry, parent: parentID };
 							yield* store.write(adopted);
 							return [adopted, replace(all, adopted)] as const;
@@ -213,8 +194,8 @@ export class Desk extends Context.Service<
 					modify((all) =>
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
-							if (entry.asker !== "user") return yield* new DeskError({ message: `Entry ${id} is the agents' own question; the user answers it.` });
-							if (entry.status === "resolved") return yield* new DeskError({ message: `Entry ${id} is already resolved.` });
+							if (entry.asker !== "user") return yield* new NotTheAnswerer({ id, by: "agent" });
+							if (entry.status === "resolved") return yield* new AlreadyResolved({ id });
 							const answered: Entry = { ...entry, answer: body.trim(), status: "answered" };
 							yield* store.write(answered);
 							return [answered, replace(all, answered)] as const;
@@ -234,10 +215,10 @@ export class Desk extends Context.Service<
 					modify((all) =>
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
-							if (entry.asker !== by) return yield* new DeskError({ message: `Entry ${id} was asked by the ${entry.asker}; only the asker marks it done.` });
-							if (entry.outbox !== null) return yield* new DeskError({ message: `Entry ${id}: the user's text on it hasn't reached the session yet, so it can't be resolved yet.` });
+							if (entry.asker !== by) return yield* new NotTheAsker({ id, asker: entry.asker });
+							if (entry.outbox !== null) return yield* new Undelivered({ id });
 							const open = openUnder(all, entry);
-							if (open.length > 0) return yield* new DeskError({ message: `Entry ${id} still has ${open.length} open below it, so it can't be resolved yet: ${open.map((other) => other.id).join(", ")}.` });
+							if (open.length > 0) return yield* new OpenBelow({ id, below: open.map((other) => other.id) });
 							const resolved: Entry = { ...entry, status: "resolved" };
 							yield* store.write(resolved);
 							// A resolved entry without follow-ups leaves the desk; then its parent may, and so on up.
@@ -288,7 +269,7 @@ export class Desk extends Context.Service<
 					modify((all) =>
 						Effect.gen(function* () {
 							// Apply every draft before writing anything, so a refusal leaves the desk (and its attachments) as it was.
-							const outboxes = new Map<string, string>();
+							const outboxes = new Map<SessionID, MessageID>();
 							let next = all;
 							const uploads: Array<{ draft: number; attachment: Attachment }> = [];
 							for (const [index, draft] of drafts.entries()) {
@@ -324,11 +305,12 @@ export class Desk extends Context.Service<
 							return [undefined, all.map((entry) => sent.find((other) => other.id === entry.id) ?? entry)] as const;
 						}),
 					),
-				discard: (outbox) =>
+				discard: (id) =>
 					modify((all) =>
 						Effect.gen(function* () {
+							const { outbox } = yield* find(all, id);
+							if (outbox === null) return yield* new NothingUndelivered({ id });
 							const held = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
-							if (held.length === 0) return yield* new DeskError({ message: `Nothing waits to be delivered as ${outbox}; it may have just gone out.` });
 							yield* Effect.forEach(held, store.write);
 							return [undefined, all] as const;
 						}),

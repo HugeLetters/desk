@@ -25,12 +25,20 @@
  * The answer, in Markdown.
  * ```
  */
+import { SessionID } from "@opencode/schema/session-id";
+import { SessionMessage } from "@opencode/schema/session-message";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-/** A random UUID. */
-export const Id = Schema.String;
+/** An entry's id: a random UUID. Parsed where it comes in (a file name, a request), trusted past that. */
+export const EntryId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("EntryId"));
+export type EntryId = typeof EntryId.Type;
+
+export { SessionID };
+/** The OpenCode message the user's text goes out as. */
+export const MessageID = SessionMessage.ID;
+export type MessageID = typeof MessageID.Type;
 
 export const Party = Schema.Literals(["user", "agent"]);
 export type Party = typeof Party.Type;
@@ -48,7 +56,7 @@ const rank = { critical: 0, high: 1, normal: 2, low: 3 } as const;
  */
 export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "created">>(entries: ReadonlyArray<E>): Array<E> {
 	const byCreated = [...entries].sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
-	const walk = new Map<string, number>();
+	const walk = new Map<EntryId, number>();
 	const visit = (entry: E): void => {
 		for (const child of byCreated) if (child.parent === entry.id) visit(child);
 		walk.set(entry.id, walk.size);
@@ -66,11 +74,11 @@ export const Status = Schema.Literals(["open", "answered", "resolved"]);
 
 const Header = Schema.Struct({
 	/** An entry's parent, once set, never changes; a top-level entry may be adopted once (never into its own subtree): no cycles, no orphans. */
-	parent: Schema.NullOr(Id),
+	parent: Schema.NullOr(EntryId),
 	asker: Party,
 	status: Status,
 	/** The top-level OpenCode session that asked, or that the user's reply belongs to; it hears about the entry. */
-	session: Schema.String,
+	session: SessionID,
 	/** Where the asking session works: relative paths in the entry's Markdown resolve against it. */
 	directory: Schema.String,
 	labels: Schema.Array(Schema.String),
@@ -81,13 +89,13 @@ const Header = Schema.Struct({
 	 * message id it goes out as. Fixed before the first try, so a retry is the same message and OpenCode admits it once.
 	 * Entries sharing an outbox go out together, as one message.
 	 */
-	outbox: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+	outbox: Schema.NullOr(MessageID).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 	delivery: Schema.NullOr(Delivery).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 });
 
 export const Entry = Schema.Struct({
 	...Header.fields,
-	id: Id,
+	id: EntryId,
 	title: Schema.String,
 	question: Schema.String,
 	answer: Schema.NullOr(Schema.String),
@@ -95,6 +103,7 @@ export const Entry = Schema.Struct({
 export type Entry = typeof Entry.Type;
 
 const decodeHeader = Schema.decodeUnknownOption(Header);
+const decodeId = Schema.decodeUnknownOption(EntryId);
 const answerMarker = "<!-- desk:answer -->";
 
 export const answerer = (entry: Pick<Entry, "asker">): Party => (entry.asker === "user" ? "agent" : "user");
@@ -125,7 +134,7 @@ export function next(entries: ReadonlyArray<Entry>, current: Pick<Entry, "id" | 
 
 /** Everything below `root` at depth `from` or deeper (1: its follow-ups), in no particular order. */
 export function descendants(entries: ReadonlyArray<Entry>, root: Pick<Entry, "id">, from = 1): ReadonlyArray<Entry> {
-	const below = (ids: ReadonlySet<string>, depth: number): Array<Entry> => {
+	const below = (ids: ReadonlySet<EntryId>, depth: number): Array<Entry> => {
 		const children = entries.filter((entry) => entry.parent !== null && ids.has(entry.parent));
 		return children.length === 0 ? [] : [...(depth >= from ? children : []), ...below(new Set(children.map((child) => child.id)), depth + 1)];
 	};
@@ -147,7 +156,7 @@ export function openUnder(entries: ReadonlyArray<Entry>, root: Pick<Entry, "id">
 	return ordered(entries).filter((entry) => below.has(entry) && entry.status !== "resolved");
 }
 
-export const newId = () => crypto.randomUUID();
+export const newId = () => EntryId.make(crypto.randomUUID());
 
 /**
  * The attachments a text points at, as `[name](/attachments/<uuid>.<ext>)`: the page serves `/attachments/` from the
@@ -162,8 +171,9 @@ export const shortId = (id: string) => id.slice(-6);
 export const fileName = (id: string) => `${id}.md`;
 
 /** The id an entry file name stands for; other files in the store aren't entries. */
-export function idOf(name: string): string | undefined {
-	return /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.md$/.exec(name)?.[1];
+export function idOf(name: string): EntryId | undefined {
+	const id = /^(.*)\.md$/.exec(name)?.[1];
+	return id === undefined ? undefined : Option.getOrUndefined(decodeId(id));
 }
 
 export function serialize(entry: Entry): string {
@@ -182,7 +192,7 @@ export function serialize(entry: Entry): string {
 	return `${["---", ...header, "---"].join("\n")}\n\n${[`# ${entry.title}`, entry.question, ...answer].filter(Boolean).join("\n\n")}\n`;
 }
 
-export function parse(id: string, text: string): Option.Option<Entry> {
+export function parse(id: EntryId, text: string): Option.Option<Entry> {
 	const match = /^---\n([\s\S]*?)\n---\n+# (.*)\n?([\s\S]*)$/.exec(text);
 	if (!match) return Option.none();
 	const [, head, title, body] = match as unknown as [string, string, string, string];

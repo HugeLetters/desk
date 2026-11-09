@@ -11,6 +11,7 @@
  * A project's name is the last segment of its directory, as plugin instances report it when they connect (else the
  * directory of an entry in it).
  */
+import type { SessionID } from "./entry";
 import { basename } from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -30,7 +31,7 @@ export class Projects extends Context.Service<
 	Projects,
 	{
 		/** The project of an entry's root session, or its folder when no connected OpenCode knows the session. */
-		readonly of: (entry: { readonly session: string; readonly directory: string }) => Effect.Effect<string>;
+		readonly of: (entry: { readonly session: SessionID; readonly directory: string }) => Effect.Effect<string>;
 		/** Records a project's directory (for its name). */
 		readonly remember: (project: string, directory: string) => Effect.Effect<void>;
 		readonly name: (project: string, fallbackDirectory?: string) => Effect.Effect<string>;
@@ -44,9 +45,9 @@ export class Projects extends Context.Service<
 			Effect.gen(function* () {
 				const opencode = yield* OpenCode;
 				/** Root session → its project, or null: no connected OpenCode knew it. */
-				const sessions = new Map<string, string | null>();
+				const sessions = new Map<SessionID, string | null>();
 				/** Sessions to ask again (a connect, a move) before their remembered project is used. */
-				const stale = new Set<string>();
+				const stale = new Set<SessionID>();
 				/** Project id → its directory. */
 				const directories = new Map<string, string>();
 				const version = yield* SubscriptionRef.make(0);

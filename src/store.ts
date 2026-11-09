@@ -14,19 +14,19 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
-import { DeskError } from "./errors";
-import { type Entry, fileName, idOf, newId, parse, serialize } from "./entry";
+import { type Entry, type EntryId, fileName, idOf, newId, parse, serialize } from "./entry";
 
 export class Store extends Context.Service<
 	Store,
 	{
 		readonly root: string;
+		// A store that can't be read or written is a broken service, not something the desk refuses: failures are defects.
 		/** Every entry on disk, by `created`; unparseable files are skipped. */
-		readonly load: Effect.Effect<ReadonlyArray<Entry>, DeskError>;
-		readonly write: (entry: Entry) => Effect.Effect<void, DeskError>;
-		readonly remove: (id: string) => Effect.Effect<void, DeskError>;
+		readonly load: Effect.Effect<ReadonlyArray<Entry>>;
+		readonly write: (entry: Entry) => Effect.Effect<void>;
+		readonly remove: (id: EntryId) => Effect.Effect<void>;
 		/** Stores an attachment's bytes; returns its path below the root, `attachments/<uuid>.<ext>`. */
-		readonly attach: (name: string, data: Uint8Array) => Effect.Effect<string, DeskError>;
+		readonly attach: (name: string, data: Uint8Array) => Effect.Effect<string>;
 		/** Deletes attachments by their path below the root; missing ones are fine. */
 		readonly detach: (files: Iterable<string>) => Effect.Effect<void>;
 		/** An entry file was written, renamed or removed, by anyone. */
@@ -39,8 +39,8 @@ export class Store extends Context.Service<
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
 				const path = yield* Path.Path;
-				const io = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError((cause) => new DeskError({ message: String(cause) })));
-				const file = (id: string) => path.join(root, fileName(id));
+				const io = Effect.orDie;
+				const file = (id: EntryId) => path.join(root, fileName(id));
 
 				yield* io(fs.makeDirectory(root, { recursive: true }));
 

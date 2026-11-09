@@ -7,16 +7,16 @@ import * as Effect from "effect/Effect";
 import * as HttpServer from "effect/http/HttpServer";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
-import { Desk, type Draft } from "../desk";
+import { Desk } from "../desk";
 import { Failures } from "../delivery";
-import { type Entry, waitingFor } from "../entry";
-import { DeskError } from "../errors";
-import type { View } from "../page-api";
+import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
+import type { Refusal } from "../errors";
+import type { Draft, View } from "../page-api";
 import { guessed, Projects } from "../projects";
 import { OpenCode } from "../opencode";
 import type { Methods } from "../protocol";
 
-type Handler<M extends keyof Methods> = (input: Methods[M]["input"]) => Effect.Effect<Methods[M]["output"], DeskError>;
+type Handler<M extends keyof Methods> = (input: Methods[M]["input"]) => Effect.Effect<Methods[M]["output"], Refusal>;
 
 export class Api extends Context.Service<
 	Api,
@@ -30,10 +30,10 @@ export class Api extends Context.Service<
 		readonly list: Handler<"list">;
 		readonly page: Handler<"page">;
 		readonly view: (project: string | undefined) => Stream.Stream<View>;
-		readonly submit: (drafts: ReadonlyArray<Draft>) => Effect.Effect<number, DeskError>;
-		readonly send: (draft: Draft) => Effect.Effect<void, DeskError>;
-		readonly resolveByUser: (id: string) => Effect.Effect<void, DeskError>;
-		readonly discard: (entry: string) => Effect.Effect<void, DeskError>;
+		readonly submit: (drafts: ReadonlyArray<Draft>) => Effect.Effect<number, Refusal>;
+		readonly send: (draft: Draft) => Effect.Effect<void, Refusal>;
+		readonly resolveByUser: (id: EntryId) => Effect.Effect<void, Refusal>;
+		readonly discard: (entry: EntryId) => Effect.Effect<void, Refusal>;
 	}
 >()("desk/Api") {
 	/** Needs the page's `HttpServer`, for its URL (`http://127.0.0.1:<port>/`). */
@@ -57,7 +57,7 @@ export class Api extends Context.Service<
 						return (entry: Entry) => byEntry.get(entry.id)!;
 					});
 				/** Entries in the same project as `session` (working in `directory`, when known). */
-				const scope = (session: string, directory?: string) =>
+				const scope = (session: SessionID, directory?: string) =>
 					Effect.gen(function* () {
 						const all = yield* desk.entries;
 						const where = directory ?? all.find((entry) => entry.session === session)?.directory ?? "";
@@ -113,13 +113,7 @@ export class Api extends Context.Service<
 					submit: (drafts) => desk.reply(drafts, "queue"),
 					send: (draft) => Effect.asVoid(desk.reply([draft], "steer")),
 					resolveByUser: (id) => desk.resolve(id, "user"),
-					discard: (id) =>
-						Effect.flatMap(desk.entries, (entries) => {
-							const entry = entries.find((candidate) => candidate.id === id);
-							if (!entry) return Effect.fail(new DeskError({ message: `No desk entry ${id}.` }));
-							if (entry.outbox === null) return Effect.fail(new DeskError({ message: `Entry ${id} has nothing waiting to be delivered.` }));
-							return desk.discard(entry.outbox);
-						}),
+					discard: (id) => desk.discard(id),
 				});
 			}),
 		);

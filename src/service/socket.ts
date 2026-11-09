@@ -16,6 +16,8 @@ import { type Client, OpenCode } from "../opencode";
 import { Projects } from "../projects";
 import { type Call, type CallMethod, type CallResult, type Calls, calls, contractFiles, decode, methods, protocol, type Request, type Response } from "../protocol";
 import { Api } from "./api";
+import type { Refusal } from "../errors";
+import { refusal } from "../wording";
 import { Clients } from "./clients";
 
 export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{ readonly path: string }> {}
@@ -67,7 +69,7 @@ export const layer = (path: string, outdated: () => boolean = changedSinceStart(
 			const services = yield* Effect.context<never>();
 			const run = Effect.runForkWith(services);
 
-			const handle = (connection: Connection, request: Request): Effect.Effect<unknown, { message: string }> => {
+			const handle = (connection: Connection, request: Request): Effect.Effect<unknown, Refusal | { message: string }> => {
 				const input = <M extends keyof typeof methods & string>(name: M) => decode(methods, name, "input", request.input);
 				switch (request.method) {
 					case "hello": {
@@ -170,7 +172,8 @@ export const layer = (path: string, outdated: () => boolean = changedSinceStart(
 										handle(socket.data, request).pipe(
 											Effect.match({
 												onSuccess: (output) => write(socket, { id: request.id, output: output ?? null }),
-												onFailure: (error) => write(socket, { id: request.id, error: error.message }),
+												// Until the socket carries typed errors (an RpcGroup), refusals cross worded.
+												onFailure: (error) => write(socket, { id: request.id, error: "_tag" in error ? refusal(error) : error.message }),
 											}),
 										),
 									);

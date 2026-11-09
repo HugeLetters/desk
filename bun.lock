@@ -8,6 +8,7 @@
         "@effect/platform-bun": "4.1.0",
         "@opencode/client": "2.2.6",
         "@opencode/plugin": "2.2.6",
+        "@opencode/schema": "2.2.6",
         "effect": "4.1.0",
       },
       "devDependencies": {

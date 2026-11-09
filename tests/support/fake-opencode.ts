@@ -7,11 +7,14 @@
 import * as Effect from "effect/Effect";
 import type { Options } from "../../src/plugin/connection";
 import type { Prompt, SessionInfo } from "../../src/protocol";
+import type { ProjectID } from "@opencode/schema/project-id";
+import type { SessionID } from "../../src/entry";
+import { P } from "./ids";
 
 export interface FakeServer {
 	/** Names the instance. */
 	readonly url: string;
-	readonly sessions: Map<string, SessionInfo>;
+	readonly sessions: Map<SessionID, SessionInfo>;
 	/** Admitted prompts, in order; a repeated id is not admitted again. */
 	readonly admitted: Array<Prompt>;
 	/** Every prompt call, repeats included. */
@@ -21,13 +24,13 @@ export interface FakeServer {
 	loseNextReply: boolean;
 	/** Prompts are refused with this message, while set. */
 	refuse: string | undefined;
-	session(info: Partial<SessionInfo> & { id: string }): void;
-	move(sessionID: string, projectID: string): void;
+	session(info: Partial<SessionInfo> & { id: SessionID }): void;
+	move(sessionID: SessionID, projectID: ProjectID): void;
 }
 
 export function fakeOpenCode() {
 	const servers = new Map<string, FakeServer>();
-	const watchers = new Map<string, Set<(sessionID: string) => void>>();
+	const watchers = new Map<string, Set<(sessionID: SessionID) => void>>();
 
 	const server = (url: string): FakeServer => {
 		const existing = servers.get(url);
@@ -41,7 +44,7 @@ export function fakeOpenCode() {
 			loseNextReply: false,
 			refuse: undefined,
 			session(info) {
-				this.sessions.set(info.id, { projectID: "prj_default", directory: "/work/default", ...info });
+				this.sessions.set(info.id, { projectID: P("prj_default"), directory: "/work/default", ...info });
 			},
 			move(sessionID, projectID) {
 				const session = this.sessions.get(sessionID)!;
@@ -72,7 +75,7 @@ export function fakeOpenCode() {
 	});
 
 	/** Calls `moved` for each session that moves in `fake`, until the returned function is called. */
-	const watch = (fake: FakeServer, moved: (sessionID: string) => void) => {
+	const watch = (fake: FakeServer, moved: (sessionID: SessionID) => void) => {
 		const set = watchers.get(fake.url) ?? new Set();
 		watchers.set(fake.url, set.add(moved));
 		return () => set.delete(moved);

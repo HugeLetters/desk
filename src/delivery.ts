@@ -18,23 +18,26 @@ import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Desk } from "./desk";
+import type { MessageID } from "./entry";
+import type { DeliveryFailed } from "./errors";
 import { OpenCode } from "./opencode";
 import { messages } from "./outbox";
 import { Store } from "./store";
+import { deliveryFailed } from "./wording";
 
 export class Failures extends Context.Service<
 	Failures,
 	{
 		/** Outbox (message id) → why its last delivery failed. */
-		readonly current: Effect.Effect<ReadonlyMap<string, string>>;
-		readonly changes: Stream.Stream<ReadonlyMap<string, string>>;
-		readonly set: (outbox: string, reason: string | undefined) => Effect.Effect<void>;
+		readonly current: Effect.Effect<ReadonlyMap<MessageID, DeliveryFailed>>;
+		readonly changes: Stream.Stream<ReadonlyMap<MessageID, DeliveryFailed>>;
+		readonly set: (outbox: MessageID, reason: DeliveryFailed | undefined) => Effect.Effect<void>;
 	}
 >()("desk/Failures") {
 	static readonly layer = Layer.effect(
 		this,
 		Effect.gen(function* () {
-			const failures = yield* SubscriptionRef.make<ReadonlyMap<string, string>>(new Map());
+			const failures = yield* SubscriptionRef.make<ReadonlyMap<MessageID, DeliveryFailed>>(new Map());
 			return Failures.of({
 				current: SubscriptionRef.get(failures),
 				changes: SubscriptionRef.changes(failures),
@@ -66,7 +69,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 					yield* opencode.prompt({ sessionID: message.session, id: message.id, text: message.text, delivery: message.delivery, files }).pipe(
 						Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
 						Effect.andThen(failures.set(message.id, undefined)),
-						Effect.catch((error) => Effect.andThen(Effect.logWarning(error.message), failures.set(message.id, error.message))),
+						Effect.catch((failed) => Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed))),
 					);
 				}
 				// Messages that left the outbox (delivered, or their entry went) have nothing to report.

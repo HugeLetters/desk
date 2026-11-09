@@ -16,6 +16,7 @@ import * as FiberSet from "effect/FiberSet";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
+import type { SessionID } from "../entry";
 import { type Call, type CallMethod, type CallResult, type Calls, calls, decode, type Method, type Methods, type Response } from "../protocol";
 
 /** The service can't be reached, or it refused the request (its message says why). */
@@ -27,7 +28,7 @@ export interface Options {
 	readonly start: Effect.Effect<void>;
 	readonly hello: Methods["hello"]["input"];
 	/** The sessions in desk mode, reported after every hello (the service holds them only while connected). */
-	readonly modes?: Effect.Effect<ReadonlyArray<string>> | undefined;
+	readonly modes?: Effect.Effect<ReadonlyArray<SessionID>> | undefined;
 	/** Answers the service's calls. */
 	readonly serve: { readonly [C in CallMethod]: (input: Calls[C]["input"]) => Effect.Effect<Calls[C]["output"], unknown> };
 	/** How long to wait for a started service to answer. */

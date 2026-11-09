@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
+import { P, S } from "../tests/support/ids";
+import type { EntryId } from "../src/entry";
 import { eventually, startService } from "../tests/support/service";
 
 const out = resolve(process.argv[2] ?? join(import.meta.dir, "../docs/demo"));
@@ -41,7 +43,7 @@ await writeFile(
 );
 const fake = fakeOpenCode();
 const opencode = fake.server("http://127.0.0.1:4096");
-for (const [id, projectID, directory] of [["ses_main", "prj_phantom", phantom], ["ses_review", "prj_phantom", phantom], ["ses_desk", "prj_desk", deskDir]] as const) opencode.session({ id, projectID, directory });
+for (const [id, projectID, directory] of [["ses_main", "prj_phantom", phantom], ["ses_review", "prj_phantom", phantom], ["ses_desk", "prj_desk", deskDir]] as const) opencode.session({ id: S(id), projectID: P(projectID), directory });
 const service = await startService({ store, fake });
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
@@ -49,9 +51,9 @@ try {
 	await mkdir(join(out, ".frames"), { recursive: true });
 
 	// The agents ask in that OpenCode, which tells the service each question's project.
-	const agent = service.plugin(opencode, { id: "prj_phantom", directory: phantom });
-	const ask = (session: string, question: { title: string; body: string; labels?: Array<string>; parent?: string; priority?: "critical" | "high" | "normal" | "low" }) =>
-		agent.request("ask", { asker: { session, directory: session === "ses_desk" ? deskDir : phantom }, question });
+	const agent = service.plugin(opencode, { id: P("prj_phantom"), directory: phantom });
+	const ask = (session: string, question: { title: string; body: string; labels?: Array<string>; parent?: EntryId; priority?: "critical" | "high" | "normal" | "low" }) =>
+		agent.request("ask", { asker: { session: S(session), directory: session === "ses_desk" ? deskDir : phantom }, question });
 	const review = await ask("ses_review", { title: "Review PR #84: virtualise the torrent list", body: "The list now renders only visible rows. Questions below; screenshots in the PR.", labels: ["pr:84", "review"], priority: "high" });
 	const rows = await ask("ses_review", { title: "Keep the row height fixed at 28 px?", body: "Variable heights would need measuring every row. **Recommendation:** fixed, 28 px.", labels: ["pr:84"] });
 	await ask("ses_review", { title: "Which empty-state icon?", body: "For an empty list:\n\n![options](design/empty.svg)\n\nI'd take **B** (the circle): it reads as \"nothing here\" without looking like an error.", labels: ["pr:84", "design"] });
@@ -137,7 +139,7 @@ try {
 	await tab.click("text=← All entries");
 	await settle(tab);
 	await snap(16);
-	service.plugin(opencode, { id: "prj_phantom", directory: phantom }); // that OpenCode comes back
+	service.plugin(opencode, { id: P("prj_phantom"), directory: phantom }); // that OpenCode comes back
 	await eventually(() => opencode.admitted.length === 1);
 	await tab.waitForSelector(".pill.undelivered", { state: "detached" });
 	await snap(20);

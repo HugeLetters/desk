@@ -20,9 +20,14 @@ import { createEffect, createMemo, createSignal, For, on, onCleanup, type Parent
 import { createStore, reconcile } from "solid-js/store";
 import { render } from "solid-js/web";
 import { DeskApi, type Draft, type View } from "../src/page-api";
-import { type Entry, newId, next, openBelow, openUnder, ordered, shortId, waitingFor, waitingOn } from "../src/entry";
+import { type Entry, type EntryId, newId, next, openBelow, openUnder, ordered, shortId, waitingFor, waitingOn } from "../src/entry";
+import * as Schema from "effect/Schema";
+import { Refusal } from "../src/errors";
+import { deliveryFailed, refusal } from "../src/wording";
 import * as Attachments from "./attachments";
 import { type Local, render as markdown, renderDiagrams } from "./markdown";
+
+const isRefusal = Schema.is(Refusal);
 
 const runtime = ManagedRuntime.make(
 	RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson])),
@@ -141,9 +146,10 @@ function App() {
 	const mine = createMemo(() => waitingFor(entries(), "user"));
 	const theirs = createMemo(() => waitingFor(entries(), "agent"));
 	const yours = (entry: Entry) => waitingOn(entry, entries()) === "user";
-	const pending = (): Array<{ entry: string; text: string }> => Object.entries(drafts).flatMap(([entry, text]) => (text?.trim() ? [{ entry, text }] : []));
+	// Drafts are kept by the id of an entry on the desk, so their keys are entry ids.
+	const pending = (): Array<{ entry: EntryId; text: string }> => Object.entries(drafts).flatMap(([entry, text]) => (text?.trim() ? [{ entry: entry as EntryId, text }] : []));
 	/** A draft as sent: its text and the attachments it still references. */
-	const outgoing = async (draft: { entry: string; text: string }): Promise<Draft> => ({ ...draft, files: await Attachments.outgoing(draft.text, (id) => files[id]) });
+	const outgoing = async (draft: { entry: EntryId; text: string }): Promise<Draft> => ({ ...draft, files: await Attachments.outgoing(draft.text, (id) => files[id]) });
 	const local: Local = (id) => files[id];
 	/** Waiting on you, and you've started an answer: shown instead of the plain status. */
 	const drafted = (entry: Entry) => yours(entry) && !!drafts[entry.id]?.trim();
@@ -155,7 +161,7 @@ function App() {
 		setTimeout(() => toast() === shown && setToast(undefined), error ? 6000 : 2500);
 	}
 	const attempt = (action: () => Promise<string>) =>
-		action().then(notify, (error: { message?: string }) => notify(error.message ?? String(error), true));
+		action().then(notify, (error: unknown) => notify(isRefusal(error) ? refusal(error) : String((error as { message?: unknown })?.message ?? error), true));
 
 	/** Keeps the files with the draft and inserts their Markdown at `at` (default: the end); they're uploaded when it's sent. */
 	const attach = (entry: string, added: ReadonlyArray<File>, at?: number) =>
@@ -192,7 +198,7 @@ function App() {
 					class={`pill undelivered${failure(props.entry) ? " failed" : ""}`}
 					title={
 						failure(props.entry)
-							? `Your text hasn't reached the session: the last try failed (${failure(props.entry)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`
+							? `Your text hasn't reached the session: the last try failed (${deliveryFailed(failure(props.entry)!)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`
 							: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does."
 					}
 				>
@@ -279,7 +285,8 @@ function App() {
 		/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
 		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>((previous) => (entry() ? { parent: entry()!.parent, created: entry()!.created, priority: entry()!.priority } : previous), { parent: null, created: "", priority: "normal" });
 		const goNext = () => {
-			const following = next(entries(), { id: params.id, ...place() });
+			// Only compared with the entries' ids: a bad one in the URL is simply not among them.
+			const following = next(entries(), { id: params.id as EntryId, ...place() });
 			navigate(following ? entryPath(following.id) : home());
 		};
 		/** Submits every draft, like the header's Submit, then goes on. Next (Shift) leaves them in the browser instead. */
@@ -353,7 +360,7 @@ function App() {
 									</div>
 									<div class="muted">{entry().asker === "agent" ? "agents → you" : "you → agents"}</div>
 									<Show when={failure(entry())}>
-										{(reason) => <div class="failure">Not delivered: the last try failed: {reason()}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
+										{(reason) => <div class="failure">Not delivered: the last try failed: {deliveryFailed(reason())}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
 									</Show>
 									<Show when={entry().outbox !== null}>
 										<div class="undelivered-actions">

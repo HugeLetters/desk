@@ -20,6 +20,7 @@ import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
+import { P } from "./ids";
 
 export type Service = Awaited<ReturnType<typeof startService>>;
 
@@ -43,7 +44,7 @@ export async function startService(options: { store?: string; idle?: number; fak
 		fake,
 		services,
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `project`. */
-		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: "prj_default", directory: "/work/default" }) {
+		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: P("prj_default"), directory: "/work/default" }) {
 			const held = Effect.runSync(Scope.make());
 			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, hello: { protocol, project }, modes: Effect.sync(() => [...opencode.sessions.keys()]), serve: fake.serve(opencode), timeout: 1000 }), held));
 			const connection = {

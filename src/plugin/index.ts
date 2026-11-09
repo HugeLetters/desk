@@ -21,13 +21,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { EntryId, Priority, SessionID } from "../entry";
 import { type Methods, protocol } from "../protocol";
 import * as Connection from "./connection";
 
 const media =
 	"Markdown: text, code fences, ```mermaid diagrams, images and GIFs (![alt](path)), video (![alt](clip.mp4)). Link files by path relative to the session's directory, e.g. ![icon](design/icons/01.png).";
 
-const Priority = Schema.Literals(["critical", "high", "normal", "low"]);
 const described = <S extends Schema.Top>(schema: S, description: string) => schema.annotate({ description });
 
 /** Whether `error` is OpenCode saying it doesn't know the session. */
@@ -41,15 +41,15 @@ export default Plugin.define({
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
-				const sessions: Array<string> = [];
+				const sessions: Array<SessionID> = [];
 				for (let after: string | undefined; ; ) {
 					const page = yield* ctx.storage.scan({ prefix: "on/", after });
-					sessions.push(...page.entries.map((entry) => entry.key.slice("on/".length)));
+					sessions.push(...page.entries.map((entry) => SessionID.make(entry.key.slice("on/".length))));
 					if (page.next === undefined) break;
 					after = page.next;
 				}
 				const where = yield* Effect.forEach(sessions, (id) =>
-					ctx.session.get({ sessionID: id as never }).pipe(
+					ctx.session.get({ sessionID: id }).pipe(
 						Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
 						Effect.catchIf(notFound, () => Effect.succeed("gone" as const)),
 						Effect.orElseSucceed(() => "elsewhere" as const),
@@ -68,13 +68,13 @@ export default Plugin.define({
 				modes,
 				serve: {
 					session: ({ sessionID }) =>
-						ctx.session.get({ sessionID: sessionID as never }).pipe(
+						ctx.session.get({ sessionID }).pipe(
 							Effect.map((session) => ({ id: session.id, parentID: session.parentID ?? undefined, projectID: session.projectID, directory: session.location.directory })),
 							// Not this OpenCode's session; anything else is an error the service retries.
 							Effect.catchIf(notFound, () => Effect.succeed(null)),
 						),
 					prompt: ({ sessionID, id, text, delivery, files }) =>
-						ctx.session.prompt({ sessionID: sessionID as never, id: id as never, text, delivery, files: files.map((file) => ({ uri: file.uri, name: file.name })) }).pipe(Effect.as(null)),
+						ctx.session.prompt({ sessionID, id, text, delivery, files: files.map((file) => ({ uri: file.uri, name: file.name })) }).pipe(Effect.as(null)),
 				},
 			};
 
@@ -115,22 +115,22 @@ export default Plugin.define({
 			);
 
 			/** A session's top-level session: a subagent's desk is its parent's. Parents never change, so it's cached. */
-			const roots = new Map<string, string>();
-			const root = (sessionID: string): Effect.Effect<string, unknown> => {
+			const roots = new Map<SessionID, SessionID>();
+			const root = (sessionID: SessionID): Effect.Effect<SessionID, unknown> => {
 				const known = roots.get(sessionID);
 				if (known) return Effect.succeed(known);
-				return ctx.session.get({ sessionID: sessionID as never }).pipe(
-					Effect.flatMap((session) => (session.parentID ? root(session.parentID) : Effect.succeed<string>(session.id))),
+				return ctx.session.get({ sessionID }).pipe(
+					Effect.flatMap((session) => (session.parentID ? root(session.parentID) : Effect.succeed(session.id))),
 					Effect.tap((found) => Effect.sync(() => roots.set(sessionID, found))),
 				);
 			};
-			const key = (rootID: string) => `on/${rootID}`;
-			const on = (sessionID: string) => Effect.flatMap(root(sessionID), (rootID) => Effect.map(ctx.storage.get(key(rootID)), (value) => value === true));
+			const key = (rootID: SessionID) => `on/${rootID}`;
+			const on = (sessionID: SessionID) => Effect.flatMap(root(sessionID), (rootID) => Effect.map(ctx.storage.get(key(rootID)), (value) => value === true));
 
 			const names = ["desk_ask", "desk_adopt", "desk_answer", "desk_resolve", "desk_prioritize", "desk_list"];
 			/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 			const tool =
-				<I>(run: (input: I, sessionID: string) => Effect.Effect<string, unknown>) =>
+				<I>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, unknown>) =>
 				(input: I, context: Tool.Context) =>
 					Effect.gen(function* () {
 						if (!(yield* on(context.sessionID))) return yield* Effect.fail(new Error("The desk is off for this session; the user turns it on with /desk-mode."));
@@ -167,7 +167,7 @@ export default Plugin.define({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
 						labels: Schema.optional(described(Schema.Array(Schema.String), "Short topic tags, e.g. glossary, review.")),
-						parent: Schema.optional(described(Schema.String, "The id of the entry this follows up on.")),
+						parent: Schema.optional(described(EntryId, "The id of the entry this follows up on.")),
 						priority: Schema.optional(
 							described(Priority, "critical (a decision blocking work right now, e.g. the disk is full), high, normal or low; the user sees higher priority first. Default: the parent's."),
 						),
@@ -185,30 +185,30 @@ export default Plugin.define({
 				editor.add({
 					name: "desk_adopt",
 					description: "File a top-level entry (one without a parent) under another entry, e.g. a PR's question asked before its review entry existed. Only once: an entry's parent never changes after that.",
-					input: Schema.Struct({ id: Schema.String, parent: described(Schema.String, "The entry to file it under; not inside the entry's own subtree.") }),
+					input: Schema.Struct({ id: EntryId, parent: described(EntryId, "The entry to file it under; not inside the entry's own subtree.") }),
 					options: { codemode: false },
-					execute: tool((input: { id: string; parent: string }) => service.request("adopt", input).pipe(Effect.as(`Filed ${input.id} under ${input.parent}.`))),
+					execute: tool((input: { id: EntryId; parent: EntryId }) => service.request("adopt", input).pipe(Effect.as(`Filed ${input.id} under ${input.parent}.`))),
 				});
 				editor.add({
 					name: "desk_answer",
 					description: "Answer a question the user asked on the desk. Markdown, as in desk_ask.",
-					input: Schema.Struct({ id: Schema.String, body: described(Schema.String, "The answer, in Markdown.") }),
+					input: Schema.Struct({ id: EntryId, body: described(Schema.String, "The answer, in Markdown.") }),
 					options: { codemode: false },
-					execute: tool((input: { id: string; body: string }) => service.request("answer", input).pipe(Effect.as(`Answered ${input.id}.`))),
+					execute: tool((input: { id: EntryId; body: string }) => service.request("answer", input).pipe(Effect.as(`Answered ${input.id}.`))),
 				});
 				editor.add({
 					name: "desk_resolve",
 					description: "Mark one of your own desk questions done, once its outcome is applied (glossary, ADR, issue, code). Refused while anything below it is unresolved (the error lists those ids): resolve or wait for them first. Resolved entries without open follow-ups leave the desk.",
-					input: Schema.Struct({ id: Schema.String }),
+					input: Schema.Struct({ id: EntryId }),
 					options: { codemode: false },
-					execute: tool((input: { id: string }) => service.request("resolve", input).pipe(Effect.as(`Resolved ${input.id}.`))),
+					execute: tool((input: { id: EntryId }) => service.request("resolve", input).pipe(Effect.as(`Resolved ${input.id}.`))),
 				});
 				editor.add({
 					name: "desk_prioritize",
 					description: "Change an entry's priority (critical, high, normal, low): the user sees higher priority first, e.g. bump a main PR's review thread. With subtree, the entry and everything below it.",
-					input: Schema.Struct({ id: Schema.String, priority: Priority, subtree: Schema.optional(Schema.Boolean) }),
+					input: Schema.Struct({ id: EntryId, priority: Priority, subtree: Schema.optional(Schema.Boolean) }),
 					options: { codemode: false },
-					execute: tool((input: { id: string; priority: Methods["prioritize"]["input"]["priority"]; subtree?: boolean | undefined }) =>
+					execute: tool((input: { id: EntryId; priority: Methods["prioritize"]["input"]["priority"]; subtree?: boolean | undefined }) =>
 						service
 							.request("prioritize", { id: input.id, priority: input.priority, subtree: input.subtree ?? false })
 							.pipe(Effect.as(`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`)),
@@ -217,9 +217,9 @@ export default Plugin.define({
 				editor.add({
 					name: "desk_list",
 					description: "Show this project's desk: every unresolved entry, one line each (id, title, [status, whose turn, priority, from the user]), or one entry in full when id is given (with the entries it hangs under and its follow-ups as one line each). Entry ids are full UUIDs; the user may paste one.",
-					input: Schema.Struct({ id: Schema.optional(Schema.String) }),
+					input: Schema.Struct({ id: Schema.optional(EntryId) }),
 					options: { codemode: false },
-					execute: tool((input: { id?: string | undefined }, sessionID) => Effect.flatMap(root(sessionID), (session) => service.request("list", { session, id: input.id }))),
+					execute: tool((input: { id?: EntryId | undefined }, sessionID) => Effect.flatMap(root(sessionID), (session) => service.request("list", { session, id: input.id }))),
 				});
 			});
 

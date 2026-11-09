@@ -2,12 +2,12 @@
  * What waits to reach the sessions: the entries carrying an outbox, as one message per outbox. Rebuilt from the
  * entries each time, so a retry sends the same text under the same message id.
  */
-import { attachmentsIn, type Delivery, type Entry } from "./entry";
+import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "./entry";
 
 export interface Message {
 	/** The OpenCode message id: OpenCode admits a message id once, however often it's sent. */
-	readonly id: string;
-	readonly session: string;
+	readonly id: MessageID;
+	readonly session: SessionID;
 	readonly delivery: Delivery;
 	readonly text: string;
 	/** Attachments by their path below the store, with the name the user gave them. */
@@ -15,7 +15,7 @@ export interface Message {
 }
 
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
-	const byOutbox = new Map<string, Array<Entry>>();
+	const byOutbox = new Map<MessageID, Array<Entry>>();
 	for (const entry of entries) if (entry.outbox !== null) byOutbox.set(entry.outbox, [...(byOutbox.get(entry.outbox) ?? []), entry]);
 	return [...byOutbox].map(([id, sent]) => {
 		const sections = sent.map((entry) =>

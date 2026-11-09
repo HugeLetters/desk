@@ -14,6 +14,8 @@ import * as Stream from "effect/Stream";
 import plugin from "../src/plugin/index";
 import { answering } from "../src/service/socket";
 import { eventually, rpc } from "./support/service";
+import type { EntryId } from "../src/entry";
+import { S, P } from "./support/ids";
 
 interface Session {
 	id: string;
@@ -36,7 +38,7 @@ function fakeContext(home: string, sessions: Array<Session>) {
 	const events = Effect.runSync(Queue.unbounded<Event>());
 	const ctx = {
 		options: { home, port: 0 },
-		location: { directory: "/work/phantom", project: { id: "prj_phantom", directory: "/work/phantom" } },
+		location: { directory: "/work/phantom", project: { id: P("prj_phantom"), directory: "/work/phantom" } },
 		storage: {
 			get: (key: string) => Effect.sync(() => storage.get(key)),
 			set: (key: string, value: unknown) => Effect.sync(() => void storage.set(key, value)),
@@ -84,9 +86,9 @@ async function load(context: ReturnType<typeof fakeContext>) {
 }
 
 const sessions: Array<Session> = [
-	{ id: "ses_main", projectID: "prj_phantom", location: { directory: "/work/phantom" } },
-	{ id: "ses_sub", parentID: "ses_main", projectID: "prj_phantom", location: { directory: "/work/phantom" } },
-	{ id: "ses_other", projectID: "prj_phantom", location: { directory: "/work/phantom" } },
+	{ id: S("ses_main"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
+	{ id: S("ses_sub"), parentID: S("ses_main"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
+	{ id: S("ses_other"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
 ];
 const desk = ["desk_adopt", "desk_answer", "desk_ask", "desk_list", "desk_prioritize", "desk_resolve"];
 
@@ -138,7 +140,7 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 
 test("the plugin is the service's way into its OpenCode: the user's reply goes out through it, and so do moves", async () => {
 	const asked = (await first.tool("desk_ask", "ses_main", { title: "Deliver me?", body: "Details." })).content;
-	const id = /Asked ([0-9a-f-]{36})/.exec(asked)![1]!;
+	const id = /Asked ([0-9a-f-]{36})/.exec(asked)![1]! as EntryId;
 	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
 	await rpc(page, (desk) => desk.send({ entry: id, text: "Yes, deliver.", files: [] }));
 	const prompt = await eventually(() => first.prompts.find((candidate) => candidate.text.includes("Yes, deliver.")));
@@ -148,10 +150,10 @@ test("the plugin is the service's way into its OpenCode: the user's reply goes o
 	const projects = async () => Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]!.projects.map((project) => project.id);
 	expect(await projects()).toEqual(["prj_phantom"]);
 	sessions[0]!.projectID = "prj_moved";
-	first.emit({ type: "session.moved", data: { sessionID: "ses_main" } });
+	first.emit({ type: "session.moved", data: { sessionID: S("ses_main") } });
 	await eventually(async () => (await projects()).includes("prj_moved"));
 	sessions[0]!.projectID = "prj_phantom";
-	first.emit({ type: "session.moved", data: { sessionID: "ses_main" } });
+	first.emit({ type: "session.moved", data: { sessionID: S("ses_main") } });
 });
 
 test("a second plugin instance (another OpenCode) shares the one service and the switch", async () => {

@@ -9,6 +9,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { count, type Status, watch } from "../src/badge";
 import { eventually, type Service, startService } from "./support/service";
+import { E, S } from "./support/ids";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
@@ -37,9 +38,9 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	await register(first);
 	// An OpenCode whose session ses_a is in desk mode (the test plugin reports every session its OpenCode knows).
 	const opencode = first.fake.server("http://opencode");
-	opencode.session({ id: "ses_a" });
+	opencode.session({ id: S("ses_a") });
 	const plugin = first.plugin(opencode);
-	const asked = { session: "ses_a", directory: "/work/a" };
+	const asked = { session: S("ses_a"), directory: "/work/a" };
 	await plugin.request("ask", { asker: asked, question: { title: "One?", body: "" } });
 	await plugin.request("ask", { asker: asked, question: { title: "Two?", body: "", priority: "critical" } });
 	const counted = await eventually(() => latest()?.projects.find((project) => project.waiting === 2));
@@ -58,7 +59,7 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
-	const summary = { id: "p", name: "p", guessed: false };
+	const summary = { id: E("p"), name: "p", guessed: false };
 	expect(count(undefined)).toBeUndefined();
 	expect(count({ ...summary, waiting: 0, critical: 0 })).toBeUndefined();
 	expect(count({ ...summary, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
