@@ -30,8 +30,8 @@ import { Clients } from "./clients";
 const callTimeout = "30 seconds";
 
 /**
- * Whether this service is the outdated side: the code on disk is no longer the code it loaded. The plugin always starts
- * the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
+ * Whether this service is the outdated side: the contract on disk is no longer the one it loaded. The plugin always
+ * starts the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
  */
 export const changedOnDisk = () => build() !== protocol;
 
@@ -51,6 +51,8 @@ const handlers = (outdated: () => boolean) =>
 			/** By RPC client id, while attached. */
 			const attachments = new Map<number, Attached>();
 			let lastCall = 0;
+			/** Looks the sessions up, so their projects are known and named (`Projects`). */
+			const learn = (sessions: ReadonlyArray<SessionID>, directory: string) => Effect.forEach(sessions, (session) => projects.of({ session, directory }), { discard: true });
 
 			const attach = (id: number, project: { readonly id: ProjectID; readonly directory: string }, sessions: ReadonlyArray<SessionID>) =>
 				Effect.gen(function* () {
@@ -87,6 +89,10 @@ const handlers = (outdated: () => boolean) =>
 					yield* opencode.attach(client);
 					yield* opencode.modes(client, sessions);
 					yield* projects.remember(project.id, project.directory);
+					// Where its sessions in desk mode are, and so their projects' names, even with nothing on the desk yet: a
+					// session can belong to another project than the location (an older id of the same repository, say). In
+					// the background: the lookups go out on the stream this returns.
+					yield* Effect.forkScoped(learn(sessions, project.directory));
 					yield* Effect.logInfo(`desk: a plugin attached in ${project.directory} (project ${project.id}), ${sessions.length} in desk mode`);
 					return Stream.fromQueue(calls);
 				});
@@ -112,7 +118,7 @@ const handlers = (outdated: () => boolean) =>
 					}).pipe(Effect.asVoid),
 				modes: ({ sessions }, { client }) => {
 					const attached = attachments.get(client.id);
-					return attached ? opencode.modes(attached.client, sessions) : Effect.void;
+					return attached ? Effect.andThen(opencode.modes(attached.client, sessions), Effect.forkDetach(learn(sessions, ""))) : Effect.void;
 				},
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,

@@ -82,26 +82,24 @@ export const PluginApi = RpcGroup.make(
 	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
 );
 
-/** The code a build id covers: everything under `src/`, and the dependencies' versions. */
-const sources = () => {
-	const root = new URL("..", import.meta.url).pathname;
-	return [...new Bun.Glob("src/**/*.{ts,tsx}").scanSync({ cwd: root }), "bun.lock"].sort().map((file) => `${root}${file}`);
-};
-
 /**
- * A build id: a hash of the code's contents (`sources`), as it's on disk now. Nothing is bumped by hand, and any
- * change, of the contract or of what either side does with it, makes another.
+ * The contract's code: this file, what it imports from the desk, and the dependencies' versions (`bun.lock`, for the
+ * OpenCode schemas). Only these: a change to either side's own code doesn't make the other side outdated, so the
+ * service can be restarted on its own, and the plugin reloaded on its own.
  */
+const contract = ["src/protocol.ts", "src/entry.ts", "src/errors.ts", "bun.lock"].map((file) => new URL(`../${file}`, import.meta.url).pathname);
+
+/** The contract's version as it's on disk now: a hash of its code. Nothing is bumped by hand. */
 export const build = () =>
 	Bun.hash(
-		sources()
+		contract
 			.map((file) => `${file}\0${readFileSync(file, "utf8")}`)
 			.join("\0"),
 	).toString(36);
 
 /**
- * The version this side speaks: the build id of the code it loaded. Plugin and service compare it on `hello`. A hash
- * can't say which side is older; the service decides (`socket.ts`).
+ * The version this side speaks: the contract's code it loaded. Plugin and service compare it on `hello`. A hash can't
+ * say which side is older; the service decides (`socket.ts`).
  */
 export const protocol = build();
 

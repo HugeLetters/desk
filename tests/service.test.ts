@@ -320,6 +320,14 @@ describe("projects", () => {
 		expect((await view("prj_phantom")).project).toEqual({ id: P("prj_phantom"), name: "phantom", placement: { _tag: "Project", id: P("prj_phantom") } });
 	});
 
+	test("a project is named from its sessions in desk mode, even with nothing on the desk, when the location reports another id", async () => {
+		const server = service.fake.server("http://opencode-1");
+		// The session kept the repository's older project id; the plugin's location has the new one.
+		server.session({ id: S("ses_p"), projectID: P("prj_old"), directory: "/work/desk" });
+		service.plugin(server, { id: P("prj_new"), directory: "/work/desk" });
+		await eventually(async () => (await view("prj_old")).project?.name === "desk");
+	});
+
 	test("without a project, the page lists the projects only", async () => {
 		await service.plugin().request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Somewhere?") });
 		const all = await view();
