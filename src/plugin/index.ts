@@ -12,10 +12,9 @@
  * `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one when it's taken)
  * and `timeout` (how long a desk call may take before the agent is told the service seems stuck; default 30 seconds).
  */
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
+import { flow } from "effect";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -23,6 +22,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { EntryId, Priority, SessionID } from "../entry";
 import { Refusal } from "../errors";
 import type { Question } from "../protocol";
@@ -37,13 +38,16 @@ const described = <S extends Schema.Top>(schema: S, description: string) => sche
 const isRefusal = Schema.is(Refusal);
 
 /** Whether `error` is OpenCode saying it doesn't know the session. */
-const notFound = (error: unknown) => typeof error === "object" && error !== null && "_tag" in error && error._tag === "SessionNotFoundError";
+const notFound = (error: unknown) =>
+	typeof error === "object" && error !== null && "_tag" in error && error._tag === "SessionNotFoundError";
 
 export default Plugin.define({
 	id: "desk",
 	effect: (ctx) =>
 		Effect.gen(function* () {
-			const home = String(ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(/^~(?=\/|$)/, homedir());
+			const home = String(
+				ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk"),
+			).replace(/^~(?=\/|$)/, homedir());
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
 			const timeout = Duration.fromInputUnsafe(ctx.options.timeout ?? "30 seconds");
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
@@ -57,7 +61,9 @@ export default Plugin.define({
 				}
 				const where = yield* Effect.forEach(sessions, (id) =>
 					ctx.session.get({ sessionID: id }).pipe(
-						Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
+						Effect.map((session) =>
+							session.location.directory === ctx.location.directory ? "here" : "elsewhere",
+						),
 						Effect.catchIf(notFound, () => Effect.succeed("gone" as const)),
 						Effect.orElseSucceed(() => "elsewhere" as const),
 					),
@@ -76,12 +82,25 @@ export default Plugin.define({
 				serve: {
 					session: (sessionID) =>
 						ctx.session.get({ sessionID }).pipe(
-							Effect.map((session) => ({ id: session.id, parentID: session.parentID ?? undefined, projectID: session.projectID, directory: session.location.directory })),
+							Effect.map((session) => ({
+								id: session.id,
+								parentID: session.parentID ?? undefined,
+								projectID: session.projectID,
+								directory: session.location.directory,
+							})),
 							// Not this OpenCode's session; anything else is an error the service retries.
 							Effect.catchIf(notFound, () => Effect.succeed(null)),
 						),
 					prompt: ({ sessionID, id, text, delivery, files }) =>
-						Effect.asVoid(ctx.session.prompt({ sessionID, id, text, delivery, files: files.map((file) => ({ uri: file.uri, name: file.name })) })),
+						Effect.asVoid(
+							ctx.session.prompt({
+								sessionID,
+								id,
+								text,
+								delivery,
+								files: files.map((file) => ({ uri: file.uri, name: file.name })),
+							}),
+						),
 				},
 			};
 
@@ -100,7 +119,10 @@ export default Plugin.define({
 					if (mine.length === 0) {
 						if (held) yield* Scope.close(held.scope, Exit.void);
 						held = undefined;
-					} else if (held) yield* Effect.ignore(Effect.flatMap(held.connection.client, (client) => client.modes({ sessions: mine })));
+					} else if (held)
+						yield* Effect.ignore(
+							Effect.flatMap(held.connection.client, (client) => client.modes({ sessions: mine })),
+						);
 					else {
 						const scope = yield* Scope.fork(pluginScope);
 						held = { scope, connection: yield* Scope.provide(Connection.make(options), scope) };
@@ -111,12 +133,23 @@ export default Plugin.define({
 			/** Runs `f` against the service, while this instance is connected. */
 			const service = <A, E>(f: (client: Connection.Client) => Effect.Effect<A, E>) =>
 				Effect.suspend(() =>
-					held ? Effect.flatMap(held.connection.client, f) : Effect.fail(new Connection.DeskError({ message: "Desk mode is off in this directory; the user turns it on with /desk-mode." })),
+					held
+						? Effect.flatMap(held.connection.client, f)
+						: Effect.fail(
+								new Connection.DeskError({
+									message: "Desk mode is off in this directory; the user turns it on with /desk-mode.",
+								}),
+							),
 				);
 			// The service's project cache drops a session that moves, so its entries follow it.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				// A session moving in or out of this directory may connect or hang up this instance, too.
-				Stream.runForEach((event) => Effect.andThen(Effect.ignore(service((client) => client.moved({ session: event.data.sessionID }))), sync)),
+				Stream.runForEach((event) =>
+					Effect.andThen(
+						Effect.ignore(service((client) => client.moved({ session: event.data.sessionID }))),
+						sync,
+					),
+				),
 				Effect.ignore,
 				Effect.forkScoped,
 			);
@@ -127,12 +160,19 @@ export default Plugin.define({
 				const known = roots.get(sessionID);
 				if (known) return Effect.succeed(known);
 				return ctx.session.get({ sessionID }).pipe(
-					Effect.flatMap((session) => (session.parentID ? root(session.parentID) : Effect.succeed(session.id))),
+					Effect.flatMap((session) =>
+						session.parentID ? root(session.parentID) : Effect.succeed(session.id),
+					),
 					Effect.tap((found) => Effect.sync(() => roots.set(sessionID, found))),
 				);
 			};
 			const key = (rootID: SessionID) => `on/${rootID}`;
-			const on = (sessionID: SessionID) => Effect.flatMap(root(sessionID), (rootID) => Effect.map(ctx.storage.get(key(rootID)), (value) => value === true));
+			const on = flow(
+				root,
+				Effect.map(key),
+				Effect.flatMap(ctx.storage.get),
+				Effect.map((value) => value === true),
+			);
 
 			/**
 			 * A desk call takes milliseconds; one still running after `timeout` means the service is stuck, and the agent
@@ -141,7 +181,12 @@ export default Plugin.define({
 			const within = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
 				Effect.timeoutOrElse(effect, {
 					duration: timeout,
-					orElse: () => Effect.fail(new Error(`The desk service didn't answer within ${Duration.format(timeout)}; it may be stuck. The user can restart it: kill the pid in ${join(home, "service.json")}.`)),
+					orElse: () =>
+						Effect.fail(
+							new Error(
+								`The desk service didn't answer within ${Duration.format(timeout)}; it may be stuck. The user can restart it: kill the pid in ${join(home, "service.json")}.`,
+							),
+						),
 				});
 
 			const names = ["desk_ask", "desk_adopt", "desk_answer", "desk_resolve", "desk_prioritize", "desk_list"];
@@ -150,14 +195,27 @@ export default Plugin.define({
 				<I>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, unknown>) =>
 				(input: I, context: Tool.Context) =>
 					Effect.gen(function* () {
-						if (!(yield* on(context.sessionID))) return yield* Effect.fail(new Error("The desk is off for this session; the user turns it on with /desk-mode."));
+						if (!(yield* on(context.sessionID)))
+							return yield* Effect.fail(
+								new Error("The desk is off for this session; the user turns it on with /desk-mode."),
+							);
 						return { content: yield* run(input, context.sessionID) };
-					}).pipe(within, Effect.mapError((error) => (error instanceof Tool.Error ? error : new Tool.Error({ message: isRefusal(error) ? refusal(error) : Connection.errorMessage(error) }))));
+					}).pipe(
+						within,
+						Effect.mapError((error) =>
+							error instanceof Tool.Error
+								? error
+								: new Tool.Error({
+										message: isRefusal(error) ? refusal(error) : Connection.errorMessage(error),
+									}),
+						),
+					);
 
 			yield* ctx.command.transform((editor) => {
 				editor.add({
 					name: "desk-mode",
-					description: "Turn desk mode on or off for this session: agents ask you questions on the desk instead of in chat",
+					description:
+						"Turn desk mode on or off for this session: agents ask you questions on the desk instead of in chat",
 					execute: ({ sessionID }) =>
 						Effect.gen(function* () {
 							const rootID = yield* root(sessionID);
@@ -165,7 +223,9 @@ export default Plugin.define({
 							if (now) yield* ctx.storage.set(key(rootID), true);
 							else yield* ctx.storage.remove(key(rootID));
 							yield* sync;
-							const url = now ? (yield* service((client) => client.page({ session: rootID }))).url : undefined;
+							const url = now
+								? (yield* service((client) => client.page({ session: rootID }))).url
+								: undefined;
 							const text = url
 								? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
 								: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
@@ -183,69 +243,110 @@ export default Plugin.define({
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
-						labels: Schema.optional(described(Schema.Array(Schema.String), "Short topic tags, e.g. glossary, review.")),
+						labels: Schema.optional(
+							described(Schema.Array(Schema.String), "Short topic tags, e.g. glossary, review."),
+						),
 						parent: Schema.optional(described(EntryId, "The id of the entry this follows up on.")),
 						priority: Schema.optional(
-							described(Priority, "critical (a decision blocking work right now, e.g. the disk is full), high, normal or low; the user sees higher priority first. Default: the parent's."),
+							described(
+								Priority,
+								"critical (a decision blocking work right now, e.g. the disk is full), high, normal or low; the user sees higher priority first. Default: the parent's.",
+							),
 						),
 					}),
 					options: { codemode: false },
 					execute: tool((question: Question, sessionID) =>
 						Effect.gen(function* () {
 							const session = yield* ctx.session.get({ sessionID: (yield* root(sessionID)) as never });
-							const asked = yield* service((client) => client.ask({ asker: { session: session.id, directory: session.location.directory }, question }));
-							const where = asked.parent === null ? "top-level" : `under ${asked.parent}${question.parent === undefined ? " (the PR's review entry)" : ""}`;
+							const asked = yield* service((client) =>
+								client.ask({
+									asker: { session: session.id, directory: session.location.directory },
+									question,
+								}),
+							);
+							const where =
+								asked.parent === null
+									? "top-level"
+									: `under ${asked.parent}${question.parent === undefined ? " (the PR's review entry)" : ""}`;
 							return `Asked ${asked.id}, ${where}.`;
 						}),
 					),
 				});
 				editor.add({
 					name: "desk_adopt",
-					description: "File a top-level entry (one without a parent) under another entry, e.g. a PR's question asked before its review entry existed. Only once: an entry's parent never changes after that.",
-					input: Schema.Struct({ id: EntryId, parent: described(EntryId, "The entry to file it under; not inside the entry's own subtree.") }),
+					description:
+						"File a top-level entry (one without a parent) under another entry, e.g. a PR's question asked before its review entry existed. Only once: an entry's parent never changes after that.",
+					input: Schema.Struct({
+						id: EntryId,
+						parent: described(EntryId, "The entry to file it under; not inside the entry's own subtree."),
+					}),
 					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
 					options: { codemode: true },
-					execute: tool((input: { id: EntryId; parent: EntryId }) => service((client) => client.adopt(input)).pipe(Effect.as(`Filed ${input.id} under ${input.parent}.`))),
+					execute: tool((input: { id: EntryId; parent: EntryId }) =>
+						service((client) => client.adopt(input)).pipe(
+							Effect.as(`Filed ${input.id} under ${input.parent}.`),
+						),
+					),
 				});
 				editor.add({
 					name: "desk_answer",
 					description: "Answer a question the user asked on the desk. Markdown, as in desk_ask.",
 					input: Schema.Struct({ id: EntryId, body: described(Schema.String, "The answer, in Markdown.") }),
 					options: { codemode: false },
-					execute: tool((input: { id: EntryId; body: string }) => service((client) => client.answer(input)).pipe(Effect.as(`Answered ${input.id}.`))),
+					execute: tool((input: { id: EntryId; body: string }) =>
+						service((client) => client.answer(input)).pipe(Effect.as(`Answered ${input.id}.`)),
+					),
 				});
 				editor.add({
 					name: "desk_resolve",
-					description: "Mark one of your own desk questions done, once its outcome is applied (glossary, ADR, issue, code). Refused while anything below it is unresolved (the error lists those ids): resolve or wait for them first. Resolved entries without open follow-ups leave the desk.",
+					description:
+						"Mark one of your own desk questions done, once its outcome is applied (glossary, ADR, issue, code). Refused while anything below it is unresolved (the error lists those ids): resolve or wait for them first. Resolved entries without open follow-ups leave the desk.",
 					input: Schema.Struct({ id: EntryId }),
 					options: { codemode: false },
-					execute: tool((input: { id: EntryId }) => service((client) => client.resolve(input)).pipe(Effect.as(`Resolved ${input.id}.`))),
+					execute: tool((input: { id: EntryId }) =>
+						service((client) => client.resolve(input)).pipe(Effect.as(`Resolved ${input.id}.`)),
+					),
 				});
 				editor.add({
 					name: "desk_prioritize",
-					description: "Change an entry's priority (critical, high, normal, low): the user sees higher priority first, e.g. bump a main PR's review thread. With subtree, the entry and everything below it.",
+					description:
+						"Change an entry's priority (critical, high, normal, low): the user sees higher priority first, e.g. bump a main PR's review thread. With subtree, the entry and everything below it.",
 					input: Schema.Struct({ id: EntryId, priority: Priority, subtree: Schema.optional(Schema.Boolean) }),
 					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
 					options: { codemode: true },
 					execute: tool((input: { id: EntryId; priority: Priority; subtree?: boolean | undefined }) =>
-						service((client) => client.prioritize({ id: input.id, priority: input.priority, subtree: input.subtree ?? false })).pipe(Effect.as(`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`)),
+						service((client) =>
+							client.prioritize({ id: input.id, priority: input.priority, subtree: input.subtree ?? false }),
+						).pipe(
+							Effect.as(
+								`Set ${input.id} to ${input.priority}${input.subtree ? " (with everything below it)" : ""}.`,
+							),
+						),
 					),
 				});
 				editor.add({
 					name: "desk_list",
-					description: "Show this project's desk: every unresolved entry, one line each (id, title, [status, whose turn, priority, from the user]), or one entry in full when id is given (with the entries it hangs under and its follow-ups as one line each). Entry ids are full UUIDs; the user may paste one.",
+					description:
+						"Show this project's desk: every unresolved entry, one line each (id, title, [status, whose turn, priority, from the user]), or one entry in full when id is given (with the entries it hangs under and its follow-ups as one line each). Entry ids are full UUIDs; the user may paste one.",
 					input: Schema.Struct({ id: Schema.optional(EntryId) }),
 					options: { codemode: false },
-					execute: tool((input: { id?: EntryId | undefined }, sessionID) => Effect.flatMap(root(sessionID), (session) => service((client) => client.list({ session, id: input.id })))),
+					execute: tool((input: { id?: EntryId | undefined }, sessionID) =>
+						Effect.flatMap(root(sessionID), (session) =>
+							service((client) => client.list({ session, id: input.id })),
+						),
+					),
 				});
 			});
 
 			// Sessions with the desk off don't see the tools at all.
 			yield* ctx.session.hook("context", (event) =>
-				Effect.map(Effect.orElseSucceed(on(event.sessionID), () => false), (desk) => {
-					if (desk) return;
-					for (const name of names) delete event.tools[name];
-				}),
+				Effect.map(
+					Effect.orElseSucceed(on(event.sessionID), () => false),
+					(desk) => {
+						if (desk) return;
+						for (const name of names) delete event.tools[name];
+					},
+				),
 			);
 		}),
 });

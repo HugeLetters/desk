@@ -16,14 +16,18 @@ import { createSignal, Show } from "solid-js";
 import { count, type Status, watch } from "./badge";
 
 /** Opens a URL in the browser; DESK_OPENER replaces `open` for tests. */
-const open = (url: string) => Bun.spawn([process.env.DESK_OPENER ?? "open", url], { stdout: "ignore", stderr: "ignore" });
+const open = (url: string) =>
+	Bun.spawn([process.env.DESK_OPENER ?? "open", url], { stdout: "ignore", stderr: "ignore" });
 
 function Badge(props: { context: Context; status: Status | undefined; sessionID: string | undefined }) {
 	const context = props.context;
 	const [hovered, setHovered] = createSignal(false);
 	/** Shown only in a session with desk mode on (a subagent follows its top-level session). */
-	const on = () => props.sessionID !== undefined && (props.status?.deskMode.includes(context.data.session.root(props.sessionID) ?? props.sessionID) ?? false);
-	const projectID = () => (props.sessionID === undefined ? undefined : context.data.session.get(props.sessionID)?.projectID);
+	const on = () =>
+		props.sessionID !== undefined &&
+		(props.status?.deskMode.includes(context.data.session.root(props.sessionID) ?? props.sessionID) ?? false);
+	const projectID = () =>
+		props.sessionID === undefined ? undefined : context.data.session.get(props.sessionID)?.projectID;
 	const waiting = () => count(props.status?.projects.find((summary) => summary.id === projectID()));
 	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.
 	return (
@@ -62,12 +66,22 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 export default Plugin.define({
 	id: "desk",
 	setup(context) {
-		const home = String(context.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(/^~(?=\/|$)/, homedir());
+		const home = String(
+			context.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk"),
+		).replace(/^~(?=\/|$)/, homedir());
 		const [status, setStatus] = createSignal<Status>();
-		const watching = Effect.runFork(Stream.runForEach(watch(home), (next) => Effect.sync(() => setStatus(next))));
+		const watching = Effect.runFork(
+			Stream.runForEach(watch(home), (next) => Effect.sync(() => setStatus(next))),
+		);
 		const unslot = context.ui.slot({
 			append: "prompt.footer.status",
-			render: (slot) => <Badge context={context} status={status()} sessionID={slot.sessionID} />,
+			render: (slot) => (
+				<Badge
+					context={context}
+					status={status()}
+					sessionID={slot.sessionID}
+				/>
+			),
 		});
 		return () => {
 			unslot();
