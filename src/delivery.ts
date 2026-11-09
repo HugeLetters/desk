@@ -33,10 +33,12 @@ export class Failures extends Context.Service<
 		readonly current: Effect.Effect<ReadonlyMap<MessageID, DeliveryFailed>>;
 		readonly changes: Stream.Stream<ReadonlyMap<MessageID, DeliveryFailed>>;
 		readonly set: (outbox: MessageID, reason: DeliveryFailed | undefined) => Effect.Effect<void>;
+		/** Forgets the failures of every message but these. */
+		readonly retain: (outboxes: ReadonlySet<MessageID>) => Effect.Effect<void>;
 	}
 >()("desk/Failures") {
 	static readonly layer = Layer.effect(
-		this,
+		Failures,
 		Effect.gen(function* () {
 			const failures = yield* SubscriptionRef.make<ReadonlyMap<MessageID, DeliveryFailed>>(new Map());
 			return Failures.of({
@@ -50,6 +52,12 @@ export class Failures extends Context.Service<
 						else next.set(outbox, reason);
 						return next;
 					}),
+				retain: (outboxes) =>
+					SubscriptionRef.update(failures, (all) =>
+						[...all.keys()].every((outbox) => outboxes.has(outbox))
+							? all
+							: new Map([...all].filter(([outbox]) => outboxes.has(outbox))),
+					),
 			});
 		}),
 	);
@@ -93,8 +101,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 					{ concurrency: "unbounded", discard: true },
 				);
 				// Messages that left the outbox (delivered, or their entry went) have nothing to report.
-				for (const outbox of (yield* failures.current).keys())
-					if (!pending.some((message) => message.id === outbox)) yield* failures.set(outbox, undefined);
+				yield* failures.retain(new Set(pending.map((message) => message.id)));
 			});
 
 			// One flush at a time; triggers that pile up meanwhile only need one more.
