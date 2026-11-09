@@ -28,7 +28,7 @@ type Event = { type: string; data: { sessionID: string } };
 type Run<A = unknown> = Effect.Effect<A, unknown>;
 
 /** The parts of the plugin context the desk uses, recording what the plugin registers and says. */
-function fakeContext(home: string, sessions: Array<Session>) {
+function fakeContext(home: string, sessions: Array<Session>, options: Record<string, unknown> = {}) {
 	const tools = new Map<string, { execute: (input: unknown, context: { sessionID: string }) => Run<{ content: string }> }>();
 	const commands = new Map<string, { execute: (input: { sessionID: string }) => Run<void> }>();
 	const hooks: Array<(event: { sessionID: string; tools: Record<string, unknown> }) => Run<void>> = [];
@@ -37,7 +37,7 @@ function fakeContext(home: string, sessions: Array<Session>) {
 	const prompts: Array<{ sessionID: string; id: string; text: string }> = [];
 	const events = Effect.runSync(Queue.unbounded<Event>());
 	const ctx = {
-		options: { home, port: 0 },
+		options: { home, port: 0, ...options },
 		location: { directory: "/work/phantom", project: { id: P("prj_phantom"), directory: "/work/phantom" } },
 		storage: {
 			get: (key: string) => Effect.sync(() => storage.get(key)),
@@ -190,4 +190,21 @@ test("the service exits once every plugin instance has gone", async () => {
 	await Bun.sleep(100);
 	expect(await answering(join(home, "desk.sock"))).toBe(false);
 	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(2);
+});
+
+test("a stuck service: /desk-mode and the tools fail after the timeout instead of waiting for good", async () => {
+	const stuck = await mkdtemp(join(tmpdir(), "desk-stuck-"));
+	// Takes connections, never answers.
+	const listener = Bun.listen({ unix: join(stuck, "desk.sock"), socket: { data() {} } });
+	const context = fakeContext(stuck, sessions, { timeout: "300 millis" });
+	const unload = await load(context);
+	try {
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow("didn't answer within");
+		context.storage.set("on/ses_main", true);
+		await expect(context.tool("desk_list", "ses_main", {})).rejects.toThrow("didn't answer within");
+	} finally {
+		await unload();
+		listener.stop(true);
+		await rm(stuck, { recursive: true, force: true });
+	}
 });

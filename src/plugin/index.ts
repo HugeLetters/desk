@@ -9,12 +9,14 @@
  * when the service asks, and tells the service about sessions that move.
  *
  * Options (`opencode.json` `plugins: [{ package, options }]`): `home` (the store, default `$DESK_HOME` or
- * `~/.local/share/desk`) and `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one when it's taken).
+ * `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one when it's taken)
+ * and `timeout` (how long a desk call may take before the agent is told the service seems stuck; default 30 seconds).
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -39,6 +41,7 @@ export default Plugin.define({
 		Effect.gen(function* () {
 			const home = String(ctx.options.home ?? process.env.DESK_HOME ?? join(homedir(), ".local/share/desk")).replace(/^~(?=\/|$)/, homedir());
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
+			const timeout = Duration.fromInputUnsafe(ctx.options.timeout ?? "30 seconds");
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
 				const sessions: Array<SessionID> = [];
@@ -127,6 +130,16 @@ export default Plugin.define({
 			const key = (rootID: SessionID) => `on/${rootID}`;
 			const on = (sessionID: SessionID) => Effect.flatMap(root(sessionID), (rootID) => Effect.map(ctx.storage.get(key(rootID)), (value) => value === true));
 
+			/**
+			 * A desk call takes milliseconds; one still running after `timeout` means the service is stuck, and the agent
+			 * (or the user, for /desk-mode) hears so instead of waiting for good.
+			 */
+			const within = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+				Effect.timeoutOrElse(effect, {
+					duration: timeout,
+					orElse: () => Effect.fail(new Error(`The desk service didn't answer within ${Duration.format(timeout)}; it may be stuck. The user can restart it: kill the pid in ${join(home, "service.json")}.`)),
+				});
+
 			const names = ["desk_ask", "desk_adopt", "desk_answer", "desk_resolve", "desk_prioritize", "desk_list"];
 			/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 			const tool =
@@ -135,7 +148,7 @@ export default Plugin.define({
 					Effect.gen(function* () {
 						if (!(yield* on(context.sessionID))) return yield* Effect.fail(new Error("The desk is off for this session; the user turns it on with /desk-mode."));
 						return { content: yield* run(input, context.sessionID) };
-					}).pipe(Effect.mapError((error) => (error instanceof Tool.Error ? error : new Tool.Error({ message: Connection.errorMessage(error) }))));
+					}).pipe(within, Effect.mapError((error) => (error instanceof Tool.Error ? error : new Tool.Error({ message: Connection.errorMessage(error) }))));
 
 			yield* ctx.command.transform((editor) => {
 				editor.add({
@@ -155,7 +168,7 @@ export default Plugin.define({
 							// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
 							const description = url ? `Desk mode on: ${url}` : "Desk mode off";
 							yield* ctx.session.synthetic({ sessionID, text, description, resume: false });
-						}),
+						}).pipe(within),
 				});
 			});
 

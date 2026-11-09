@@ -7,7 +7,7 @@
  * goes when the service stops. A port, configured or not, doesn't decide anything: the page takes whichever port it
  * can and writes it here.
  */
-import { closeSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
+import { linkSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -60,12 +60,15 @@ export class Registration extends Context.Service<
 	static layer(store: string) {
 		const path = join(store, "service.json");
 		const own: Info = { pid: process.pid, protocol };
+		// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
+		// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
 		const create = () => {
-			const fd = openSync(path, "wx");
+			const temp = `${path}.${process.pid}.new`;
+			writeFileSync(temp, JSON.stringify(own));
 			try {
-				writeSync(fd, JSON.stringify(own));
+				linkSync(temp, path);
 			} finally {
-				closeSync(fd);
+				rmSync(temp, { force: true });
 			}
 		};
 		const acquire = Effect.try({
