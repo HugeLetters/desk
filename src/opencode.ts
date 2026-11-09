@@ -8,6 +8,7 @@
  * OpenCode that knows it is connected. Tests attach fakes.
  */
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
@@ -20,11 +21,14 @@ import type { Prompt, SessionInfo } from "./protocol";
 
 export type { Prompt, SessionInfo };
 
+/** The plugin instance couldn't do what was asked (OpenCode said no, or the plugin didn't answer): what was said. */
+export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly cause: string }> {}
+
 /** One connected plugin instance, acting in its OpenCode. */
 export interface Client {
-	/** The session, or undefined when this OpenCode doesn't know it. Rejects when the plugin can't answer. */
-	readonly session: (sessionID: SessionID) => Promise<SessionInfo | undefined>;
-	readonly prompt: (prompt: Prompt) => Promise<void>;
+	/** The session, or undefined when this OpenCode doesn't know it. */
+	readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined, Unanswered>;
+	readonly prompt: (prompt: Prompt) => Effect.Effect<void, Unanswered>;
 }
 
 export class OpenCode extends Context.Service<
@@ -66,10 +70,11 @@ export class OpenCode extends Context.Service<
 					Effect.andThen(SubscriptionRef.set(attached, clients.length), SubscriptionRef.set(deskMode, [...new Set([...modes.values()].flat())].sort())),
 				);
 
+				/** The first attached client that knows the session. One that can't answer is skipped. */
 				const find = (sessionID: SessionID) =>
-					Effect.promise(async () => {
+					Effect.gen(function* () {
 						for (const client of [...clients]) {
-							const session = await client.session(sessionID).catch(() => undefined);
+							const session = yield* Effect.orElseSucceed(client.session(sessionID), () => undefined);
 							if (session) return { client, session };
 						}
 						return undefined;
@@ -103,7 +108,10 @@ export class OpenCode extends Context.Service<
 					prompt: (prompt) =>
 						Effect.flatMap(find(prompt.sessionID), (found) =>
 							found
-								? Effect.tryPromise({ try: () => found.client.prompt(prompt), catch: (cause) => new DeliveryFailed({ session: prompt.sessionID, cause: cause instanceof Error ? cause.message : String(cause) }) }).pipe(Effect.as(true))
+								? found.client.prompt(prompt).pipe(
+										Effect.mapError(({ cause }) => new DeliveryFailed({ session: prompt.sessionID, cause })),
+										Effect.as(true),
+									)
 								: Effect.succeed(false),
 						),
 					move: (sessionID) => Effect.asVoid(PubSub.publish(moved, sessionID)),

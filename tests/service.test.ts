@@ -15,7 +15,15 @@ import * as Stream from "effect/Stream";
 import { type EntryId, parse } from "../src/entry";
 import type { View } from "../src/page-api";
 import { folder } from "../src/projects";
-import { protocol } from "../src/protocol";
+import { Outdated, protocol } from "../src/protocol";
+import { Refusal } from "../src/errors";
+import * as BunSocket from "@effect/platform-bun/BunSocket";
+import * as Schema from "effect/Schema";
+import * as Rpc from "effect/rpc/Rpc";
+import * as RpcClient from "effect/rpc/RpcClient";
+import type { RpcClientError } from "effect/rpc/RpcClientError";
+import * as RpcGroup from "effect/rpc/RpcGroup";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as App from "../src/service/app";
 import { changedSinceStart } from "../src/service/socket";
 import { expectBuiltPage } from "./support/page";
@@ -62,8 +70,8 @@ describe("entries", () => {
 		expect(child.parent).toBe(root.id);
 		await expect(plugin.request("answer", { id: root.id, body: "x" })).rejects.toThrow("the user answers it");
 		await expect(plugin.request("resolve", { id: root.id })).rejects.toThrow(`1 open below it, so it can't be resolved yet: ${child.id}`);
-		// An id that isn't one is refused where it comes in; a well-formed one the desk doesn't have, by the desk.
-		await expect(plugin.request("ask", { asker, question: question("Orphan", { parent: E("missing") }) })).rejects.toThrow("Expected a UUID");
+		// An id that isn't one doesn't even leave (the contract is checked on both sides); a well-formed one the desk doesn't have is refused by the desk.
+		await expect(plugin.request("ask", { asker, question: question("Orphan", { parent: E("missing") }) })).rejects.toThrow("Schema validation failed");
 		const missing = E(crypto.randomUUID());
 		await expect(plugin.request("ask", { asker, question: question("Orphan", { parent: missing }) })).rejects.toThrow(`No desk entry ${missing}`);
 		await plugin.request("resolve", { id: child.id });
@@ -376,27 +384,20 @@ describe("the service's life", () => {
 		expect(changedSinceStart(0)()).toBe(true);
 	});
 
-	test("requests are checked against the protocol: a malformed one is refused, saying what's wrong", async () => {
-		const raw = connectRaw(service.socket);
-		expect(await raw.hello(protocol)).toMatchObject({ output: { url: service.url } });
-		expect(await raw.send("ask", { asker: { session: S("ses_a") }, question: { title: "No body" } })).toMatchObject({ error: expect.stringContaining("ask: input doesn't match the desk protocol") });
-		expect(await raw.send("prioritize", { id: E("x"), priority: "urgent", subtree: false })).toMatchObject({ error: expect.stringContaining("prioritize: input") });
-		expect(await raw.send("bogus", {})).toMatchObject({ error: expect.stringContaining("Unknown method bogus") });
+	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {
+		await expect(loose(service.socket, (client) => client.ask({ asker: { session: S("ses_a") }, question: { title: "No body" } }))).rejects.toThrow();
+		await expect(loose(service.socket, (client) => client.prioritize({ id: E("x"), priority: "urgent", subtree: false }))).rejects.toThrow();
 		expect(await entryFiles()).toEqual([]);
-		raw.close();
 	});
 
-	test("a plugin speaking another protocol: told to reload while the service is current; once the contract changed on disk, the service retires", async () => {
+	test("a plugin speaking another protocol: told it's the outdated side while the service is current; once the contract changed on disk, the service is, and retires", async () => {
 		await service.close();
 		let changed = false;
 		service = await startService({ outdated: () => changed });
-		const older = connectRaw(service.socket);
-		expect(await older.hello("2.old")).toMatchObject({ error: expect.stringContaining("/reload") });
-		older.close();
+		expect(await loose(service.socket, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
+		await expect(loose(service.socket, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({ _tag: "Outdated", side: "plugin" });
 		changed = true;
-		const newer = connectRaw(service.socket);
-		expect(await newer.hello("4.new")).toMatchObject({ error: expect.stringContaining("making way") });
-		newer.close();
+		await expect(loose(service.socket, (client) => client.hello({ protocol: "5.new" }))).rejects.toMatchObject({ _tag: "Outdated", side: "service" });
 		const { Clients } = await import("../src/service/clients");
 		await Effect.runPromise(Effect.provideContext(Clients.use((clients) => clients.idle), service.services as never).pipe(Effect.timeout("2 seconds")));
 	});
@@ -406,7 +407,7 @@ describe("the service's life", () => {
 		service = await startService({ idle: 150 });
 		const plugin = service.plugin();
 		await plugin.url();
-		expect(await service.clients()).toBe(1);
+		await eventually(async () => (await service.clients()) === 1);
 		const page = service.rpc((client) => client.view({}).pipe(Stream.take(1), Stream.runDrain));
 		await page;
 		await plugin.close();
@@ -416,29 +417,19 @@ describe("the service's life", () => {
 	});
 });
 
-/** A bare socket connection that says `hello` with any protocol version, for what the plugin itself never sends. */
-function connectRaw(path: string) {
-	let socket: Bun.Socket<undefined> | undefined;
-	let received: (line: unknown) => void = () => {};
-	const opened = Bun.connect({
-		unix: path,
-		socket: {
-			data(_socket, chunk) {
-				received(JSON.parse(chunk.toString().split("\n")[0]!));
-			},
-		},
-	}).then((connected) => (socket = connected));
-	let id = 0;
-	const send = async (method: string, input: unknown) => {
-		await opened;
-		const reply = new Promise((resolve) => (received = resolve));
-		socket!.write(`${JSON.stringify({ id: ++id, method, input })}\n`);
-		return reply;
-	};
-	return {
-		hello: (version: string) => send("hello", { protocol: version }),
-		/** Sends any request, as is; resolves with the reply. */
-		send,
-		close: () => socket?.end(),
-	};
-}
+/**
+ * The plugin's contract with every payload let through unchecked, for what the plugin itself never sends: the service
+ * checks it all the same.
+ */
+const Loose = RpcGroup.make(
+	Rpc.make("hello", { payload: Schema.Unknown, success: Schema.Struct({ url: Schema.String }), error: Outdated }),
+	Rpc.make("ask", { payload: Schema.Unknown, success: Schema.Unknown, error: Refusal }),
+	Rpc.make("prioritize", { payload: Schema.Unknown, error: Refusal }),
+);
+const loose = <A, E>(path: string, f: (client: RpcClient.FromGroup<typeof Loose, RpcClientError>) => Effect.Effect<A, E>) =>
+	Effect.runPromise(
+		Effect.flatMap(RpcClient.make(Loose), f).pipe(
+			Effect.scoped,
+			Effect.provide(RpcClient.layerProtocolSocket().pipe(Layer.provide(BunSocket.layerNet({ path })), Layer.provide(RpcSerialization.layerNdjson))),
+		),
+	);

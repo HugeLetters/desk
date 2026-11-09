@@ -15,7 +15,7 @@ import { Api } from "./api";
 import * as App from "./app";
 import { Clients } from "./clients";
 import { releaseNow } from "./registration";
-import { answering } from "./socket";
+import { answering } from "../plugin/connection";
 
 export const config = (env: Record<string, string | undefined> = process.env) => {
 	const store = env.DESK_HOME || join(homedir(), ".local/share/desk");

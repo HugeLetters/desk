@@ -49,7 +49,7 @@ flowchart LR
   subgraph OC[OpenCode, one or more]
     P1[plugin instance] --- P2[plugin instance]
   end
-  P1 <-- "Unix socket: desk_* requests, hello, moved / calls back: session, prompt" --> S
+  P1 <-- "Unix socket, RPC: hello, attach (calls back: session, prompt), desk_* requests, moved" --> S
   P2 <--> S
   B[pages in the browser] -- "HTTP :47400, RPC" --> S
   S[desk service<br/>one per machine]
@@ -60,16 +60,18 @@ flowchart LR
   page (port 47400 when free, else any free port), answers the plugins on `<store>/desk.sock`, and delivers answers.
   One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url, socket }`), created exclusively,
   like OpenCode's own `service.json`; a second service finds a live registration and exits, a dead one's is replaced.
-  The socket's contract is Effect Schemas (`src/protocol.ts`), checked on both sides; its version is a revision plus a
-  hash of the schemas. On `hello` with another version, a service whose contract files changed on disk since it
+  The socket carries an `effect/rpc` group, `PluginApi` (`src/protocol.ts`), checked on both sides; what the desk
+  refuses comes back typed and is worded by the plugin or the page (`src/wording.ts`). Its version is a revision plus
+  a hash of the schemas. On `hello` with another version, a service whose contract files changed on disk since it
   started retires (the plugin starts the new one); otherwise the plugin is told to `/reload`. It exits 10 minutes
   after its last client (plugin connection or open page) goes.
 - **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client, one per
   directory OpenCode works in. While a session in its directory is in desk mode, it connects to the socket, starting
-  the service detached if nobody answers (log: `<store>/service.log`), says `hello`, reports those sessions (`modes`),
-  and holds the connection; it hangs up when the last one turns desk mode off. Connected, it reconnects (restarting the service) if the connection drops. It is also the
-  service's only way into OpenCode: on that connection the service asks it to look sessions up and to prompt them, and
-  it reports `session.moved`. So the service needs no OpenCode endpoint or password.
+  the service detached if nobody answers (log: `<store>/service.log`), says `hello`, and holds `attach` open with those
+  sessions (later changes as `modes`); it hangs up when the last one turns desk mode off. Connected, it reconnects
+  (restarting the service) if the connection drops. It is also the service's only way into OpenCode: the service's
+  calls (look a session up, prompt one) come on the `attach` stream and the plugin answers each with `reply`; the
+  attachment lasts exactly as long as the stream. It reports `session.moved`. So the service needs no OpenCode endpoint or password.
 - **Delivery**: the user's text is written to its entries as an outbox (an OpenCode message id, fixed up front), then
   sent with `session.prompt({ id })` through a connected plugin instance whose OpenCode knows the session. OpenCode admits a message id
   once, so retries can't duplicate. With no such OpenCode connected, the entry stays "answered, not delivered" (a

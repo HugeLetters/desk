@@ -1,50 +1,34 @@
 /**
- * The service's Unix socket, where plugin instances connect (`protocol.ts`). The registration (`registration.ts`) is
- * what keeps the store to one service; this checks once more that nobody answers on the socket before replacing a
- * stale socket file (a crashed service's).
+ * The service's Unix socket, where plugin instances connect: the `PluginApi` RPC group (`protocol.ts`) served there.
+ * The registration (`registration.ts`) keeps the store to one service; the socket file it finds is a stale one (a
+ * crashed service's), and goes.
  *
- * Each connection is a client (`Clients`) until it closes. Its `hello` attaches it to `OpenCode` for that long: the
- * service then calls the plugin instance (`Calls`) to look up and prompt sessions in its OpenCode.
+ * A plugin instance is attached for as long as its `attach` stream runs: a client (`Clients`) of the service, its
+ * OpenCode reachable (`OpenCode`). The service's calls into that OpenCode go out on the stream; the plugin's `reply`
+ * settles each, within `callTimeout`.
  */
-import { statSync, unlinkSync } from "node:fs";
+import { statSync } from "node:fs";
+import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
-import * as Data from "effect/Data";
-import { type Client, OpenCode } from "../opencode";
+import * as Logger from "effect/Logger";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import * as RpcServer from "effect/rpc/RpcServer";
+import type { ProjectID } from "@opencode/schema/project-id";
+import type { SessionID } from "../entry";
+import { type Client, OpenCode, Unanswered } from "../opencode";
 import { Projects } from "../projects";
-import { type Call, type CallMethod, type CallResult, type Calls, calls, contractFiles, decode, methods, protocol, type Request, type Response } from "../protocol";
+import { contractFiles, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../protocol";
 import { Api } from "./api";
-import type { Refusal } from "../errors";
-import { refusal } from "../wording";
 import { Clients } from "./clients";
 
-export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{ readonly path: string }> {}
-
-/** Whether a service answers on `path`. */
-export const answering = (path: string) =>
-	Bun.connect({ unix: path, socket: { data() {} } }).then(
-		(socket) => {
-			socket.end();
-			return true;
-		},
-		() => false,
-	);
-
-interface Connection {
-	buffer: string;
-	/** Output the socket hasn't taken yet. */
-	pending: string;
-	scope: Scope.Closeable;
-	/** The plugin instance, acting in its OpenCode. */
-	client: Client;
-	/** Calls waiting for the plugin's answer. */
-	calls: Map<number, { resolve: (output: unknown) => void; reject: (error: Error) => void }>;
-}
-
 /** How long a call may wait for the plugin's answer. */
-const callTimeout = 30_000;
+const callTimeout = "30 seconds";
 
 /**
  * Whether this service's contract is the outdated one: its files changed on disk after the service started. The plugin
@@ -59,141 +43,111 @@ export const changedSinceStart = (started = Date.now()) => () =>
 		}
 	});
 
-export const layer = (path: string, outdated: () => boolean = changedSinceStart()) =>
-	Layer.effectDiscard(
+/** One attached plugin instance: its OpenCode as a `Client`, and its calls waiting for a reply. */
+interface Attached {
+	readonly client: Client;
+	readonly waiting: Map<number, Deferred.Deferred<Outcome>>;
+}
+
+const handlers = (outdated: () => boolean) =>
+	PluginApi.toLayer(
 		Effect.gen(function* () {
 			const api = yield* Api;
 			const opencode = yield* OpenCode;
 			const projects = yield* Projects;
 			const clients = yield* Clients;
-			const services = yield* Effect.context<never>();
-			const run = Effect.runForkWith(services);
-
-			const handle = (connection: Connection, request: Request): Effect.Effect<unknown, Refusal | { message: string }> => {
-				const input = <M extends keyof typeof methods & string>(name: M) => decode(methods, name, "input", request.input);
-				switch (request.method) {
-					case "hello": {
-						// The version first, read leniently: an older plugin may speak a hello this service can't decode.
-						const theirs = String((request.input as { protocol?: unknown } | null)?.protocol ?? "");
-						return Effect.gen(function* () {
-							if (theirs !== protocol && outdated()) {
-								// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
-								run(Effect.andThen(Effect.sleep("100 millis"), clients.retire));
-								return yield* Effect.fail({ message: "The desk service is older than this plugin; it's making way for a new one." });
-							}
-							if (theirs !== protocol) return yield* Effect.fail({ message: "This OpenCode's desk plugin is older than the desk service: run /reload." });
-							const { project } = yield* input("hello");
-							yield* Scope.provide(opencode.attach(connection.client), connection.scope);
-							if (project) yield* projects.remember(project.id, project.directory);
-							return { url: api.url };
-						});
-					}
-					case "modes":
-						return Effect.flatMap(input("modes"), ({ sessions }) => opencode.modes(connection.client, sessions)).pipe(Effect.as(null));
-					case "moved":
-						return Effect.flatMap(input("moved"), ({ session }) => opencode.move(session)).pipe(Effect.as(null));
-					case "ask":
-					case "adopt":
-					case "answer":
-					case "resolve":
-					case "prioritize":
-					case "list":
-					case "page":
-						return Effect.flatMap(input(request.method), (decoded) => (api as unknown as Record<string, (input: unknown) => Effect.Effect<unknown, { message: string }>>)[request.method]!(decoded));
-					default:
-						return Effect.fail({ message: `Unknown method ${String((request as { method: unknown }).method)}.` });
-				}
-			};
-
-			const flush = (socket: Bun.Socket<Connection>) => {
-				const { pending } = socket.data;
-				if (!pending) return;
-				const written = socket.write(pending);
-				socket.data.pending = pending.slice(Math.max(written, 0));
-			};
-			const write = (socket: Bun.Socket<Connection>, message: Response | Call) => {
-				socket.data.pending += `${JSON.stringify(message)}\n`;
-				flush(socket);
-			};
-
+			/** By RPC client id, while attached. */
+			const attachments = new Map<number, Attached>();
 			let lastCall = 0;
-			const call = <C extends CallMethod>(socket: Bun.Socket<Connection>, method: C, input: Calls[C]["input"]) =>
-				new Promise<Calls[C]["output"]>((resolve, reject) => {
-					const id = ++lastCall;
-					const timer = setTimeout(() => settle(new Error(`The plugin didn't answer ${method} in time.`)), callTimeout);
-					const settle = (error: Error | undefined, output?: unknown) => {
-						clearTimeout(timer);
-						socket.data.calls.delete(id);
-						if (error) reject(error);
-						else Effect.runPromise(decode(calls, method, "output", output)).then(resolve, (failure: { message: string }) => reject(new Error(failure.message)));
-					};
-					socket.data.calls.set(id, { resolve: (output) => settle(undefined, output), reject: settle });
-					write(socket, { call: id, method, input });
-				});
-			const client = (socket: Bun.Socket<Connection>): Client => ({
-				session: async (sessionID) => (await call(socket, "session", { sessionID })) ?? undefined,
-				prompt: async (prompt) => void (await call(socket, "prompt", prompt)),
-			});
 
-			if (yield* Effect.promise(() => answering(path))) return yield* new AlreadyRunning({ path });
-			yield* Effect.acquireRelease(
-				Effect.sync(() => {
-					try {
-						unlinkSync(path);
-					} catch {}
-					return Bun.listen<Connection>({
-						unix: path,
-						socket: {
-							open(socket) {
-								const scope = Effect.runSync(Scope.make());
-								socket.data = { buffer: "", pending: "", scope, client: client(socket), calls: new Map() };
-								run(Scope.provide(clients.hold, scope));
-							},
-							data(socket, chunk) {
-								socket.data.buffer += chunk.toString();
-								const lines = socket.data.buffer.split("\n");
-								socket.data.buffer = lines.pop()!;
-								for (const line of lines) {
-									if (!line.trim()) continue;
-									let message: Request | CallResult;
-									try {
-										message = JSON.parse(line);
-									} catch {
-										continue;
-									}
-									if ("call" in message) {
-										const waiting = socket.data.calls.get(message.call);
-										if ("error" in message) waiting?.reject(new Error(message.error));
-										else waiting?.resolve(message.output);
-										continue;
-									}
-									const request = message;
-									run(
-										handle(socket.data, request).pipe(
-											Effect.match({
-												onSuccess: (output) => write(socket, { id: request.id, output: output ?? null }),
-												// Until the socket carries typed errors (an RpcGroup), refusals cross worded.
-												onFailure: (error) => write(socket, { id: request.id, error: "_tag" in error ? refusal(error) : error.message }),
-											}),
-										),
-									);
-								}
-							},
-							drain: flush,
-							close(socket) {
-								for (const waiting of [...socket.data.calls.values()]) waiting.reject(new Error("The plugin instance went away."));
-								run(Scope.close(socket.data.scope, Exit.void));
-							},
-						},
-					});
-				}),
-				(listener) =>
-					Effect.sync(() => {
-						listener.stop(true);
-						try {
-							unlinkSync(path);
-						} catch {}
+			const attach = (id: number, project: { readonly id: ProjectID; readonly directory: string }, sessions: ReadonlyArray<SessionID>) =>
+				Effect.gen(function* () {
+					const calls = yield* Queue.unbounded<ServiceCall>();
+					const waiting = new Map<number, Deferred.Deferred<Outcome>>();
+					/** Sends a call on the stream and waits for its reply. */
+					const call = (make: (call: number) => ServiceCall) =>
+						Effect.gen(function* () {
+							const call = ++lastCall;
+							const reply = yield* Deferred.make<Outcome>();
+							waiting.set(call, reply);
+							yield* Queue.offer(calls, make(call));
+							return yield* Deferred.await(reply).pipe(
+								Effect.timeoutOrElse({ duration: callTimeout, orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })) }),
+								Effect.ensuring(Effect.sync(() => waiting.delete(call))),
+							);
+						});
+					const failed = (outcome: Outcome) => (outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome));
+					const client: Client = {
+						session: (sessionID) =>
+							Effect.flatMap(call((call) => ({ _tag: "Session", call, sessionID })), failed).pipe(Effect.map((outcome) => (outcome._tag === "Session" ? (outcome.session ?? undefined) : undefined))),
+						prompt: (prompt) => Effect.asVoid(Effect.flatMap(call((call) => ({ _tag: "Prompt", call, prompt })), failed)),
+					};
+					// All of it for as long as the stream runs: the plugin hanging up (or dying) ends it.
+					yield* clients.hold;
+					yield* Effect.acquireRelease(
+						Effect.sync(() => attachments.set(id, { client, waiting })),
+						() =>
+							Effect.gen(function* () {
+								attachments.delete(id);
+								for (const reply of waiting.values()) yield* Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" });
+							}),
+					);
+					yield* opencode.attach(client);
+					yield* opencode.modes(client, sessions);
+					yield* projects.remember(project.id, project.directory);
+					return Stream.fromQueue(calls);
+				});
+
+			return PluginApi.of({
+				hello: ({ protocol: theirs }) =>
+					Effect.gen(function* () {
+						if (theirs === protocol) return { url: api.url };
+						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
+						if (outdated()) {
+							yield* Effect.forkDetach(Effect.andThen(Effect.sleep("100 millis"), clients.retire));
+							return yield* new Outdated({ side: "service" });
+						}
+						return yield* new Outdated({ side: "plugin" });
 					}),
-			);
+				attach: ({ project, sessions }, { client }) => Stream.unwrap(attach(client.id, project, sessions)),
+				reply: ({ call, outcome }, { client }) =>
+					Effect.suspend(() => {
+						const reply = attachments.get(client.id)?.waiting.get(call);
+						return reply ? Deferred.succeed(reply, outcome) : Effect.void;
+					}).pipe(Effect.asVoid),
+				modes: ({ sessions }, { client }) => {
+					const attached = attachments.get(client.id);
+					return attached ? opencode.modes(attached.client, sessions) : Effect.void;
+				},
+				moved: ({ session }) => opencode.move(session),
+				ask: api.ask,
+				adopt: api.adopt,
+				answer: api.answer,
+				resolve: api.resolve,
+				prioritize: api.prioritize,
+				list: api.list,
+				page: api.page,
+			});
 		}),
+	);
+
+/**
+ * Under Bun, a plugin hanging up cleanly reaches the socket server as a read error (ECONNRESET, EPIPE), which it logs as an
+ * error. It isn't one: the attachment ends either way. Everything else is logged as usual.
+ */
+const hungUp = (cause: Cause.Cause<unknown>) => {
+	const error = Cause.squash(cause) as { _tag?: string; reason?: { _tag?: string; cause?: { code?: string } } } | undefined;
+	return error?._tag === "SocketError" && error.reason?._tag === "SocketReadError" && ["ECONNRESET", "EPIPE"].includes(error.reason.cause?.code ?? "");
+};
+const logger = Logger.layer([Logger.make((options) => (hungUp(options.cause) ? undefined : Logger.defaultLogger.log(options)))], { mergeWithExisting: false });
+
+export const layer = (path: string, outdated: () => boolean = changedSinceStart()) =>
+	RpcServer.layer(PluginApi).pipe(
+		Layer.provide(handlers(outdated)),
+		Layer.provide(RpcServer.layerProtocolSocketServer),
+		Layer.provide(BunSocketServer.layer({ path })),
+		// The registration is ours, so a socket file here is a dead service's: it would keep us from listening.
+		Layer.provide(Layer.effectDiscard(Effect.flatMap(FileSystem.FileSystem, (fs) => Effect.ignore(fs.remove(path))))),
+		Layer.provide(RpcSerialization.layerNdjson),
+		Layer.provide(logger),
 	);

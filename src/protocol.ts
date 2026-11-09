@@ -1,55 +1,19 @@
 /**
- * Plugin ↔ service, over the service's Unix socket: newline-delimited JSON, both ways.
+ * Plugin ↔ service, over the service's Unix socket: an RPC group (`effect/rpc`, newline-delimited JSON), checked
+ * against these schemas on both sides.
  *
- * - The plugin's requests (`methods`): it sends `{ id, method, input }`; the service answers each with
- *   `{ id, output }` or `{ id, error }`. A plugin instance's first request on a connection is `hello`; it holds the
- *   connection for as long as it's loaded.
- * - The service's calls (`calls`), which the plugin makes in its own OpenCode for the service, so the service needs
- *   no endpoint or password of its own: the service sends `{ call, method, input }`; the plugin answers each with
- *   `{ call, output }` or `{ call, error }`.
- *
- * Each side decodes what it receives with these schemas (`decode`), so a malformed message is refused with a message
- * saying what's wrong, rather than misbehaving further in.
+ * A plugin instance says `hello` (the one request whose shape never changes, so two versions can always compare), then
+ * holds `attach` open for as long as it's connected: the attachment lives exactly as long as that stream. The service
+ * can't call a client, so its calls into the plugin's OpenCode (look a session up, prompt one) go out on that stream as
+ * `ServiceCall`s, and the plugin answers each with `reply`. So the service needs no endpoint or password of its own.
+ * Everything else is an ordinary request; what the desk refuses comes back as a typed `Refusal`.
  */
-import * as Effect from "effect/Effect";
-import * as Schema from "effect/Schema";
 import { ProjectID } from "@opencode/schema/project-id";
+import * as Schema from "effect/Schema";
+import * as Rpc from "effect/rpc/Rpc";
+import * as RpcGroup from "effect/rpc/RpcGroup";
 import { Delivery, EntryId, MessageID, Priority, SessionID } from "./entry";
-
-const method = <I extends Schema.Top, O extends Schema.Top>(input: I, output: O) => ({ input, output });
-
-export const methods = {
-	/** Who's connecting: the protocol it speaks, and its location's project (for the project's name). */
-	hello: method(
-		Schema.Struct({ protocol: Schema.String, project: Schema.optional(Schema.Struct({ id: ProjectID, directory: Schema.String })) }),
-		Schema.Struct({ url: Schema.String }),
-	),
-	ask: method(
-		Schema.Struct({
-			asker: Schema.Struct({ session: SessionID, directory: Schema.String }),
-			question: Schema.Struct({
-				title: Schema.String,
-				body: Schema.String,
-				labels: Schema.optional(Schema.Array(Schema.String)),
-				parent: Schema.optional(EntryId),
-				priority: Schema.optional(Priority),
-			}),
-		}),
-		Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }),
-	),
-	adopt: method(Schema.Struct({ id: EntryId, parent: EntryId }), Schema.Null),
-	answer: method(Schema.Struct({ id: EntryId, body: Schema.String }), Schema.Null),
-	resolve: method(Schema.Struct({ id: EntryId }), Schema.Null),
-	prioritize: method(Schema.Struct({ id: EntryId, priority: Priority, subtree: Schema.Boolean }), Schema.Null),
-	/** The desk of `session`'s project, or one entry's thread. */
-	list: method(Schema.Struct({ session: SessionID, id: Schema.optional(EntryId) }), Schema.String),
-	/** The page for `session`'s project. */
-	page: method(Schema.Struct({ session: SessionID }), Schema.Struct({ url: Schema.String })),
-	/** A session in this OpenCode moved to another directory (perhaps another project). */
-	moved: method(Schema.Struct({ session: SessionID }), Schema.Null),
-	/** The sessions in desk mode in this OpenCode, all of them: after hello and whenever one turns it on or off. */
-	modes: method(Schema.Struct({ sessions: Schema.Array(SessionID) }), Schema.Null),
-};
+import { Refusal } from "./errors";
 
 export const SessionInfo = Schema.Struct({ id: SessionID, parentID: Schema.optional(SessionID), projectID: ProjectID, directory: Schema.String });
 export type SessionInfo = typeof SessionInfo.Type;
@@ -64,22 +28,63 @@ export const Prompt = Schema.Struct({
 });
 export type Prompt = typeof Prompt.Type;
 
-export const calls = {
-	/** The session; null when this OpenCode doesn't know it. */
-	session: method(Schema.Struct({ sessionID: SessionID }), Schema.NullOr(SessionInfo)),
-	prompt: method(Prompt, Schema.Null),
-};
+/** What the service asks a plugin to do in its OpenCode; `call` pairs it with the plugin's `reply`. */
+export const ServiceCall = Schema.TaggedUnion({
+	/** Look a session up: null when this OpenCode doesn't know it. */
+	Session: { call: Schema.Int, sessionID: SessionID },
+	Prompt: { call: Schema.Int, prompt: Prompt },
+});
+export type ServiceCall = typeof ServiceCall.Type;
 
-type Contract<T extends Record<string, { input: Schema.Top; output: Schema.Top }>> = {
-	[K in keyof T]: { input: T[K]["input"]["Type"]; output: T[K]["output"]["Type"] };
-};
-export type Methods = Contract<typeof methods>;
-export type Calls = Contract<typeof calls>;
+export const Outcome = Schema.TaggedUnion({
+	Session: { session: Schema.NullOr(SessionInfo) },
+	Prompted: {},
+	/** OpenCode (or the plugin) couldn't: what it said. */
+	Failed: { cause: Schema.String },
+});
+export type Outcome = typeof Outcome.Type;
+
+/** The two sides speak different versions; `side` is the outdated one. */
+export class Outdated extends Schema.TaggedError<Outdated>()("Outdated", { side: Schema.Literals(["plugin", "service"]) }) {}
+
+export const Asker = Schema.Struct({ session: SessionID, directory: Schema.String });
+export const Question = Schema.Struct({
+	title: Schema.String,
+	body: Schema.String,
+	labels: Schema.optional(Schema.Array(Schema.String)),
+	parent: Schema.optional(EntryId),
+	priority: Schema.optional(Priority),
+});
+export type Question = typeof Question.Type;
+
+export const PluginApi = RpcGroup.make(
+	Rpc.make("hello", { payload: { protocol: Schema.String }, success: Schema.Struct({ url: Schema.String }), error: Outdated }),
+	/** The plugin instance's location's project (for the project's name) and the sessions in desk mode there. */
+	Rpc.make("attach", {
+		payload: { project: Schema.Struct({ id: ProjectID, directory: Schema.String }), sessions: Schema.Array(SessionID) },
+		success: ServiceCall,
+		stream: true,
+	}),
+	Rpc.make("reply", { payload: { call: Schema.Int, outcome: Outcome } }),
+	/** The sessions in desk mode in this plugin instance's directory, all of them, whenever one turns it on or off. */
+	Rpc.make("modes", { payload: { sessions: Schema.Array(SessionID) } }),
+	/** A session in this OpenCode moved to another directory (perhaps another project). */
+	Rpc.make("moved", { payload: { session: SessionID } }),
+	Rpc.make("ask", { payload: { asker: Asker, question: Question }, success: Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }), error: Refusal }),
+	Rpc.make("adopt", { payload: { id: EntryId, parent: EntryId }, error: Refusal }),
+	Rpc.make("answer", { payload: { id: EntryId, body: Schema.String }, error: Refusal }),
+	Rpc.make("resolve", { payload: { id: EntryId }, error: Refusal }),
+	Rpc.make("prioritize", { payload: { id: EntryId, priority: Priority, subtree: Schema.Boolean }, error: Refusal }),
+	/** The desk of `session`'s project, or one entry in full. */
+	Rpc.make("list", { payload: { session: SessionID, id: Schema.optional(EntryId) }, success: Schema.String, error: Refusal }),
+	/** The page for `session`'s project. */
+	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
+);
 
 /**
  * Bump for a change of meaning the schemas can't see (a field that keeps its type but means something else).
  */
-const revision = 3;
+const revision = 4;
 
 /**
  * This contract's version: `<revision>.<hash of the schemas>`, so any change of shape changes it by itself. Plugin and
@@ -87,36 +92,11 @@ const revision = 3;
  */
 export const protocol = `${revision}.${Bun.hash(
 	JSON.stringify(
-		[methods, calls].map((contract) =>
-			Object.entries(contract).map(([name, { input, output }]) => [name, Schema.toJsonSchemaDocument(input), Schema.toJsonSchemaDocument(output)]),
-		),
+		[...PluginApi.requests.values()].map((rpc) => [rpc._tag, ...[rpc.payloadSchema, rpc.successSchema, rpc.errorSchema].map((schema) => Schema.toJsonSchemaDocument(schema as Schema.Top))]),
 	),
 ).toString(36)}`;
 
 /** The files the contract is defined in: the service is outdated once they change after it started. */
-export const contractFiles = [new URL("./protocol.ts", import.meta.url).pathname, new URL("./entry.ts", import.meta.url).pathname];
-
-/**
- * Decodes what arrived for `method`: its `input` (as received) or its `output` (as answered). Fails with a message
- * naming the method and what's wrong.
- */
-export const decode = <T extends Record<string, { input: Schema.Top; output: Schema.Top }>, K extends keyof T & string, P extends "input" | "output">(
-	contract: T,
-	name: K,
-	part: P,
-	value: unknown,
-): Effect.Effect<T[K][P]["Type"], { readonly message: string }> => {
-	const schema = contract[name]?.[part] as Schema.Codec<unknown, unknown> | undefined;
-	if (!schema) return Effect.fail({ message: `Unknown method ${name}.` });
-	return Schema.decodeUnknownEffect(schema)(value).pipe(Effect.mapError((issue) => ({ message: `${name}: ${part} doesn't match the desk protocol: ${issue.message}` }))) as never;
-};
-
-export type Method = keyof Methods;
-export type Request<M extends Method = Method> = { readonly id: number; readonly method: M; readonly input: Methods[M]["input"] };
-export type Response = { readonly id: number; readonly output: unknown } | { readonly id: number; readonly error: string };
-
-export type CallMethod = keyof Calls;
-export type Call<C extends CallMethod = CallMethod> = { readonly call: number; readonly method: C; readonly input: Calls[C]["input"] };
-export type CallResult = { readonly call: number; readonly output: unknown } | { readonly call: number; readonly error: string };
+export const contractFiles = ["./protocol.ts", "./entry.ts", "./errors.ts"].map((file) => new URL(file, import.meta.url).pathname);
 
 export type { Delivery, Priority };

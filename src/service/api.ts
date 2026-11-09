@@ -7,6 +7,8 @@ import * as Effect from "effect/Effect";
 import * as HttpServer from "effect/http/HttpServer";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import type * as Rpc from "effect/rpc/Rpc";
+import type * as RpcGroup from "effect/rpc/RpcGroup";
 import { Desk } from "../desk";
 import { Failures } from "../delivery";
 import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
@@ -14,9 +16,10 @@ import type { Refusal } from "../errors";
 import type { Draft, View } from "../page-api";
 import { guessed, Projects } from "../projects";
 import { OpenCode } from "../opencode";
-import type { Methods } from "../protocol";
+import type { PluginApi } from "../protocol";
 
-type Handler<M extends keyof Methods> = (input: Methods[M]["input"]) => Effect.Effect<Methods[M]["output"], Refusal>;
+/** The plugin's request `Tag`, as `PluginApi` defines it. */
+type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof PluginApi>, Tag>> = (payload: Rpc.Payload<R>) => Effect.Effect<Rpc.Success<R>, Rpc.Error<R>>;
 
 export class Api extends Context.Service<
 	Api,
@@ -97,10 +100,10 @@ export class Api extends Context.Service<
 							const entry = yield* desk.ask(asker, question, mine);
 							return { id: entry.id, parent: entry.parent, url: link(project, entry.id) };
 						}),
-					adopt: ({ id, parent }) => Effect.as(desk.adopt(id, parent), null),
-					answer: ({ id, body }) => Effect.as(desk.answer(id, body), null),
-					resolve: ({ id }) => Effect.as(desk.resolve(id, "agent"), null),
-					prioritize: ({ id, priority, subtree }) => Effect.as(desk.prioritize(id, priority, subtree), null),
+					adopt: ({ id, parent }) => Effect.asVoid(desk.adopt(id, parent)),
+					answer: ({ id, body }) => Effect.asVoid(desk.answer(id, body)),
+					resolve: ({ id }) => Effect.asVoid(desk.resolve(id, "agent")),
+					prioritize: ({ id, priority, subtree }) => Effect.asVoid(desk.prioritize(id, priority, subtree)),
 					list: ({ session, id }) => Effect.flatMap(scope(session), ({ scope: mine }) => desk.describe(id, mine)),
 					page: ({ session }) => Effect.map(scope(session), ({ project }) => ({ url: link(project) })),
 					view: (project) =>

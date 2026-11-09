@@ -12,7 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import plugin from "../src/plugin/index";
-import { answering } from "../src/service/socket";
+import { answering } from "../src/plugin/connection";
 import { eventually, rpc } from "./support/service";
 import type { EntryId } from "../src/entry";
 import { S, P } from "./support/ids";

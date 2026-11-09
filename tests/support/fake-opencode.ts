@@ -58,7 +58,7 @@ export function fakeOpenCode() {
 
 	/** What a plugin instance in `fake` answers the service's calls with. */
 	const serve = (fake: FakeServer): Options["serve"] => ({
-		session: ({ sessionID }) =>
+		session: (sessionID) =>
 			Effect.suspend(() => (fake.down ? Effect.fail(new Error("connection refused")) : Effect.succeed(fake.sessions.get(sessionID) ?? null))),
 		prompt: (prompt) =>
 			Effect.suspend(() => {
@@ -70,7 +70,7 @@ export function fakeOpenCode() {
 					fake.loseNextReply = false;
 					return Effect.fail(new Error("socket hang up"));
 				}
-				return Effect.succeed(null);
+				return Effect.void;
 			}),
 	});
 

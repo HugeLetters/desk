@@ -15,7 +15,9 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Scope from "effect/Scope";
 import { DeskApi } from "../../src/page-api";
 import * as Connection from "../../src/plugin/connection";
-import { type Method, type Methods, protocol } from "../../src/protocol";
+import { Refusal } from "../../src/errors";
+import { refusal } from "../../src/wording";
+import * as Schema from "effect/Schema";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
@@ -23,6 +25,10 @@ import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 import { P } from "./ids";
 
 export type Service = Awaited<ReturnType<typeof startService>>;
+
+type Request = Exclude<keyof Connection.Client, "hello" | "attach" | "reply">;
+type Answer<Tag extends Request> = Effect.Success<ReturnType<Connection.Client[Tag]>>;
+const isRefusal = Schema.is(Refusal);
 
 export async function startService(options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode>; outdated?: () => boolean } = {}) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
@@ -46,9 +52,15 @@ export async function startService(options: { store?: string; idle?: number; fak
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `project`. */
 		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: P("prj_default"), directory: "/work/default" }) {
 			const held = Effect.runSync(Scope.make());
-			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, hello: { protocol, project }, modes: Effect.sync(() => [...opencode.sessions.keys()]), serve: fake.serve(opencode), timeout: 1000 }), held));
+			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, project, modes: Effect.sync(() => [...opencode.sessions.keys()]), serve: fake.serve(opencode), timeout: 1000 }), held));
 			const connection = {
-				request: <M extends Method>(method: M, input: Methods[M]["input"]) => Effect.runPromise(live.request(method, input)),
+				/** A request to the service, as the plugin makes it; a refusal rejects with its wording. */
+				request: <Tag extends Request>(method: Tag, input: Parameters<Connection.Client[Tag]>[0]): Promise<Answer<Tag>> =>
+					Effect.runPromise(
+						Effect.flatMap(live.client, (client) => (client[method] as (input: unknown) => Effect.Effect<Answer<Tag>, unknown>)(input)).pipe(
+							Effect.mapError((error) => (isRefusal(error) ? new Error(refusal(error)) : error)),
+						),
+					),
 				url: () => Effect.runPromise(live.url),
 				/** Unloads the plugin instance: hangs up. */
 				close: () => Effect.runPromise(Scope.close(held, Exit.void)),
