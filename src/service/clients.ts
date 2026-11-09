@@ -6,9 +6,10 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 
 export class Clients extends Context.Service<
 	Clients,
@@ -25,28 +26,21 @@ export class Clients extends Context.Service<
 		return Layer.effect(
 			Clients,
 			Effect.gen(function* () {
+				const count = yield* SubscriptionRef.make(0);
 				const idle = yield* Deferred.make<void>();
-				const scope = yield* Effect.scope;
-				let count = 0;
-				let timer: Fiber.Fiber<void> | undefined;
-				const arm = Effect.map(
-					Effect.forkIn(Effect.andThen(Effect.sleep(after), Effect.asVoid(Deferred.succeed(idle, undefined))), scope),
-					(fiber) => {
-						timer = fiber;
-					},
+				// Every change of the count starts the wait over; it ends only after `after` at none.
+				yield* SubscriptionRef.changes(count).pipe(
+					Stream.switchMap((now) => (now === 0 ? Stream.fromEffect(Effect.sleep(after)) : Stream.empty)),
+					Stream.runHead,
+					Effect.andThen(Deferred.succeed(idle, undefined)),
+					Effect.forkScoped,
 				);
-				const disarm = Effect.suspend(() => {
-					const running = timer;
-					timer = undefined;
-					return running ? Fiber.interrupt(running) : Effect.void;
-				});
-				yield* arm;
 				return Clients.of({
 					hold: Effect.acquireRelease(
-						Effect.suspend(() => (++count === 1 ? disarm : Effect.void)),
-						() => Effect.suspend(() => (--count === 0 ? arm : Effect.void)),
+						SubscriptionRef.update(count, (now) => now + 1),
+						() => SubscriptionRef.update(count, (now) => now - 1),
 					),
-					count: Effect.sync(() => count),
+					count: SubscriptionRef.get(count),
 					idle: Deferred.await(idle),
 					retire: Effect.asVoid(Deferred.succeed(idle, undefined)),
 				});
