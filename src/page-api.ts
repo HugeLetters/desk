@@ -13,17 +13,19 @@ export type Attachment = typeof Attachment.Type;
 export const Draft = Schema.Struct({ entry: Id, text: Schema.String, files: Schema.optional(Schema.Array(Attachment)) });
 export type Draft = typeof Draft.Type;
 
-export const ProjectSummary = Schema.Struct({ id: Schema.String, name: Schema.String, waiting: Schema.Int, critical: Schema.Int });
+/** A project with entries. `guessed`: no connected OpenCode knows its sessions, so it's their folder. */
+export const ProjectSummary = Schema.Struct({ id: Schema.String, name: Schema.String, guessed: Schema.Boolean, waiting: Schema.Int, critical: Schema.Int });
 export type ProjectSummary = typeof ProjectSummary.Type;
 
-/** The id entries whose project nobody can tell yet (no OpenCode that knows their session is connected) go under. */
-export const unknownProject = "unknown";
-
-/** One project's desk, and every project with entries (for switching). */
+/** One project's desk, every project with entries (for switching), and how many OpenCode instances are connected. */
 export const View = Schema.Struct({
-	project: Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String })),
+	project: Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String, guessed: Schema.Boolean })),
 	entries: Schema.Array(Entry),
 	projects: Schema.Array(ProjectSummary),
+	/** Connected plugin instances: with none, answers wait and projects are folder guesses. */
+	opencode: Schema.Int,
+	/** Outbox (message id) → why its last delivery failed, for undelivered entries whose try failed. */
+	failures: Schema.Record(Schema.String, Schema.String),
 });
 export type View = typeof View.Type;
 
@@ -36,4 +38,6 @@ export const DeskApi = RpcGroup.make(
 	Rpc.make("send", { payload: Draft, error: DeskError }),
 	/** The user marks one of their own questions done. */
 	Rpc.make("resolve", { payload: { id: Id }, error: DeskError }),
+	/** The user gives up on delivering an entry's undelivered text (with the rest of its message); the text stays. */
+	Rpc.make("discard", { payload: { entry: Id }, error: DeskError }),
 );

@@ -14,54 +14,69 @@ import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Scope from "effect/Scope";
 import { DeskApi } from "../../src/page-api";
-import { connect, type Connection } from "../../src/plugin/connection";
-import type { Endpoint } from "../../src/protocol";
+import * as Connection from "../../src/plugin/connection";
+import { type Method, type Methods, protocol } from "../../src/protocol";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
-import { fakeOpenCode } from "./fake-opencode";
+import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 
 export type Service = Awaited<ReturnType<typeof startService>>;
 
-export async function startService(options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode> } = {}) {
+export async function startService(options: { store?: string; idle?: number; fake?: ReturnType<typeof fakeOpenCode>; outdated?: () => boolean } = {}) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
 	const fake = options.fake ?? fakeOpenCode();
 	const socket = join(store, "desk.sock");
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
-		Layer.buildWithScope(App.layer({ store, socket, port: 0, idle: options.idle ?? 60_000, retry: "50 millis", connect: fake.connect }), scope),
+		Layer.buildWithScope(App.layer({ store, socket, port: 0, idle: options.idle ?? 60_000, retry: "50 millis", outdated: options.outdated ?? (() => false) }), scope),
 	)) as Context.Context<Api | Clients>;
 	const url = Context.get(services, Api).url;
-	const plugins: Array<Connection> = [];
+	const plugins: Array<Scope.Closeable> = [];
+	const unwatch: Array<() => void> = [];
+	let blank = 0;
 
-	const client = RpcClient.make(DeskApi);
 	return {
 		store,
 		socket,
 		url,
 		fake,
 		services,
-		/** A plugin instance of the OpenCode at `opencode`, in `project`. */
-		plugin(opencode?: Endpoint, project = { id: "prj_default", directory: "/work/default" }) {
-			const connection = connect({ socket, start: () => {}, hello: () => ({ opencode, project }), timeout: 1000 });
-			plugins.push(connection);
+		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `project`. */
+		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), project = { id: "prj_default", directory: "/work/default" }) {
+			const held = Effect.runSync(Scope.make());
+			const live = Effect.runSync(Scope.provide(Connection.make({ socket, start: Effect.void, hello: { protocol, project }, serve: fake.serve(opencode), timeout: 1000 }), held));
+			const connection = {
+				request: <M extends Method>(method: M, input: Methods[M]["input"]) => Effect.runPromise(live.request(method, input)),
+				url: () => Effect.runPromise(live.url),
+				/** Unloads the plugin instance: hangs up. */
+				close: () => Effect.runPromise(Scope.close(held, Exit.void)),
+			};
+			unwatch.push(fake.watch(opencode, (session) => void connection.request("moved", { session }).catch(() => {})));
+			plugins.push(held);
 			return connection;
 		},
-		rpc: <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
-			Effect.runPromise(
-				Effect.scoped(Effect.flatMap(client, f)).pipe(
-					Effect.provide(RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))),
-				),
-			),
+		rpc: <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => rpc(url, f),
 		clients: () => Effect.runPromise(Context.get(services, Clients).count),
 		/** Stops the service; the store stays unless `remove`. */
 		async close(remove = true) {
-			for (const plugin of plugins) plugin.close();
+			for (const stop of unwatch) stop();
+			for (const plugin of plugins) await Effect.runPromise(Scope.close(plugin, Exit.void));
 			await Effect.runPromise(Scope.close(scope, Exit.void));
 			if (remove) await rm(store, { recursive: true, force: true });
 		},
 	};
 }
+
+const client = RpcClient.make(DeskApi);
+
+/** Calls the page's RPC API of the service at `url` (`http://127.0.0.1:<port>/`), as the page does. */
+export const rpc = <A, E>(url: string, f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
+	Effect.runPromise(
+		Effect.scoped(Effect.flatMap(client, f)).pipe(
+			Effect.provide(RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]))),
+		),
+	);
 
 /** Polls `check` until it returns something truthy (or throws after `timeout`). */
 export async function eventually<A>(check: () => A | Promise<A>, timeout = 3000): Promise<NonNullable<A>> {

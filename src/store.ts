@@ -1,11 +1,11 @@
 /**
  * The store: one flat directory (`~/.local/share/desk/`, or `$DESK_HOME`) of `<entry id>.md` files, and the
- * attachments the user sent, in `attachments/`. Other files there (the service's socket, its log, the project cache)
- * aren't entries.
+ * attachments the user sent, in `attachments/`. Other files there (the service's socket, log and registration) aren't
+ * entries.
  *
- * It remembers what it wrote, so `edits` reports only changes made by someone else (an editor, `git checkout`, a
- * second machine syncing the folder), each as the entry now on disk or `null` once its file is gone. A watch event
- * may arrive late and read a file between two of our writes, so anything we ever wrote to a file counts as ours.
+ * The files are the desk's only state: nothing here remembers entries between reads. `load` reads them all each time.
+ * A write lands whole (written beside the file, then renamed over it), so a read never sees half an entry. `changed`
+ * only says that something may have changed (any entry file event, ours included); readers read again.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -17,16 +17,11 @@ import * as Stream from "effect/Stream";
 import { DeskError } from "./errors";
 import { type Entry, fileName, idOf, newId, parse, serialize } from "./entry";
 
-export interface Edit {
-	readonly id: string;
-	readonly entry: Entry | null;
-}
-
 export class Store extends Context.Service<
 	Store,
 	{
 		readonly root: string;
-		/** Every entry on disk; unparseable files are skipped. */
+		/** Every entry on disk, by `created`; unparseable files are skipped. */
 		readonly load: Effect.Effect<ReadonlyArray<Entry>, DeskError>;
 		readonly write: (entry: Entry) => Effect.Effect<void, DeskError>;
 		readonly remove: (id: string) => Effect.Effect<void, DeskError>;
@@ -34,8 +29,8 @@ export class Store extends Context.Service<
 		readonly attach: (name: string, data: Uint8Array) => Effect.Effect<string, DeskError>;
 		/** Deletes attachments by their path below the root; missing ones are fine. */
 		readonly detach: (files: Iterable<string>) => Effect.Effect<void>;
-		/** Changes to entry files that this store didn't make. */
-		readonly edits: Stream.Stream<Edit>;
+		/** An entry file was written, renamed or removed, by anyone. */
+		readonly changed: Stream.Stream<void>;
 	}
 >()("desk/Store") {
 	static layer(root: string) {
@@ -46,21 +41,8 @@ export class Store extends Context.Service<
 				const path = yield* Path.Path;
 				const io = <A, E>(effect: Effect.Effect<A, E>) => effect.pipe(Effect.mapError((cause) => new DeskError({ message: String(cause) })));
 				const file = (id: string) => path.join(root, fileName(id));
-				/** Everything we wrote to each file (`null`: we removed it), and what an edit last left there. */
-				const written = new Map<string, Set<string | null>>();
-				const ours = (id: string, text: string | null) => written.get(id)?.has(text) ?? false;
-				const remember = (id: string, text: string | null) => {
-					const texts = written.get(id) ?? new Set();
-					written.set(id, texts.add(text));
-				};
 
 				yield* io(fs.makeDirectory(root, { recursive: true }));
-
-				const read = (id: string) =>
-					fs.readFileString(file(id)).pipe(
-						Effect.map((text) => ({ text, entry: Option.getOrNull(parse(id, text)) })),
-						Effect.orElseSucceed(() => ({ text: null, entry: null })),
-					);
 
 				return Store.of({
 					root,
@@ -70,22 +52,21 @@ export class Store extends Context.Service<
 							for (const name of yield* fs.readDirectory(root)) {
 								const id = idOf(name);
 								if (id === undefined) continue;
-								const { text, entry } = yield* read(id);
-								remember(id, text);
+								// Gone since the listing (removed meanwhile): not an entry anymore.
+								const text = yield* Effect.orElseSucceed(fs.readFileString(file(id)), () => undefined);
+								const entry = text === undefined ? undefined : Option.getOrUndefined(parse(id, text));
 								if (entry) entries.push(entry);
 							}
-							return entries.sort((a, b) => a.created.localeCompare(b.created));
+							// Same-millisecond entries in a fixed order, whatever order the directory lists them in.
+							return entries.sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
 						}),
 					),
 					write: (entry) => {
-						const text = serialize(entry);
-						remember(entry.id, text);
-						return io(fs.writeFileString(file(entry.id), text));
+						// Beside the file under a name that isn't an entry's, then over it in one step.
+						const temp = path.join(root, `.${fileName(entry.id)}.${newId()}.tmp`);
+						return io(Effect.andThen(fs.writeFileString(temp, serialize(entry)), fs.rename(temp, file(entry.id))));
 					},
-					remove: (id) => {
-						remember(id, null);
-						return io(fs.remove(file(id), { force: true }));
-					},
+					remove: (id) => io(fs.remove(file(id), { force: true })),
 					attach: (name, data) =>
 						Effect.gen(function* () {
 							const extension = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]?.toLowerCase() ?? "bin";
@@ -95,19 +76,10 @@ export class Store extends Context.Service<
 							return relative;
 						}),
 					detach: (files) => Effect.forEach([...files], (relative) => Effect.ignore(fs.remove(path.join(root, relative), { force: true })), { discard: true }),
-					edits: fs.watch(root).pipe(
+					changed: fs.watch(root).pipe(
 						Stream.orDie,
-						Stream.map((event) => idOf(path.basename(event.path))),
-						Stream.filter((id): id is string => id !== undefined),
-						Stream.mapEffect((id) =>
-							Effect.map(read(id), ({ text, entry }): Edit | undefined => {
-								// Ours, or half-written: nothing to take in yet.
-								if (ours(id, text) || (text !== null && entry === null)) return undefined;
-								remember(id, text);
-								return { id, entry };
-							}),
-						),
-						Stream.filter((edit): edit is Edit => edit !== undefined),
+						Stream.filter((event) => idOf(path.basename(event.path)) !== undefined),
+						Stream.map(() => undefined),
 					),
 				});
 			}),

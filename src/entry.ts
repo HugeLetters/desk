@@ -109,7 +109,7 @@ export function waitingOn(entry: Entry, entries: ReadonlyArray<Entry>): Party | 
 	return entry.status === "open" ? answerer(entry) : entry.asker;
 }
 
-/** The entries waiting on `party`, in the desk's order: the page's two groups and the TUI badge. Blocked entries aren't among them. */
+/** The entries waiting on `party`, in the desk's order: the page's two groups and its project counts. Blocked entries aren't among them. */
 export const waitingFor = (entries: ReadonlyArray<Entry>, party: Party): Array<Entry> => ordered(entries).filter((entry) => waitingOn(entry, entries) === party);
 
 /**

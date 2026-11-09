@@ -1,6 +1,6 @@
 /**
  * The service's clients: connected plugin instances and open pages. `idle` completes once there have been none for
- * `after` straight (counting from the start, too), which is when the service exits.
+ * `after` straight (counting from the start, too), or once the service retires; either way the service exits.
  */
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -17,6 +17,8 @@ export class Clients extends Context.Service<
 		readonly hold: Effect.Effect<void, never, Scope.Scope>;
 		readonly count: Effect.Effect<number>;
 		readonly idle: Effect.Effect<void>;
+		/** Ends the service now: a newer one replaces it. */
+		readonly retire: Effect.Effect<void>;
 	}
 >()("desk/Clients") {
 	static layer(after: Duration.Input) {
@@ -43,6 +45,7 @@ export class Clients extends Context.Service<
 					),
 					count: Effect.sync(() => count),
 					idle: Deferred.await(idle),
+					retire: Effect.asVoid(Deferred.succeed(idle, undefined)),
 				});
 			}),
 		);

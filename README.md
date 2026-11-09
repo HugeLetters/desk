@@ -22,7 +22,8 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
    Edits here apply when OpenCode reloads its plugins; there's no release step.
 3. In a session, `/desk` turns the desk on for it (and its subagents); `/desk` again turns it off. Off by default:
    a session with the desk off doesn't see the `desk_*` tools at all.
-4. The page is `http://127.0.0.1:47400/`. `/desk` and every `desk_ask` result link to the session's project there.
+4. The page is `http://127.0.0.1:47400/` (or the `url` in `<store>/service.json` if that port was taken). `/desk` and
+   every `desk_ask` result link to the session's project there.
 
 ## How it fits together
 
@@ -31,37 +32,44 @@ flowchart LR
   subgraph OC[OpenCode, one or more]
     P1[plugin instance] --- P2[plugin instance]
   end
-  P1 -- "Unix socket: desk_* requests, hello" --> S
-  P2 --> S
+  P1 <-- "Unix socket: desk_* requests, hello, moved / calls back: session, prompt" --> S
+  P2 <--> S
   B[pages in the browser] -- "HTTP :47400, RPC" --> S
-  S[desk service<br/>one per machine] -- "@opencode/client: session.get, prompt, session.moved" --> OC
+  S[desk service<br/>one per machine]
   S --- F[(~/.local/share/desk/<br/>&lt;id&gt;.md, attachments/)]
 ```
 
 - **The service** (`src/service/main.ts`, Effect on Bun) is the only thing that touches the store. It serves the
-  page on one fixed port, answers the plugins on `<store>/desk.sock`, and delivers answers. One per machine: the
-  socket is the lock (a second service finds the first answering and exits), and the fixed port backs it up. It exits
+  page (port 47400 when free, else any free port), answers the plugins on `<store>/desk.sock`, and delivers answers.
+  One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url, socket }`), created exclusively,
+  like OpenCode's own `service.json`; a second service finds a live registration and exits, a dead one's is replaced.
+  On `hello`, a plugin newer than the service (`protocol` in `src/protocol.ts`) makes it retire and starts the new one;
+  an older plugin is told to `/reload`. It exits
   10 minutes after its last client (plugin connection or open page) goes.
-- **A plugin instance** (`src/plugin/`) is a thin, stateless client. When it loads it connects to the socket, starting
-  the service detached if nobody answers (log: `<store>/service.log`), says `hello` with its OpenCode's endpoint, and
-  holds the connection, reconnecting (and restarting the service) if it drops.
+- **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client. When
+  it loads it connects to the socket, starting the service detached if nobody answers (log: `<store>/service.log`),
+  says `hello`, and holds the connection, reconnecting (and restarting the service) if it drops. It is also the
+  service's only way into OpenCode: on that connection the service asks it to look sessions up and to prompt them, and
+  it reports `session.moved`. So the service needs no OpenCode endpoint or password.
 - **Delivery**: the user's text is written to its entries as an outbox (an OpenCode message id, fixed up front), then
-  sent with `session.prompt({ id })` to whichever connected OpenCode knows the session. OpenCode admits a message id
+  sent with `session.prompt({ id })` through a connected plugin instance whose OpenCode knows the session. OpenCode admits a message id
   once, so retries can't duplicate. With no such OpenCode connected, the entry stays "answered, not delivered" (a
   pill on the page; `outbox:` in its file) and goes out when one connects.
 - **Projects**: entries store their root session and directory, not a project. The service asks OpenCode for the
-  root session's `projectID` when listing, caches it (`<store>/projects.json`, so the page still sorts entries while
-  OpenCode is down) and drops it on `session.moved`. The page shows one project at a time (`?project=<id>`); without
-  one it lists the projects.
+  root session's `projectID` (through a plugin) and remembers it in memory only. A session is asked again when it
+  moves, and every session when a plugin connects (catching moves missed meanwhile); while OpenCode is away, what was
+  known stays. A session no connected OpenCode knows goes under its folder, marked as a guess. The page's header says
+  whether OpenCode is connected. The page shows one project at a time (`/projects/<id>`, an entry at
+  `/projects/<id>/questions/<entry id>`); `/` lists the projects.
 
 | Module | What it is |
 |---|---|
 | `src/entry.ts` | the entry, its file format, whose turn it is, the desk's order |
-| `src/store.ts` | the flat directory; reports edits made by anyone else |
-| `src/desk.ts` | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox) |
+| `src/store.ts` | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename) |
+| `src/desk.ts` | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first |
 | `src/outbox.ts` | outbox entries → the messages to send |
 | `src/delivery.ts` | sends outbox messages, retrying on reconnect and every 30 s |
-| `src/opencode.ts` | the seam to OpenCode servers (`Connect`); `OpenCode.client` uses `@opencode/client` |
+| `src/opencode.ts` | OpenCode as the service reaches it: the connected plugin instances (`Client`) |
 | `src/projects.ts` | entry → project, cached |
 | `src/service/` | `api.ts` (what each request does), `socket.ts`, `http.ts`, `clients.ts` (idle exit), `app.ts` (assembly), `main.ts` |
 | `src/plugin/` | `index.ts` (`/desk`, tools, hiding them), `connection.ts` (connect or start the service) |
@@ -121,5 +129,5 @@ bun run demo        # docs/demo/: stills and the GIF (needs Google Chrome and ff
 ```
 
 Tests never touch the real store or port: the service runs in-process on a temp store, port 0 and fake OpenCode
-servers (`tests/support/`); the plugin test starts a real service process on a temp store. To run a service by hand,
+instances behind fake plugin connections (`tests/support/`); the plugin test starts a real service process on a temp store. To run a service by hand,
 set `DESK_HOME` (store), `DESK_PORT` and optionally `DESK_IDLE` (ms): `DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`.

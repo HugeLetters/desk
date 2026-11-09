@@ -1,6 +1,8 @@
 /**
- * The desk: every entry in the store, kept in a `SubscriptionRef`; each change is written to its file inside the
- * update. Edits made to the files by someone else are taken in as they happen.
+ * The desk: the rules, over the entries in the store. The files are the only state: every read reads them, and every
+ * change reads them, decides and writes, one change at a time (a lock), so edits made to the files by anyone else are
+ * simply what the next read finds. `changes` says when to read again: after our own changes, on any file event, and
+ * every few seconds besides, in case a file event got lost.
  *
  * The user's text (an answer, or a question of their own) is not sent from here: it's recorded on its entries as an
  * outbox (a message id, fixed now) and `Delivery` takes it to the session from there, as often as it takes, and
@@ -9,9 +11,11 @@
 import { SessionMessage } from "@opencode/schema/session-message";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Duration from "effect/Duration";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
 import { DeskError } from "./errors";
 import { answerer, attachmentsIn, type Delivery, descendants, type Entry, newId, openUnder, ordered, type Party, type Priority, waitingOn } from "./entry";
 import { Store } from "./store";
@@ -69,8 +73,8 @@ export function reviewRoot(all: Entries, labels: ReadonlyArray<string>): Entry |
 export class Desk extends Context.Service<
 	Desk,
 	{
-		/** The entries now, then after every change, by `created`. */
-		readonly changes: Stream.Stream<Entries>;
+		/** Something may have changed: read again. Once at the start, then after every change, file event and `rescan`. */
+		readonly changes: Stream.Stream<void>;
 		readonly entries: Effect.Effect<Entries>;
 		/**
 		 * An agent asks. `scope` is the asker's project: a PR's review root is looked for among those entries only.
@@ -96,24 +100,26 @@ export class Desk extends Context.Service<
 		readonly reply: (drafts: ReadonlyArray<Draft>, delivery: Delivery) => Effect.Effect<number, DeskError>;
 		/** The message `outbox` reached its session: its entries leave the outbox. */
 		readonly delivered: (outbox: string) => Effect.Effect<void, DeskError>;
+		/**
+		 * The user gives up on delivering the message `outbox` (its session is gone, say): its entries leave the outbox,
+		 * keeping their text, and can be resolved.
+		 */
+		readonly discard: (outbox: string) => Effect.Effect<void, DeskError>;
 	}
 >()("desk/Desk") {
-	static readonly layer = Layer.effect(
+	static readonly layer = Desk.layerWith();
+
+	/** `rescan`: how often to read again regardless, should a file event get lost. */
+	static layerWith(rescan: Duration.Input = "5 seconds") {
+		return Layer.effect(
 		this,
 		Effect.gen(function* () {
 			const store = yield* Store;
-			const entries = yield* SubscriptionRef.make<Entries>(yield* store.load);
-
-			// Someone else edited a file: take it in (or drop the entry, once its file is gone).
-			yield* store.edits.pipe(
-				Stream.runForEach(({ id, entry }) =>
-					SubscriptionRef.update(entries, (all) => {
-						const rest = all.filter((other) => other.id !== id);
-						return entry === null ? rest : [...rest, entry].sort((a, b) => a.created.localeCompare(b.created));
-					}),
-				),
-				Effect.forkScoped,
-			);
+			const lock = yield* Semaphore.make(1);
+			const ours = yield* PubSub.unbounded<void>();
+			/** One change: reads the files, decides (writing what changes), and says so. Changes run one at a time. */
+			const modify = <A>(change: (all: Entries) => Effect.Effect<readonly [A, Entries], DeskError>): Effect.Effect<A, DeskError> =>
+				lock.withPermits(1)(Effect.flatMap(store.load, (all) => Effect.map(change(all), ([result]) => result))).pipe(Effect.ensuring(PubSub.publish(ours, undefined)));
 
 			const find = (all: Entries, id: string) => {
 				const entry = all.find((candidate) => candidate.id === id);
@@ -161,10 +167,14 @@ export class Desk extends Context.Service<
 				});
 
 			return Desk.of({
-				changes: SubscriptionRef.changes(entries),
-				entries: SubscriptionRef.get(entries),
+				changes: Stream.concat(
+					Stream.make(undefined),
+					Stream.mergeAll([Stream.fromPubSub(ours), store.changed, Stream.tick(Duration.fromInputUnsafe(rescan))], { concurrency: "unbounded" }),
+				),
+				// A store that can't be read is a broken service, not a desk error.
+				entries: Effect.orDie(store.load),
 				ask: (asker, question, scope = () => true) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							const parent = question.parent === undefined ? reviewRoot(all.filter(scope), question.labels ?? []) : yield* find(all, question.parent);
 							const entry: Entry = {
@@ -188,7 +198,7 @@ export class Desk extends Context.Service<
 						}),
 					),
 				adopt: (id, parentID) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
 							yield* find(all, parentID);
@@ -200,7 +210,7 @@ export class Desk extends Context.Service<
 						}),
 					),
 				answer: (id, body) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
 							if (entry.asker !== "user") return yield* new DeskError({ message: `Entry ${id} is the agents' own question; the user answers it.` });
@@ -211,7 +221,7 @@ export class Desk extends Context.Service<
 						}),
 					),
 				prioritize: (id, priority, subtree) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							yield* find(all, id);
 							const ids = new Set([id, ...(subtree ? descendants(all, { id }).map((entry) => entry.id) : [])]);
@@ -221,7 +231,7 @@ export class Desk extends Context.Service<
 						}),
 					),
 				resolve: (id, by) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							const entry = yield* find(all, id);
 							if (entry.asker !== by) return yield* new DeskError({ message: `Entry ${id} was asked by the ${entry.asker}; only the asker marks it done.` });
@@ -248,33 +258,34 @@ export class Desk extends Context.Service<
 					),
 				describe: (id, scope) =>
 					Effect.gen(function* () {
-						const all = yield* SubscriptionRef.get(entries);
+						const all = yield* Effect.orDie(store.load);
 						if (id === undefined) {
 							const mine = all.filter(scope);
 							const open = ordered(mine).filter((entry) => entry.status !== "resolved");
 							if (open.length === 0) return "The desk is empty: nothing open or waiting.";
+							// One short line each: [status, whose turn, priority unless normal, "from the user" for the user's own questions].
 							return open
 								.map((entry) => {
-									const parent = entry.parent === null ? "" : ` (follow-up to ${entry.parent})`;
-									const priority = entry.priority === "normal" ? "" : `, ${entry.priority} priority`;
 									const wait = waitingOn(entry, all);
-									const turn = wait === "blocked" ? "blocked by its unresolved follow-ups" : `waiting on the ${wait}`;
-									return `- ${entry.id} ${entry.title}${parent} — ${entry.status}${priority}, ${turn}, asked by the ${entry.asker}`;
+									const tags = [entry.status, wait === "blocked" ? "blocked" : `${wait}'s turn`, ...(entry.priority === "normal" ? [] : [entry.priority]), ...(entry.asker === "user" ? ["from the user"] : [])];
+									return `- ${entry.id} ${entry.title} [${tags.join(", ")}]${entry.parent === null ? "" : ` under ${entry.parent}`}`;
 								})
 								.join("\n");
 						}
-						const thread: Array<Entry> = [];
-						for (let current: Entry | undefined = yield* find(all, id); current; current = all.find((entry) => entry.id === current!.parent)) thread.unshift(current);
-						const followUps = all.filter((entry) => entry.parent === id).map((entry) => `${entry.id} ${entry.title} (${entry.status})`);
+						// The entry in full; what it hangs under and what hangs under it, one line each (the agent has those bodies, or can ask).
+						const entry = yield* find(all, id);
+						const above: Array<Entry> = [];
+						for (let current = all.find((other) => other.id === entry.parent); current; current = all.find((other) => other.id === current!.parent)) above.unshift(current);
+						const line = (other: Entry) => `${other.id} ${other.title} (${other.status})`;
+						const followUps = all.filter((other) => other.parent === id);
 						return [
-							...thread.map((entry) =>
-								[`# ${entry.id} ${entry.title}`, `(${entry.status}; asked by the ${entry.asker}, answered by the ${answerer(entry)})`, entry.question, ...(entry.answer === null ? [] : ["## Answer", entry.answer])].join("\n\n"),
-							),
-							...(followUps.length ? [`Follow-ups: ${followUps.join("; ")}`] : []),
+							...(above.length ? [`Under: ${above.map(line).join(" › ")}`] : []),
+							[`# ${entry.id} ${entry.title}`, `(${entry.status}; asked by the ${entry.asker}, answered by the ${answerer(entry)})`, entry.question, ...(entry.answer === null ? [] : ["## Answer", entry.answer])].join("\n\n"),
+							...(followUps.length ? [`Follow-ups: ${followUps.map(line).join("; ")}`] : []),
 						].join("\n\n---\n\n");
 					}),
 				reply: (drafts, delivery) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							// Apply every draft before writing anything, so a refusal leaves the desk (and its attachments) as it was.
 							const outboxes = new Map<string, string>();
@@ -306,14 +317,24 @@ export class Desk extends Context.Service<
 						}),
 					),
 				delivered: (outbox) =>
-					SubscriptionRef.modifyEffect(entries, (all) =>
+					modify((all) =>
 						Effect.gen(function* () {
 							const sent = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
 							yield* Effect.forEach(sent, store.write);
 							return [undefined, all.map((entry) => sent.find((other) => other.id === entry.id) ?? entry)] as const;
 						}),
 					),
+				discard: (outbox) =>
+					modify((all) =>
+						Effect.gen(function* () {
+							const held = all.filter((entry) => entry.outbox === outbox).map((entry): Entry => ({ ...entry, outbox: null, delivery: null }));
+							if (held.length === 0) return yield* new DeskError({ message: `Nothing waits to be delivered as ; it may have just gone out.` });
+							yield* Effect.forEach(held, store.write);
+							return [undefined, all] as const;
+						}),
+					),
 			});
 		}),
-	);
+		);
+	}
 }

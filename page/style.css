@@ -96,3 +96,10 @@ textarea:focus, input:focus { outline: 2px solid var(--accent); outline-offset: 
 .toast.error { background: var(--accent); color: var(--accent-text); }
 .pill.undelivered { color: var(--muted); border-style: dashed; }
 select.project { font: inherit; font-size: 14px; color: var(--text); background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
+.connection { font-size: 12px; color: var(--muted); white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+.connection::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--resolved); }
+.connection.none::before { background: var(--muted); }
+.notice { margin: 12px 0 0; padding: 10px 14px; border: 1px dashed var(--line); border-radius: 8px; color: var(--muted); font-size: 13px; }
+.pill.undelivered.failed { color: var(--crit); border-style: solid; }
+.failure { margin-top: 8px; padding: 8px 12px; border-radius: 6px; font-size: 13px; color: var(--crit); background: color-mix(in srgb, var(--crit) 8%, var(--card)); }
+.undelivered-actions { display: flex; gap: 10px; align-items: baseline; margin-top: 8px; }

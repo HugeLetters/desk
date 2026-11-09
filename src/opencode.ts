@@ -1,12 +1,12 @@
 /**
- * OpenCode, as far as the service needs it: the OpenCode servers whose plugin instances are connected right now, the
- * sessions they know, a way to prompt one, and the sessions that move to another project.
+ * OpenCode, as far as the service needs it: the OpenCode instances whose plugin is connected right now, the sessions
+ * they know, a way to prompt one, and the sessions that move to another project.
  *
- * Each plugin instance tells the service its server's endpoint when it connects and holds it (`attach`) while it
- * stays; a session is reachable while some attached server knows it. `Client` is the seam to one server:
- * `OpenCode.client` talks to it with `@opencode/client`, tests pass a fake.
+ * The service never calls OpenCode itself. Each connected plugin instance is a `Client`: it looks sessions up and
+ * prompts them in its own OpenCode for the service (over the socket), and reports the sessions that move there. So
+ * the service needs no endpoint or password, and a session is reachable exactly while a plugin instance of an
+ * OpenCode that knows it is connected. Tests attach fakes.
  */
-import { OpenCode as Sdk } from "@opencode/client";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -15,79 +15,49 @@ import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { DeskError } from "./errors";
+import type { Prompt, SessionInfo } from "./protocol";
 
-/** Where an OpenCode server listens, and its password when it has one (user `opencode`). */
-export interface Endpoint {
-	readonly url: string;
-	readonly password?: string | undefined;
-}
+export type { Prompt, SessionInfo };
 
-export interface SessionInfo {
-	readonly id: string;
-	readonly parentID?: string | undefined;
-	readonly projectID: string;
-	readonly directory: string;
-}
-
-export interface Prompt {
-	readonly sessionID: string;
-	/** The message id: a server admits each id once, so a retry can't deliver twice. */
-	readonly id: string;
-	readonly text: string;
-	readonly delivery: "queue" | "steer";
-	readonly files: ReadonlyArray<{ readonly uri: string; readonly name: string }>;
-}
-
-/** One OpenCode server. */
+/** One connected plugin instance, acting in its OpenCode. */
 export interface Client {
-	/** The session, or undefined when this server doesn't know it. Rejects when the server can't be reached. */
+	/** The session, or undefined when this OpenCode doesn't know it. Rejects when the plugin can't answer. */
 	readonly session: (sessionID: string) => Promise<SessionInfo | undefined>;
 	readonly prompt: (prompt: Prompt) => Promise<void>;
-	/** The ids of sessions moved to another directory (perhaps another project), until `signal` aborts. */
-	readonly moves: (signal: AbortSignal) => AsyncIterable<string>;
 }
-
-export type Connect = (endpoint: Endpoint) => Client;
 
 export class OpenCode extends Context.Service<
 	OpenCode,
 	{
-		/** Makes `endpoint`'s sessions reachable until the scope closes (several holders may share one endpoint). */
-		readonly attach: (endpoint: Endpoint) => Effect.Effect<void, never, Scope.Scope>;
-		/** The attached endpoints' URLs, now and after every change. */
-		readonly attached: Stream.Stream<ReadonlyArray<string>>;
-		/** The session, from the first attached server that knows it; undefined when none does. */
+		/** Makes `client`'s sessions reachable until the scope closes. */
+		readonly attach: (client: Client) => Effect.Effect<void, never, Scope.Scope>;
+		/** How many clients are attached, now and after every change. */
+		readonly attached: Stream.Stream<number>;
+		/** How many clients are attached now. */
+		readonly connected: Effect.Effect<number>;
+		/** The session, from the first attached client that knows it; undefined when none does. */
 		readonly session: (sessionID: string) => Effect.Effect<SessionInfo | undefined>;
-		/** Delivers to the attached server that knows the session: false when none does (nothing was sent). */
+		/** Delivers through the attached client that knows the session: false when none does (nothing was sent). */
 		readonly prompt: (prompt: Prompt) => Effect.Effect<boolean, DeskError>;
+		/** A client reports that a session moved. */
+		readonly move: (sessionID: string) => Effect.Effect<void>;
 		/** Sessions that moved, as they move. */
 		readonly moved: Stream.Stream<string>;
 	}
 >()("desk/OpenCode") {
-	static layer(connect: Connect) {
+	static get layer() {
 		return Layer.effect(
 			this,
 			Effect.gen(function* () {
-				const servers = new Map<string, { client: Client; holders: number; stop: AbortController }>();
-				const attached = yield* SubscriptionRef.make<ReadonlyArray<string>>([]);
-				const moved = yield* PubSub.unbounded<string>();
-				const services = yield* Effect.context<never>();
-				const publish = (url: string) => SubscriptionRef.set(attached, [...servers.keys()]).pipe(Effect.as(url));
-
-				const watch = (client: Client, stop: AbortController) =>
-					Effect.promise(async () => {
-						try {
-							for await (const sessionID of client.moves(stop.signal)) Effect.runForkWith(services)(PubSub.publish(moved, sessionID));
-						} catch {
-							// The server went away; its plugin instances reconnect and attach again.
-						}
-					});
-
 				/** Attached clients, in the order they came. */
-				const clients = () => [...servers.values()].map((server) => server.client);
+				const clients: Array<Client> = [];
+				const attached = yield* SubscriptionRef.make(0);
+				const moved = yield* PubSub.unbounded<string>();
+				const publish = Effect.suspend(() => SubscriptionRef.set(attached, clients.length));
+
 				const find = (sessionID: string) =>
 					Effect.promise(async () => {
-						for (const client of clients()) {
+						for (const client of [...clients]) {
 							const session = await client.session(sessionID).catch(() => undefined);
 							if (session) return { client, session };
 						}
@@ -95,29 +65,20 @@ export class OpenCode extends Context.Service<
 					});
 
 				return OpenCode.of({
-					attach: (endpoint) =>
+					attach: (client) =>
 						Effect.acquireRelease(
 							Effect.suspend(() => {
-								const server = servers.get(endpoint.url);
-								if (server) {
-									server.holders++;
-									return Effect.void;
-								}
-								const stop = new AbortController();
-								const client = connect(endpoint);
-								servers.set(endpoint.url, { client, holders: 1, stop });
-								return Effect.andThen(Effect.forkDetach(watch(client, stop)), publish(endpoint.url));
+								clients.push(client);
+								return publish;
 							}),
 							() =>
 								Effect.suspend(() => {
-									const server = servers.get(endpoint.url);
-									if (!server || --server.holders > 0) return Effect.void;
-									server.stop.abort();
-									servers.delete(endpoint.url);
-									return publish(endpoint.url);
+									clients.splice(clients.indexOf(client), 1);
+									return publish;
 								}),
-						).pipe(Effect.asVoid),
+						),
 					attached: SubscriptionRef.changes(attached),
+					connected: SubscriptionRef.get(attached),
 					session: (sessionID) => Effect.map(find(sessionID), (found) => found?.session),
 					prompt: (prompt) =>
 						Effect.flatMap(find(prompt.sessionID), (found) =>
@@ -125,35 +86,10 @@ export class OpenCode extends Context.Service<
 								? Effect.tryPromise({ try: () => found.client.prompt(prompt), catch: (cause) => new DeskError({ message: `Delivering to ${prompt.sessionID}: ${String(cause)}` }) }).pipe(Effect.as(true))
 								: Effect.succeed(false),
 						),
+					move: (sessionID) => Effect.asVoid(PubSub.publish(moved, sessionID)),
 					moved: Stream.fromPubSub(moved),
 				});
 			}),
 		);
 	}
-
-	/** A real OpenCode server, through `@opencode/client`. */
-	static readonly client: Connect = (endpoint) => {
-		const headers: Record<string, string> = endpoint.password ? { authorization: `Basic ${btoa(`opencode:${endpoint.password}`)}` } : {};
-		const sdk = Sdk.make({ baseUrl: endpoint.url, headers });
-		return {
-			session: async (sessionID) => {
-				try {
-					const info = await sdk.session.get({ sessionID });
-					return { id: info.id, parentID: info.parentID, projectID: info.projectID, directory: info.location.directory };
-				} catch (error) {
-					// A 404 means "not this server's session"; anything else (refused, 500) is the server being down.
-					if (/not ?found|404/i.test(String((error as { message?: string })?.message ?? error))) return undefined;
-					throw error;
-				}
-			},
-			prompt: async ({ sessionID, id, text, delivery, files }) => {
-				await sdk.session.prompt({ sessionID, id, text, delivery, files: files.map((file) => ({ uri: file.uri, name: file.name })) });
-			},
-			moves: async function* (signal) {
-				for await (const event of sdk.event.subscribe({ types: ["session.moved"], signal })) {
-					if (event.type === "session.moved") yield event.data.sessionID;
-				}
-			},
-		};
-	};
 }

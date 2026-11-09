@@ -1,16 +1,19 @@
 /** The desk's rules, through `Desk` on a temporary store. */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 import { Desk, type Question } from "../src/desk";
 import { Store } from "../src/store";
+import { eventually } from "./support/service";
 
 let root: string;
 let scope: Scope.Closeable;
@@ -90,10 +93,17 @@ test("describe: unresolved entries of the scope, flat with full ids, or one thre
 	const second = await ask("Child", { body: "More", parent: first.id });
 	await desk((d) => d.ask({ session: "ses_elsewhere", directory: "/x" }, { title: "Elsewhere", body: "" }));
 	expect(await desk((d) => d.describe(undefined, (entry) => entry.session === "ses_a"))).toBe(
-		`- ${second.id} Child (follow-up to ${first.id}) — open, waiting on the user, asked by the agent\n- ${first.id} Root — open, blocked by its unresolved follow-ups, asked by the agent`,
+		`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, blocked]`,
 	);
-	const thread = await desk((d) => d.describe(second.id, () => true));
-	expect(thread.indexOf(`# ${first.id} Root`)).toBeLessThan(thread.indexOf(`# ${second.id} Child`));
+	// One entry in full; what it hangs under, and its follow-ups, one line each (the agent has their bodies already).
+	const child = await desk((d) => d.describe(second.id, () => true));
+	expect(child).toContain(`Under: ${first.id} Root (open)`);
+	expect(child).toContain(`# ${second.id} Child`);
+	expect(child).toContain("More");
+	expect(child).not.toContain("Details");
+	const root = await desk((d) => d.describe(first.id, () => true));
+	expect(root).toContain(`Follow-ups: ${second.id} Child (open)`);
+	expect(root).not.toContain("More");
 });
 
 test("replies are all or nothing, and a refused one stores no attachments", async () => {
@@ -147,9 +157,34 @@ test("a reply's entries share one outbox per session; delivered empties it", asy
 	const b = await desk((d) => d.ask({ session: "ses_b", directory: "/w" }, { title: "B?", body: "" }));
 	const c = await ask("C?");
 	await desk((d) => d.reply([{ entry: a.id, text: "1" }, { entry: b.id, text: "2" }, { entry: c.id, text: "3" }], "queue"));
-	const [ea, eb, ec] = await entries();
+	const byId = async (id: string) => (await entries()).find((entry) => entry.id === id)!;
+	const [ea, eb, ec] = [await byId(a.id), await byId(b.id), await byId(c.id)];
 	expect(ea!.outbox).toBe(ec!.outbox);
 	expect(eb!.outbox).not.toBe(ea!.outbox);
 	await desk((d) => d.delivered(ea!.outbox!));
-	expect((await entries()).map((entry) => entry.outbox === null)).toEqual([true, false, true]);
+	expect([(await byId(a.id)).outbox, (await byId(b.id)).outbox, (await byId(c.id)).outbox].map((outbox) => outbox === null)).toEqual([true, false, true]);
+});
+
+test("the files are the state: a file put back to an earlier version is what the desk reads, and its rules apply to it", async () => {
+	const asked = await ask("Kept?");
+	const before = await readFile(join(root, `${asked.id}.md`), "utf8");
+	await desk((d) => d.prioritize(asked.id, "high", false));
+	expect((await entries())[0]!.priority).toBe("high");
+	// Restored by hand (git checkout, a sync tool) to the version the desk itself wrote first.
+	await writeFile(join(root, `${asked.id}.md`), before);
+	expect((await entries())[0]!.priority).toBe("normal");
+	await rm(join(root, `${asked.id}.md`));
+	expect(await failure((d) => d.prioritize(asked.id, "low", false))).toContain(`No desk entry ${asked.id}`);
+});
+
+test("changes says when to read again: at the start, after the desk's own changes, and after edits by anyone", async () => {
+	const signals: Array<number> = [];
+	const fiber = Effect.runFork(Effect.provideContext(Desk.use((d) => d.changes.pipe(Stream.runForEach(() => Effect.sync(() => signals.push(Date.now()))))), services));
+	await eventually(() => signals.length >= 1);
+	const asked = await ask("Signalled?");
+	await eventually(() => signals.length >= 2);
+	const count = signals.length;
+	await writeFile(join(root, `${asked.id}.md`), (await readFile(join(root, `${asked.id}.md`), "utf8")).replace("Signalled?", "Edited"));
+	await eventually(() => signals.length > count);
+	await Effect.runPromise(Fiber.interrupt(fiber));
 });

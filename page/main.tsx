@@ -1,7 +1,8 @@
 /** @jsxImportSource solid-js */
 /**
- * The desk page: one project's desk (`?project=<id>`; without one, the list of projects), its open entries as a flat
- * list, and an entry view with its parent, follow-ups, a draft box and Next.
+ * The desk page: one project's desk (`/projects/<id>`; at `/`, the list of projects), its open entries as a flat
+ * list, and an entry view (`/projects/<id>/questions/<entry id>`) with its parent, follow-ups, a draft box and Next.
+ * Moving to another project, like every link here, stays on the page: the view and the drafts follow the route.
  * Drafts live in the browser until Submit (all of them, one message per session), ⌘↵ (the same, then Next) or Send now (one, steering).
  */
 import * as Effect from "effect/Effect";
@@ -14,8 +15,8 @@ import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import { MetaProvider, Title } from "@solidjs/meta";
-import { A, HashRouter, Route, useNavigate, useParams } from "@solidjs/router";
-import { createEffect, createMemo, createSignal, For, onCleanup, type ParentProps, Show } from "solid-js";
+import { A, Route, Router, useLocation, useNavigate, useParams } from "@solidjs/router";
+import { createEffect, createMemo, createSignal, For, on, onCleanup, type ParentProps, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { render } from "solid-js/web";
 import { DeskApi, type Draft, type View } from "../src/page-api";
@@ -46,9 +47,17 @@ const Icon = (props: { name: keyof typeof icons }) => (
 	</svg>
 );
 
-/** The project this page shows; drafts are kept per project. */
-const project = new URLSearchParams(location.search).get("project") ?? undefined;
-const draftsKey = `desk.drafts.${project ?? ""}`;
+/** The project in a path (`/projects/<id>/…`), if any. */
+const projectIn = (pathname: string) => ((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/projects\/([^/]+)/)?.[1]);
+/** The project the page shows, following the route; drafts are kept per project. */
+const [project, setProject] = createSignal(projectIn(location.pathname));
+const draftsPrefix = "desk.drafts.";
+const draftsKey = (id: string | undefined) => `${draftsPrefix}${id ?? ""}`;
+const loadDrafts = (key: string): Record<string, string> => JSON.parse(localStorage.getItem(key) ?? "{}");
+/** A project's desk, and an entry on the current one. */
+const projectPath = (id: string) => `/projects/${encodeURIComponent(id)}`;
+const home = () => (project() === undefined ? "/" : projectPath(project()!));
+const entryPath = (id: string) => `${project() === undefined ? "" : projectPath(project()!)}/questions/${id}`;
 
 function Markdown(props: { text: string; entry: string; local?: Local }) {
 	let container!: HTMLDivElement;
@@ -61,15 +70,32 @@ function Markdown(props: { text: string; entry: string; local?: Local }) {
 
 function App() {
 	const [state, setState] = createStore<{ view: View | null; online: boolean }>({ view: null, online: true });
-	const [drafts, setDrafts] = createStore<Record<string, string>>(JSON.parse(localStorage.getItem(draftsKey) ?? "{}"));
+	/** The current project's drafts, saved under its key; another project swaps them for its own. */
+	let currentDrafts = draftsKey(project());
+	const [drafts, setDrafts] = createStore<Record<string, string>>(loadDrafts(currentDrafts));
 	const [toast, setToast] = createSignal<{ message: string; error: boolean }>();
-	createEffect(() => localStorage.setItem(draftsKey, JSON.stringify(drafts)));
+	createEffect(() => localStorage.setItem(currentDrafts, JSON.stringify(drafts)));
+	createEffect(
+		on(
+			project,
+			(id) => {
+				currentDrafts = draftsKey(id);
+				setDrafts(reconcile(loadDrafts(currentDrafts)));
+			},
+			{ defer: true },
+		),
+	);
 	/** The drafts' attachments, with object URLs for their previews; the files themselves wait in IndexedDB until sent. */
 	const [files, setFiles] = createStore<Record<string, Attachments.Local & { url: string }>>({});
 	const keep = (file: Attachments.Local) => setFiles(file.id, { ...file, url: URL.createObjectURL(file.blob) });
-	/** Lets go of the attachments no draft references anymore: those just sent, those whose draft went, and links deleted from the text. */
+	/**
+	 * Lets go of the attachments no draft references anymore: those just sent, those whose draft went, and links deleted
+	 * from the text. Other projects' drafts count too: their files share the browser's store.
+	 */
 	const prune = () => {
-		const used = new Set(Object.values(drafts).flatMap((text) => [...Attachments.referenced(text ?? "")]));
+		const others = Object.keys(localStorage).filter((key) => key.startsWith(draftsPrefix) && key !== currentDrafts);
+		const texts = [...Object.values(drafts), ...others.flatMap((key) => Object.values(loadDrafts(key)))];
+		const used = new Set(texts.flatMap((text) => [...Attachments.referenced(text ?? "")]));
 		const unused = Object.keys(files).filter((id) => !used.has(id));
 		for (const id of unused) {
 			URL.revokeObjectURL(files[id]!.url);
@@ -84,25 +110,33 @@ function App() {
 		})
 		.catch(() => {});
 
-	const subscription = runtime.runFork(
-		withClient((desk) =>
-			desk.view({ project }).pipe(
-				Stream.runForEach((view) =>
-					Effect.sync(() => {
-						setState("online", true);
-						setState("view", reconcile(view, { key: "id", merge: true }));
-						// A draft for an entry that left the desk can't be sent anymore.
-						const gone = Object.keys(drafts).filter((id) => !view.entries.some((entry) => entry.id === id));
-						for (const id of gone) setDrafts(id, undefined!);
-						if (gone.length > 0) void loaded.then(prune);
-					}),
-				),
-			),
-		).pipe(Effect.tapError(() => Effect.sync(() => setState("online", false))), Effect.retry(Schedule.spaced("1 second"))),
+	// One view at a time, of the project the route shows.
+	createEffect(
+		on(project, (id) => {
+			const subscription = runtime.runFork(
+				withClient((desk) =>
+					desk.view({ project: id }).pipe(
+						Stream.runForEach((view) =>
+							Effect.sync(() => {
+								// The previous project's stream may still deliver one before it stops.
+								if ((view.project?.id ?? undefined) !== id) return;
+								setState("online", true);
+								setState("view", reconcile(view, { key: "id", merge: true }));
+								// A draft for an entry that left the desk can't be sent anymore.
+								const gone = Object.keys(drafts).filter((entry) => !view.entries.some((other) => other.id === entry));
+								for (const entry of gone) setDrafts(entry, undefined!);
+								if (gone.length > 0) void loaded.then(prune);
+							}),
+						),
+					),
+				).pipe(Effect.tapError(() => Effect.sync(() => setState("online", false))), Effect.retry(Schedule.spaced("1 second"))),
+			);
+			onCleanup(() => runtime.runFork(Fiber.interrupt(subscription)));
+		}),
 	);
-	onCleanup(() => runtime.runFork(Fiber.interrupt(subscription)));
 
-	const entries = () => state.view?.entries ?? [];
+	/** The entries of the project shown; none while the previous project's view is still up. */
+	const entries = () => (state.view && (state.view.project?.id ?? undefined) === project() ? state.view.entries : []);
 	/** Blocked entries (an unresolved follow-up below) are in neither group: their follow-ups are. */
 	const mine = createMemo(() => waitingFor(entries(), "user"));
 	const theirs = createMemo(() => waitingFor(entries(), "agent"));
@@ -147,11 +181,23 @@ function App() {
 			return `Submitted ${count} draft${count === 1 ? "" : "s"}; queued for the agents`;
 		});
 
+	/** Why the last try to deliver the entry's text failed, if it did. */
+	const failure = (entry: Entry) => (entry.outbox === null ? undefined : state.view?.failures[entry.outbox]);
+
 	const Pills = (props: { entry: Entry }) => (
 		<>
 			<span class={`pill ${drafted(props.entry) ? "drafted" : props.entry.status}`}>{drafted(props.entry) ? "drafted" : props.entry.status}</span>
 			<Show when={props.entry.outbox !== null}>
-				<span class="pill undelivered" title="Your text hasn't reached the session yet: its OpenCode isn't connected. It goes out when it is.">not delivered</span>
+				<span
+					class={`pill undelivered${failure(props.entry) ? " failed" : ""}`}
+					title={
+						failure(props.entry)
+							? `Your text hasn't reached the session: the last try failed (${failure(props.entry)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`
+							: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does."
+					}
+				>
+					not delivered
+				</span>
 			</Show>
 			<Show when={yours(props.entry)}>
 				<span class="pill yours">your turn</span>
@@ -172,7 +218,7 @@ function App() {
 				<div class="list">
 					<For each={props.entries}>
 						{(entry) => (
-							<A class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`} href={`/${entry.id}`}>
+							<A class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`} href={entryPath(entry.id)}>
 								<span class="id">#{shortId(entry.id)}</span>
 								<Show when={entry.priority === "critical"}>
 									<span class="crit" title="Critical: blocking work right now">▲▲</span>
@@ -189,7 +235,7 @@ function App() {
 			</Show>
 		);
 		return (
-			<Show when={project !== undefined} fallback={<Projects />}>
+			<Show when={project() !== undefined} fallback={<Projects />}>
 			<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
 				<Section title="Waiting on you" entries={mine()} note={`${mine().filter(drafted).length} of ${mine().length} drafted`} />
 				<Section title="Waiting on the agents" entries={theirs()} />
@@ -207,15 +253,18 @@ function App() {
 				<div class="list">
 					<For each={state.view!.projects}>
 						{(other) => (
-							<a class={`item${other.waiting ? " turn" : ""}`} href={`?project=${encodeURIComponent(other.id)}`}>
+							<A class={`item${other.waiting ? " turn" : ""}`} href={projectPath(other.id)}>
 								<span class="title">{other.name}</span>
+								<Show when={other.guessed}>
+									<span class="label" title="Guessed from the folder: no connected OpenCode knows these sessions yet">folder</span>
+								</Show>
 								<Show when={other.critical}>
 									<span class="crit" title="Critical: blocking work right now">▲▲ {other.critical}</span>
 								</Show>
 								<Show when={other.waiting}>
 									<span class="pill yours">{other.waiting} waiting on you</span>
 								</Show>
-							</a>
+							</A>
 						)}
 					</For>
 				</div>
@@ -229,7 +278,10 @@ function App() {
 		const entry = () => byId(params.id);
 		/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
 		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>((previous) => (entry() ? { parent: entry()!.parent, created: entry()!.created, priority: entry()!.priority } : previous), { parent: null, created: "", priority: "normal" });
-		const goNext = () => navigate(`/${next(entries(), { id: params.id, ...place() })?.id ?? ""}`);
+		const goNext = () => {
+			const following = next(entries(), { id: params.id, ...place() });
+			navigate(following ? entryPath(following.id) : home());
+		};
 		/** Submits every draft, like the header's Submit, then goes on. Next (Shift) leaves them in the browser instead. */
 		const sendAndNext = () => {
 			if (pending().length > 0) void submit();
@@ -267,7 +319,7 @@ function App() {
 					<div class="dropzone">Drop to attach</div>
 				</Show>
 				<div class="nav">
-					<A href="/">← All entries</A>
+					<A href={home()}>← All entries</A>
 					<span class="spacer" />
 					<button class="secondary" title={params.id} onClick={() => void attempt(() => navigator.clipboard.writeText(params.id).then(() => "Id copied"))}>
 						<Icon name="copy" /> Copy id
@@ -297,10 +349,29 @@ function App() {
 									<For each={entry().labels}>{(label) => <span class="label">{label}</span>}</For>
 								</div>
 								<div class="muted">{entry().asker === "agent" ? "agents → you" : "you → agents"}</div>
+								<Show when={failure(entry())}>
+									{(reason) => <div class="failure">Not delivered: the last try failed: {reason()}. It's tried again on every change, when an OpenCode connects, and every 30 s.</div>}
+								</Show>
+								<Show when={entry().outbox !== null}>
+									<div class="undelivered-actions">
+										<span class="muted">Your text hasn't reached its session yet.</span>
+										<button
+											class="link"
+											title="Stop trying to deliver it, e.g. when its session was deleted. The text stays on the entry, and the entry can be resolved."
+											onClick={() => {
+												const id = entry().id;
+												if (!confirm("Stop delivering your text? It stays on the entry, but its session never receives it. Anything sent in the same message is dropped too.")) return;
+												void attempt(() => call((client) => client.discard({ entry: id })).then(() => `#${shortId(id)}: delivery discarded`));
+											}}
+										>
+											Discard delivery
+										</button>
+									</div>
+								</Show>
 								<Show when={parent()}>
 									{(parent) => (
 										<div class="relation">
-											Follow-up to <A href={`/${parent().id}`}>#{shortId(parent().id)} {parent().title}</A> <Pills entry={parent()} />
+											Follow-up to <A href={entryPath(parent().id)}>#{shortId(parent().id)} {parent().title}</A> <Pills entry={parent()} />
 										</div>
 									)}
 								</Show>
@@ -389,7 +460,7 @@ function App() {
 											<For each={children()}>
 												{(child) => (
 													<li>
-														<A href={`/${child.id}`}>
+														<A href={entryPath(child.id)}>
 															#{shortId(child.id)} {child.title}
 														</A>{" "}
 														<Pills entry={child} />
@@ -406,7 +477,7 @@ function App() {
 											<For each={further()}>
 												{(deep) => (
 													<li>
-														<A href={`/${deep.id}`}>
+														<A href={entryPath(deep.id)}>
 															#{shortId(deep.id)} {deep.title}
 														</A>{" "}
 														<Pills entry={deep} />
@@ -425,7 +496,11 @@ function App() {
 		);
 	}
 
-	const Shell = (props: ParentProps) => (
+	const Shell = (props: ParentProps) => {
+		const navigate = useNavigate();
+		const route = useLocation();
+		createEffect(() => setProject(projectIn(route.pathname)));
+		return (
 		<Show when={state.view} fallback={<div class="empty">Connecting…</div>}>
 			<header>
 				<div class="bar">
@@ -437,29 +512,37 @@ function App() {
 							ref={(select) => createEffect(() => {
 								// After the options for this view exist: a value set before them doesn't stick.
 								void state.view!.projects.length;
-								queueMicrotask(() => (select.value = project ?? ""));
+								const id = project() ?? "";
+								queueMicrotask(() => (select.value = id));
 							})}
 							class="project"
 							title="Each project has its own desk"
-							onChange={(event) => location.assign(event.currentTarget.value ? `?project=${encodeURIComponent(event.currentTarget.value)}` : "?")}
+							onChange={(event) => navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")}
 						>
-							<Show when={project === undefined}>
+							<Show when={project() === undefined}>
 								<option value="" selected>Choose a project</option>
 							</Show>
-							<Show when={state.view!.project && !state.view!.projects.some((other) => other.id === project)}>
-								<option value={project} selected>{state.view!.project!.name}</option>
+							<Show when={state.view!.project && !state.view!.projects.some((other) => other.id === project())}>
+								<option value={project()} selected>{state.view!.project!.name}</option>
 							</Show>
 							<For each={state.view!.projects}>
 								{(other) => (
-									<option value={other.id} selected={other.id === project}>
+									<option value={other.id} selected={other.id === project()}>
 										{other.name}
-										{other.id !== project && other.waiting ? ` (${other.waiting})` : ""}
+										{other.guessed ? " (folder)" : ""}
+										{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
 									</option>
 								)}
 							</For>
 						</select>
 					</Show>
 					<span class="spacer" />
+					<span
+						class={`connection${state.view!.opencode === 0 ? " none" : ""}`}
+						title="OpenCode instances whose desk plugin is connected: answers go out through them, and they tell which project each question is in"
+					>
+						{state.view!.opencode === 0 ? "No OpenCode connected" : `OpenCode connected${state.view!.opencode > 1 ? ` (${state.view!.opencode})` : ""}`}
+					</span>
 					<Show when={!state.online}>
 						<span class="offline">reconnecting…</span>
 					</Show>
@@ -468,20 +551,29 @@ function App() {
 					</button>
 				</div>
 			</header>
-			<main>{props.children}</main>
+			<main>
+				<Show when={state.view!.opencode === 0 || state.view!.project?.guessed || (project() === undefined && state.view!.projects.some((other) => other.guessed))}>
+					<div class="notice">
+						<Show when={state.view!.opencode === 0}>No OpenCode is connected: answers wait as <em>not delivered</em> until one is. </Show>
+						Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected OpenCode knows their session yet.
+					</div>
+				</Show>
+				{props.children}
+			</main>
 			<Show when={toast()} keyed>
 				{(toast) => <div class={`toast${toast.error ? " error" : ""}`}>{toast.message}</div>}
 			</Show>
 		</Show>
-	);
+		);
+	};
 
 	return (
 		<MetaProvider>
 			<Title>{`${mine().length ? `(${mine().length}) ` : ""}${state.view?.project ? `${state.view.project.name} · ` : ""}Desk`}</Title>
-			<HashRouter root={Shell}>
-				<Route path="/" component={List} />
-				<Route path="/:id" component={EntryView} />
-			</HashRouter>
+			<Router root={Shell}>
+				<Route path={["/", "/projects/:project"]} component={List} />
+				<Route path="/projects/:project/questions/:id" component={EntryView} />
+			</Router>
 		</MetaProvider>
 	);
 }

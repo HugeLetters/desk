@@ -1,38 +1,36 @@
 /**
  * Which project an entry belongs to. Entries don't store it: it's their root session's project, asked of OpenCode
- * (`session.get(root).projectID`) the first time and cached, in memory and in `<store>/projects.json` (so the page
- * still sorts entries while no OpenCode is running). A session that moves is dropped from the cache and asked again,
- * so its entries follow it to the new project.
+ * (`session.get(root).projectID`, through a connected plugin instance) and remembered in memory only, kept while
+ * OpenCode is away. A session that moves is asked again, and so is every session whenever a plugin instance connects,
+ * so a move missed while nothing was connected is caught on the next connect; one nobody connected knows keeps what
+ * was known.
+ *
+ * When no connected OpenCode knows the session, the entry is placed by its folder instead (`folder:<directory>`): a
+ * guess, shown as one, until an OpenCode that knows it connects.
  *
  * A project's name is the last segment of its directory, as plugin instances report it when they connect (else the
  * directory of an entry in it).
  */
+import { basename } from "node:path";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { OpenCode } from "./opencode";
 
-export interface Project {
-	readonly id: string;
-	readonly name: string;
-}
+const folderPrefix = "folder:";
 
-interface Cache {
-	/** Root session → project id. */
-	readonly sessions: Record<string, string>;
-	/** Project id → its directory. */
-	readonly directories: Record<string, string>;
-}
+/** The id an entry gets while no connected OpenCode can place it: its folder. */
+export const folder = (directory: string) => `${folderPrefix}${directory}`;
+/** Whether a project id is a folder guess rather than OpenCode's project. */
+export const guessed = (project: string) => project.startsWith(folderPrefix);
 
 export class Projects extends Context.Service<
 	Projects,
 	{
-		/** The project of a root session; undefined while no OpenCode that knows it is connected and it isn't cached. */
-		readonly of: (session: string) => Effect.Effect<string | undefined>;
+		/** The project of an entry's root session, or its folder when no connected OpenCode knows the session. */
+		readonly of: (entry: { readonly session: string; readonly directory: string }) => Effect.Effect<string>;
 		/** Records a project's directory (for its name). */
 		readonly remember: (project: string, directory: string) => Effect.Effect<void>;
 		readonly name: (project: string, fallbackDirectory?: string) => Effect.Effect<string>;
@@ -40,54 +38,58 @@ export class Projects extends Context.Service<
 		readonly changes: Stream.Stream<number>;
 	}
 >()("desk/Projects") {
-	static layer(root: string) {
+	static get layer() {
 		return Layer.effect(
 			this,
 			Effect.gen(function* () {
-				const fs = yield* FileSystem.FileSystem;
-				const path = yield* Path.Path;
 				const opencode = yield* OpenCode;
-				const file = path.join(root, "projects.json");
-				const loaded = yield* fs.readFileString(file).pipe(
-					Effect.map((text) => JSON.parse(text) as Cache),
-					Effect.orElseSucceed((): Cache => ({ sessions: {}, directories: {} })),
-				);
-				const cache = { sessions: { ...loaded.sessions }, directories: { ...loaded.directories } };
+				/** Root session → its project, or null: no connected OpenCode knew it. */
+				const sessions = new Map<string, string | null>();
+				/** Sessions to ask again (a connect, a move) before their remembered project is used. */
+				const stale = new Set<string>();
+				/** Project id → its directory. */
+				const directories = new Map<string, string>();
 				const version = yield* SubscriptionRef.make(0);
-				const save = Effect.andThen(Effect.ignore(fs.writeFileString(file, JSON.stringify(cache, null, "\t"))), SubscriptionRef.update(version, (n) => n + 1));
+				const bump = SubscriptionRef.update(version, (n) => n + 1);
 
 				yield* opencode.moved.pipe(
-					Stream.runForEach((session) => {
-						if (!(session in cache.sessions)) return Effect.void;
-						delete cache.sessions[session];
-						return save;
-					}),
+					Stream.runForEach((session) => Effect.andThen(Effect.sync(() => stale.add(session)), bump)),
 					Effect.forkScoped,
 				);
-				// A server that comes back may know sessions we couldn't place: have the views ask again.
+				// A plugin instance that connects may know sessions, or moves, the others didn't: ask again.
+				let previous = 0;
 				yield* opencode.attached.pipe(
-					Stream.runForEach(() => SubscriptionRef.update(version, (n) => n + 1)),
+					Stream.runForEach((count) => {
+						const more = count > previous;
+						previous = count;
+						if (more) for (const session of sessions.keys()) stale.add(session);
+						return bump;
+					}),
 					Effect.forkScoped,
 				);
 
 				return Projects.of({
-					of: (session) =>
+					of: ({ session, directory }) =>
 						Effect.suspend(() => {
-							const known = cache.sessions[session];
-							if (known) return Effect.succeed(known);
-							return Effect.flatMap(opencode.session(session), (info) => {
-								if (!info) return Effect.succeed(undefined);
-								cache.sessions[session] = info.projectID;
-								return Effect.as(save, info.projectID);
+							const known = sessions.get(session);
+							if (known !== undefined && !stale.has(session)) return Effect.succeed(known ?? folder(directory));
+							stale.delete(session);
+							return Effect.map(opencode.session(session), (info) => {
+								const project = info?.projectID ?? known ?? null;
+								sessions.set(session, project);
+								// A name for a project no plugin instance has reported yet: the session's folder.
+								if (info && !directories.has(info.projectID)) directories.set(info.projectID, info.directory);
+								return project ?? folder(directory);
 							});
 						}),
 					remember: (project, directory) =>
 						Effect.suspend(() => {
-							if (cache.directories[project] === directory) return Effect.void;
-							cache.directories[project] = directory;
-							return save;
+							if (directories.get(project) === directory) return Effect.void;
+							directories.set(project, directory);
+							return bump;
 						}),
-					name: (project, fallbackDirectory) => Effect.sync(() => path.basename(cache.directories[project] ?? fallbackDirectory ?? project)),
+					name: (project, fallbackDirectory) =>
+						Effect.sync(() => basename(guessed(project) ? project.slice(folderPrefix.length) : (directories.get(project) ?? fallbackDirectory ?? project))),
 					changes: SubscriptionRef.changes(version),
 				});
 			}),

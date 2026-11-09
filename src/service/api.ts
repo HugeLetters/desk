@@ -8,10 +8,12 @@ import * as HttpServer from "effect/http/HttpServer";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { Desk, type Draft } from "../desk";
+import { Failures } from "../delivery";
 import { type Entry, waitingFor } from "../entry";
-import type { DeskError } from "../errors";
-import { unknownProject, type View } from "../page-api";
-import { Projects } from "../projects";
+import { DeskError } from "../errors";
+import type { View } from "../page-api";
+import { guessed, Projects } from "../projects";
+import { OpenCode } from "../opencode";
 import type { Methods } from "../protocol";
 
 type Handler<M extends keyof Methods> = (input: Methods[M]["input"]) => Effect.Effect<Methods[M]["output"], DeskError>;
@@ -31,6 +33,7 @@ export class Api extends Context.Service<
 		readonly submit: (drafts: ReadonlyArray<Draft>) => Effect.Effect<number, DeskError>;
 		readonly send: (draft: Draft) => Effect.Effect<void, DeskError>;
 		readonly resolveByUser: (id: string) => Effect.Effect<void, DeskError>;
+		readonly discard: (entry: string) => Effect.Effect<void, DeskError>;
 	}
 >()("desk/Api") {
 	/** Needs the page's `HttpServer`, for its URL (`http://127.0.0.1:<port>/`). */
@@ -42,20 +45,24 @@ export class Api extends Context.Service<
 				const url = server.address._tag === "UnixPathAddress" ? "" : `http://127.0.0.1:${server.address.port}/`;
 				const desk = yield* Desk;
 				const projects = yield* Projects;
-				const link = (project: string | undefined, entry?: string) => `${url}?project=${encodeURIComponent(project ?? unknownProject)}${entry ? `#/${entry}` : ""}`;
+				const opencode = yield* OpenCode;
+				const failures = yield* Failures;
+				const link = (project: string, entry?: string) => `${url}projects/${encodeURIComponent(project)}${entry ? `/questions/${entry}` : ""}`;
 
-				/** Each entry's project, by root session (one lookup per session). */
+				/** Each entry's project (one lookup per root session; `Projects` remembers them). */
 				const placed = (entries: ReadonlyArray<Entry>) =>
 					Effect.gen(function* () {
-						const bySession = new Map<string, string>();
-						for (const session of new Set(entries.map((entry) => entry.session))) bySession.set(session, (yield* projects.of(session)) ?? unknownProject);
-						return (entry: Entry) => bySession.get(entry.session)!;
+						const byEntry = new Map<string, string>();
+						for (const entry of entries) byEntry.set(entry.id, yield* projects.of(entry));
+						return (entry: Entry) => byEntry.get(entry.id)!;
 					});
-				/** Entries in the same project as `session`. */
-				const scope = (session: string) =>
+				/** Entries in the same project as `session` (working in `directory`, when known). */
+				const scope = (session: string, directory?: string) =>
 					Effect.gen(function* () {
-						const project = (yield* projects.of(session)) ?? unknownProject;
-						const projectOf = yield* placed(yield* desk.entries);
+						const all = yield* desk.entries;
+						const where = directory ?? all.find((entry) => entry.session === session)?.directory ?? "";
+						const project = yield* projects.of({ session, directory: where });
+						const projectOf = yield* placed(all);
 						return { project, scope: (entry: Entry) => projectOf(entry) === project };
 					});
 
@@ -67,15 +74,17 @@ export class Api extends Context.Service<
 							Effect.gen(function* () {
 								const mine = entries.filter((entry) => projectOf(entry) === id);
 								const waiting = waitingFor(mine, "user");
-								const name = id === unknownProject ? "Unknown project" : yield* projects.name(id, mine[0]?.directory);
-								return { id, name, waiting: waiting.length, critical: waiting.filter((entry) => entry.priority === "critical").length };
+								const name = yield* projects.name(id, mine[0]?.directory);
+								return { id, name, guessed: guessed(id), waiting: waiting.length, critical: waiting.filter((entry) => entry.priority === "critical").length };
 							}),
 						);
 						const name = project === undefined ? undefined : (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(project)));
 						return {
-							project: project === undefined ? null : { id: project, name: name! },
+							project: project === undefined ? null : { id: project, name: name!, guessed: guessed(project) },
 							entries: project === undefined ? [] : entries.filter((entry) => projectOf(entry) === project),
 							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
+							opencode: yield* opencode.connected,
+							failures: Object.fromEntries(yield* failures.current),
 						} satisfies View;
 					});
 
@@ -83,7 +92,7 @@ export class Api extends Context.Service<
 					url,
 					ask: ({ asker, question }) =>
 						Effect.gen(function* () {
-							const { project, scope: mine } = yield* scope(asker.session);
+							const { project, scope: mine } = yield* scope(asker.session, asker.directory);
 							const entry = yield* desk.ask(asker, question, mine);
 							return { id: entry.id, parent: entry.parent, url: link(project, entry.id) };
 						}),
@@ -92,15 +101,24 @@ export class Api extends Context.Service<
 					resolve: ({ id }) => Effect.as(desk.resolve(id, "agent"), null),
 					prioritize: ({ id, priority, subtree }) => Effect.as(desk.prioritize(id, priority, subtree), null),
 					list: ({ session, id }) => Effect.flatMap(scope(session), ({ scope: mine }) => desk.describe(id, mine)),
-					page: ({ session }) => Effect.map(projects.of(session), (project) => ({ url: link(project) })),
+					page: ({ session }) => Effect.map(scope(session), ({ project }) => ({ url: link(project) })),
 					view: (project) =>
-						Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(projects.changes, () => undefined)], { concurrency: "unbounded" }).pipe(
+						Stream.mergeAll([Stream.map(desk.changes, () => undefined), Stream.map(projects.changes, () => undefined), Stream.map(failures.changes, () => undefined)], { concurrency: "unbounded" }).pipe(
 							Stream.debounce("10 millis"),
 							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(project, entries))),
+							// The desk is read again every few seconds anyway: send a view only when it differs.
+							Stream.changesWith((a, b) => JSON.stringify(a) === JSON.stringify(b)),
 						),
 					submit: (drafts) => desk.reply(drafts, "queue"),
 					send: (draft) => Effect.asVoid(desk.reply([draft], "steer")),
 					resolveByUser: (id) => desk.resolve(id, "user"),
+					discard: (id) =>
+						Effect.flatMap(desk.entries, (entries) => {
+							const entry = entries.find((candidate) => candidate.id === id);
+							if (!entry) return Effect.fail(new DeskError({ message: `No desk entry ${id}.` }));
+							if (entry.outbox === null) return Effect.fail(new DeskError({ message: `Entry ${id} has nothing waiting to be delivered.` }));
+							return desk.discard(entry.outbox);
+						}),
 				});
 			}),
 		);

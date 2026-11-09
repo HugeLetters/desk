@@ -29,9 +29,8 @@ export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 			delivery: sent.some((entry) => entry.delivery === "steer") ? "steer" : "queue",
 			text: [
 				"Desk: the user replied on the desk.",
+				// What to do with it is in the desk_* tools' descriptions; repeating it in every message only fills the context.
 				...sections.map((section) => section.text),
-				"---",
-				"Answer the user's questions with desk_answer, ask follow-ups with desk_ask (parent: the entry), and mark your own questions done with desk_resolve once the outcome is applied (glossary, ADR, issue, code). desk_list shows the desk.",
 			].join("\n\n"),
 			files: sections.flatMap((section) => attachmentsIn(section.body)),
 		};

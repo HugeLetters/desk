@@ -39,9 +39,6 @@ await writeFile(
 	join(phantom, "design", "empty.svg"),
 	`<svg xmlns="http://www.w3.org/2000/svg" width="360" height="140" viewBox="0 0 360 140"><rect width="360" height="140" rx="12" fill="#eef1f5"/><g fill="none" stroke="#6b7280" stroke-width="4" stroke-linecap="round"><path d="M40 90 l30 -40 l30 40 z"/><circle cx="160" cy="70" r="28"/><rect x="230" y="42" width="56" height="56" rx="8"/></g><text x="180" y="128" font-family="sans-serif" font-size="13" text-anchor="middle" fill="#6b7280">A · B · C</text></svg>`,
 );
-// The project cache, as a service that ran before would have left it: the page sorts entries while no OpenCode is up.
-await writeFile(join(store, "projects.json"), JSON.stringify({ sessions: { ses_main: "prj_phantom", ses_review: "prj_phantom", ses_desk: "prj_desk" }, directories: { prj_phantom: phantom, prj_desk: deskDir } }));
-
 const fake = fakeOpenCode();
 const opencode = fake.server("http://127.0.0.1:4096");
 for (const [id, projectID, directory] of [["ses_main", "prj_phantom", phantom], ["ses_review", "prj_phantom", phantom], ["ses_desk", "prj_desk", deskDir]] as const) opencode.session({ id, projectID, directory });
@@ -51,8 +48,8 @@ try {
 	await rm(out, { recursive: true, force: true });
 	await mkdir(join(out, ".frames"), { recursive: true });
 
-	// A plugin instance whose OpenCode isn't reachable yet: what the user answers waits in the outbox.
-	const agent = service.plugin(undefined, { id: "prj_phantom", directory: phantom });
+	// The agents ask in that OpenCode, which tells the service each question's project.
+	const agent = service.plugin(opencode, { id: "prj_phantom", directory: phantom });
 	const ask = (session: string, question: { title: string; body: string; labels?: Array<string>; parent?: string; priority?: "critical" | "high" | "normal" | "low" }) =>
 		agent.request("ask", { asker: { session, directory: session === "ses_desk" ? deskDir : phantom }, question });
 	const review = await ask("ses_review", { title: "Review PR #84: virtualise the torrent list", body: "The list now renders only visible rows. Questions below; screenshots in the PR.", labels: ["pr:84", "review"], priority: "high" });
@@ -67,7 +64,29 @@ try {
 	await ask("ses_main", { title: "Rename \"Destination\" to \"Folder\" in the add dialog?", body: "Shorter, but the glossary says *destination*.", labels: ["glossary"], priority: "low" });
 	await ask("ses_desk", { title: "Default port for the desk page?", body: "47400 is free here; Phantom's old desk uses 47309." });
 	console.log(`sample desk at ${service.url}`);
-	const page = (project?: string, entry?: string) => `${service.url}${project ? `?project=${project}` : ""}${entry ? `#/${entry}` : ""}`;
+	const page = (project?: string, entry?: string) => `${service.url}${project ? `projects/${project}` : ""}${entry ? `/questions/${entry}` : ""}`;
+
+	// Every link stays on the page: across projects, into an entry and back, and through the project picker.
+	{
+		const context = await browser.newContext();
+		const tab = await context.newPage();
+		await tab.goto(page());
+		await settle(tab);
+		await tab.evaluate(() => ((window as { stayed?: boolean }).stayed = true));
+		const step = async (action: () => Promise<unknown>, path: string, shows: string) => {
+			await action();
+			await tab.waitForURL(`${service.url}${path}`);
+			await tab.waitForSelector(`text=${shows}`);
+		};
+		await step(() => tab.click('.list a:has-text("phantom")'), "projects/prj_phantom", "daemon restart");
+		await step(() => tab.click('.list a:has-text("daemon restart")'), `projects/prj_phantom/questions/**`, "Proposed handshake");
+		await step(() => tab.click("text=← All entries"), "projects/prj_phantom", "empty-state icon");
+		await step(() => tab.selectOption("select.project", "prj_desk"), "projects/prj_desk", "Default port");
+		await step(() => tab.click('h1 a:has-text("Desk")'), "", "Projects");
+		if (!(await tab.evaluate(() => (window as { stayed?: boolean }).stayed))) throw new Error("a link reloaded the page");
+		await context.close();
+		console.log("links stay on the page");
+	}
 
 	const stills: Array<[name: string, url: string, scheme: "light" | "dark"]> = [
 		["desk-projects", page(), "light"],
@@ -90,7 +109,8 @@ try {
 		console.log(`wrote ${name}.png`);
 	}
 
-	// The walk: answer from the list, the answer waits for its OpenCode, which connects, and it goes out.
+	// The walk: OpenCode quits; an answer waits as "not delivered"; OpenCode comes back, and it goes out.
+	await agent.close();
 	const context = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: "light" });
 	const tab = await context.newPage();
 	let frame = 0;
@@ -99,8 +119,9 @@ try {
 	};
 	await tab.goto(page("prj_phantom"));
 	await settle(tab);
+	await tab.waitForSelector("text=No OpenCode connected");
 	await snap(16);
-	await tab.click(`.list a[href="#/${rows.id}"]`);
+	await tab.click(`.list a[href="/projects/prj_phantom/questions/${rows.id}"]`);
 	await settle(tab);
 	await snap(10);
 	await tab.click("textarea");
@@ -115,7 +136,7 @@ try {
 	await tab.click("text=← All entries");
 	await settle(tab);
 	await snap(16);
-	service.plugin(opencode.endpoint, { id: "prj_phantom", directory: phantom }); // that OpenCode connects
+	service.plugin(opencode, { id: "prj_phantom", directory: phantom }); // that OpenCode comes back
 	await eventually(() => opencode.admitted.length === 1);
 	await tab.waitForSelector(".pill.undelivered", { state: "detached" });
 	await snap(20);
