@@ -89,5 +89,10 @@ export const layer = (store: string) =>
 		{ disableLogger: true, disableListenLog: true },
 	);
 
-/** The page's server on 127.0.0.1:`port` (0: any free port); a taken port fails the layer. */
-export const server = (port: number) => BunHttpServer.layer({ port, hostname: "127.0.0.1" });
+/**
+ * The page's server on 127.0.0.1:`port` (0: any free port); a taken port fails the layer. Its shutdown waits at most a
+ * second for open requests: an open page's view stream never ends, so otherwise the service couldn't stop while a page
+ * is open (it would wait the server's default 20 seconds).
+ */
+export const server = (port: number) =>
+	BunHttpServer.layer({ port, hostname: "127.0.0.1", gracefulShutdownTimeout: "1 second" });

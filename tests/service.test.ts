@@ -491,6 +491,16 @@ describe("projects", () => {
 });
 
 describe("the page server", () => {
+	test("stops within about a second while a page is open (its view stream never ends)", async () => {
+		const page = service.rpc((client) => client.view({}).pipe(Stream.runDrain)).catch(() => {});
+		await eventually(async () => (await service.clients()) === 1);
+		const started = Date.now();
+		await service.close();
+		expect(Date.now() - started).toBeLessThan(3000);
+		await page;
+		service = await startService();
+	});
+
 	test("serves the page as built by Vite", async () => {
 		await expectBuiltPage(service.url.replace(/\/$/, ""));
 	});
