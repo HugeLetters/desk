@@ -5,7 +5,7 @@
  * on it. When the service goes, it does it all again, starting a new one; requests wait for that.
  */
 import { spawn } from "node:child_process";
-import { mkdirSync, openSync } from "node:fs";
+import { closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { ProjectID } from "@opencode/schema/project-id";
@@ -67,14 +67,13 @@ export const errorMessage = (error: unknown) =>
 			? String(error.message)
 			: String(error);
 
-/** Whether a service answers on `path`. */
-export const answering = (path: string) =>
-	Bun.connect({ unix: path, socket: { data() {} } }).then(
-		(socket) => {
-			socket.end();
-			return true;
-		},
-		() => false,
+/** Whether a service answers on `path`: connects, and hangs up at once. */
+export const answering = (path: string): Effect.Effect<boolean> =>
+	BunSocket.makeNet({ path }).pipe(
+		Effect.flatMap((socket) => socket.reader),
+		Effect.scoped,
+		Effect.as(true),
+		Effect.orElseSucceed(() => false),
 	);
 
 /** Connects for as long as the scope is open. */
@@ -99,9 +98,9 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 
 		/** Nobody answers: start the service and wait until it does. */
 		const ensure = Effect.gen(function* () {
-			if (yield* Effect.promise(() => answering(options.socket))) return;
+			if (yield* answering(options.socket)) return;
 			yield* options.start;
-			yield* Effect.promise(() => answering(options.socket)).pipe(
+			yield* answering(options.socket).pipe(
 				Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: (up) => up }),
 				Effect.timeoutOrElse({
 					duration: options.timeout ?? "10 seconds",
@@ -158,11 +157,18 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 		const live = SubscriptionRef.changes(state).pipe(
 			Stream.filter((now) => now._tag !== "Connecting"),
 			Stream.runHead,
-			Effect.map(Option.getOrThrow),
-			Effect.flatMap((now) =>
-				now._tag === "Live"
-					? Effect.succeed(now)
-					: Effect.fail(new DeskError({ message: now._tag === "Refused" ? now.message : "The desk service is gone." })),
+			// None only if the state's changes ended, which they don't: that would mean the service is gone, too.
+			Effect.flatMap((first) =>
+				Option.isSome(first) && first.value._tag === "Live"
+					? Effect.succeed(first.value)
+					: Effect.fail(
+							new DeskError({
+								message:
+									Option.isSome(first) && first.value._tag === "Refused"
+										? first.value.message
+										: "The desk service is gone.",
+							}),
+						),
 			),
 		);
 		return {
@@ -172,20 +178,27 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 	});
 
 /**
- * Starts `bun src/service/main.ts` detached, logging to `<store>/service.log`. With `node:child_process`, not Effect's
- * `ChildProcess`: that one ends the child with its scope, and the service has to outlive this OpenCode.
+ * Starts `bun src/service/main.ts` detached, logging to `<store>/service.log`, which it gets as its own stdout and
+ * stderr. With `node:child_process`, not Effect's `ChildProcess`: that one can detach and unref a child, but its output
+ * goes to a pipe (or a sink) in this process, which breaks when this OpenCode exits, and the service outlives it. Nor
+ * does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The log is closed here once the child has it.
  */
 export const startService = (env: { DESK_HOME: string; DESK_PORT: string }) =>
-	Effect.sync(() => {
-		mkdirSync(env.DESK_HOME, { recursive: true });
-		const log = openSync(join(env.DESK_HOME, "service.log"), "a");
-		const main = join(dirname(import.meta.dir), "service", "main.ts");
-		// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
-		const bun = Bun.which("bun");
-		const child = spawn(bun ?? process.execPath, [main], {
-			detached: true,
-			stdio: ["ignore", log, log],
-			env: { ...process.env, ...env, ...(bun ? {} : { BUN_BE_BUN: "1" }) },
-		});
-		child.unref();
-	});
+	Effect.acquireUseRelease(
+		Effect.sync(() => {
+			mkdirSync(env.DESK_HOME, { recursive: true });
+			return openSync(join(env.DESK_HOME, "service.log"), "a");
+		}),
+		(log) =>
+			Effect.sync(() => {
+				const main = join(dirname(import.meta.dir), "service", "main.ts");
+				// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
+				const bun = Bun.which("bun");
+				spawn(bun ?? process.execPath, [main], {
+					detached: true,
+					stdio: ["ignore", log, log],
+					env: { ...process.env, ...env, ...(bun ? {} : { BUN_BE_BUN: "1" }) },
+				}).unref();
+			}),
+		(log) => Effect.sync(() => closeSync(log)),
+	);

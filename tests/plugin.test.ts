@@ -141,7 +141,7 @@ afterAll(async () => {
 test("off by default: a session sees no desk tools until /desk-mode turns it on, for its subagents too", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service.
-	expect(await answering(join(home, "desk.sock"))).toBe(false);
+	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(false);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(first.synthetic.at(-1)!.text).toMatch(
@@ -165,7 +165,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 });
 
 test("the plugin started the service, detached, in its store; a subagent's question belongs to its root session", async () => {
-	expect(await answering(join(home, "desk.sock"))).toBe(true);
+	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(true);
 	const result = await first.tool("desk_ask", "ses_sub", { title: "From a subagent?", body: "Details." });
 	const id = /Asked ([0-9a-f-]{36}), top-level\./.exec(result.content)![1]!;
 	const text = await readFile(join(home, `${id}.md`), "utf8");
@@ -230,7 +230,7 @@ test("the service exits once every plugin instance has gone", async () => {
 	// Watch the log: probing the socket would make a client and keep the service up.
 	await eventually(async () => (await readFile(join(home, "service.log"), "utf8")).includes("desk: exiting"), 5000);
 	await Bun.sleep(100);
-	expect(await answering(join(home, "desk.sock"))).toBe(false);
+	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(false);
 	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(2);
 });
 
