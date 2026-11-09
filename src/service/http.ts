@@ -7,7 +7,7 @@
  * must come from the page itself (no Origin, or this origin), so other sites open in the browser can't post into a
  * session. Each open page is a client of the service (its `view` stream) while it stays open.
  */
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
 import * as Effect from "effect/Effect";
@@ -16,6 +16,7 @@ import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
 import * as HttpStaticServer from "effect/http/HttpStaticServer";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
@@ -58,17 +59,18 @@ const Rpcs = RpcServer.layerHttp({ group: DeskApi, path: "/rpc", protocol: "http
 );
 
 /** `/files/<entry id>/<path>`: a file below the entry's directory, never outside it. */
-const Files = HttpRouter.add("GET", "/files/*", (request) =>
+const Files = HttpRouter.add("GET", "/files/:id/*", () =>
 	Effect.gen(function* () {
 		const desk = yield* Desk;
-		const [, , id, ...rest] = new URL(request.url, "http://desk").pathname.split("/");
+		const path = yield* Path.Path;
+		const { id, "*": below = "" } = yield* HttpRouter.params;
 		const entry = (yield* desk.entries).find((candidate) => candidate.id === id);
 		if (!entry) return HttpServerResponse.text("no such entry", { status: 404 });
-		const path = resolve(entry.directory, decodeURIComponent(rest.join("/")));
-		const inside = relative(entry.directory, path);
-		if (inside.startsWith("..") || isAbsolute(inside))
+		const file = path.resolve(entry.directory, below);
+		const inside = path.relative(entry.directory, file);
+		if (inside.startsWith("..") || path.isAbsolute(inside))
 			return HttpServerResponse.text("outside the entry's directory", { status: 403 });
-		return yield* HttpServerResponse.file(path).pipe(
+		return yield* HttpServerResponse.file(file).pipe(
 			Effect.catch(() => Effect.succeed(HttpServerResponse.text("not found", { status: 404 }))),
 		);
 	}),

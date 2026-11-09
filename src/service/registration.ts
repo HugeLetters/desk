@@ -7,12 +7,12 @@
  * goes when the service stops. A port, configured or not, doesn't decide anything: the page takes whichever port it
  * can and writes it here.
  */
-import { join } from "node:path";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import { protocol } from "../protocol";
 import { decode, encode, type Info } from "../service-info";
@@ -42,12 +42,12 @@ export class Registration extends Context.Service<
 >()("desk/Registration") {
 	/** Takes the store's lock for the layer's lifetime, or fails with `AlreadyRunning`. */
 	static layer(store: string) {
-		const path = join(store, "service.json");
 		const own: Info = { pid: process.pid, protocol };
 		return Layer.effect(
 			Registration,
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
+				const path = (yield* Path.Path).join(store, "service.json");
 				/** The registration there now; undefined when there's none or it isn't one. */
 				const read = fs.readFileString(path).pipe(
 					Effect.flatMap(decode),

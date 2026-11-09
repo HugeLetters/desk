@@ -7,17 +7,24 @@
  */
 import { homedir } from "node:os";
 import { join } from "node:path";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/tui";
 import type { Context } from "@opencode/plugin/tui/context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as ChildProcess from "effect/process/ChildProcess";
 import * as Stream from "effect/Stream";
 import { createSignal, Show } from "solid-js";
 import { count, type Status, watch } from "./badge";
 
-/** Opens a URL in the browser; DESK_OPENER replaces `open` for tests. */
+/** Opens a URL in the browser; DESK_OPENER replaces `open` for tests. `open` exits at once, once it has handed over. */
 const open = (url: string) =>
-	Bun.spawn([process.env.DESK_OPENER ?? "open", url], { stdout: "ignore", stderr: "ignore" });
+	ChildProcess.make(process.env.DESK_OPENER ?? "open", [url], { stdout: "ignore", stderr: "ignore" }).pipe(
+		Effect.flatMap((handle) => handle.exitCode),
+		Effect.scoped,
+		Effect.ignore,
+		Effect.provide(BunServices.layer),
+	);
 
 function Badge(props: { context: Context; status: Status | undefined; sessionID: string | undefined }) {
 	const context = props.context;
@@ -43,7 +50,7 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 				if (event.button !== 0 || !id || !props.status) return;
 				event.preventDefault();
 				event.stopPropagation();
-				open(`${props.status.url}projects/${encodeURIComponent(id)}`);
+				Effect.runFork(open(`${props.status.url}projects/${encodeURIComponent(id)}`));
 			}}
 		>
 			desk

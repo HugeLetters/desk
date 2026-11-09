@@ -11,11 +11,11 @@
  * Why the last try of a message failed, when it did (not merely "no OpenCode knows the session"), is kept in memory
  * (`Failures`) for the page to show.
  */
-import { pathToFileURL } from "node:url";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Desk } from "./desk";
@@ -69,6 +69,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const desk = yield* Desk;
 			const opencode = yield* OpenCode;
 			const store = yield* Store;
+			const path = yield* Path.Path;
 			const failures = yield* Failures;
 
 			const flush = Effect.gen(function* () {
@@ -77,27 +78,31 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 				// All at once: a plugin that hangs (until its call times out) doesn't hold up the other sessions.
 				yield* Effect.forEach(
 					due(entries, new Set(yield* opencode.inDeskMode)),
-					(message) => {
-						const files = message.files.map(({ file, name }) => ({
-							uri: pathToFileURL(`${store.root}/${file}`).href,
-							name,
-						}));
-						return opencode
-							.prompt({
-								sessionID: message.session,
-								id: message.id,
-								text: message.text,
-								delivery: message.delivery,
-								files,
-							})
-							.pipe(
-								Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
-								Effect.andThen(failures.set(message.id, undefined)),
-								Effect.catch((failed) =>
-									Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed)),
-								),
+					(message) =>
+						Effect.gen(function* () {
+							// A path below the store always makes a file URL.
+							const files = yield* Effect.forEach(message.files, ({ file, name }) =>
+								Effect.map(Effect.orDie(path.toFileUrl(path.join(store.root, file))), (url) => ({
+									uri: url.href,
+									name,
+								})),
 							);
-					},
+							return yield* opencode
+								.prompt({
+									sessionID: message.session,
+									id: message.id,
+									text: message.text,
+									delivery: message.delivery,
+									files,
+								})
+								.pipe(
+									Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
+									Effect.andThen(failures.set(message.id, undefined)),
+									Effect.catch((failed) =>
+										Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed)),
+									),
+								);
+						}),
 					{ concurrency: "unbounded", discard: true },
 				);
 				// Messages that left the outbox (delivered, or their entry went) have nothing to report.

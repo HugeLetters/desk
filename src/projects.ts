@@ -11,11 +11,11 @@
  * A project's name is the last segment of its directory, as plugin instances report it when they connect (else the
  * directory of a session in it).
  */
-import { basename } from "node:path";
 import type { ProjectID } from "@opencode/schema/project-id";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { SessionID } from "./entry";
@@ -51,6 +51,7 @@ export class Projects extends Context.Service<
 			Projects,
 			Effect.gen(function* () {
 				const opencode = yield* OpenCode;
+				const path = yield* Path.Path;
 				const state = yield* SubscriptionRef.make<State>({
 					sessions: new Map(),
 					stale: new Set(),
@@ -100,7 +101,7 @@ export class Projects extends Context.Service<
 						),
 					name: (placement, fallbackDirectory) =>
 						Effect.map(SubscriptionRef.get(state), (now) =>
-							basename(
+							path.basename(
 								placement._tag === "Folder"
 									? placement.directory
 									: (now.directories.get(placement.id) ?? fallbackDirectory ?? placement.id),
