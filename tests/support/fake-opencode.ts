@@ -11,6 +11,7 @@ import type { SessionID } from "../../src/entry";
 import type { Options } from "../../src/plugin/connection";
 import type { Prompt, SessionInfo } from "../../src/protocol";
 import { P } from "./ids";
+import { present } from "./present";
 
 export interface FakeServer {
 	/** Names the instance. */
@@ -48,7 +49,7 @@ export function fakeOpenCode() {
 				this.sessions.set(info.id, { projectID: P("prj_default"), directory: "/work/default", ...info });
 			},
 			move(sessionID, projectID) {
-				const session = this.sessions.get(sessionID)!;
+				const session = present(this.sessions.get(sessionID));
 				this.sessions.set(sessionID, { ...session, projectID });
 				for (const notify of watchers.get(url) ?? []) notify(sessionID);
 			},

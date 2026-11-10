@@ -7,9 +7,8 @@
 	"linter": {
 		"rules": {
 			"preset": "recommended",
-			// `!` is used where a lookup can't miss (an index just built, a regex group that always matches).
 			"style": {
-				"noNonNullAssertion": "off",
+				"noNonNullAssertion": "error",
 				// The page's components each style their own `.title`; their selectors don't compete.
 				"noDescendingSpecificity": "off"
 			}

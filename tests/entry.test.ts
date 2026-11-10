@@ -16,6 +16,7 @@ import {
 	waitingOn,
 } from "../src/entry";
 import { E, M, S } from "./support/ids";
+import { present } from "./support/present";
 
 const id = E("5c0f9a1e-2b3d-4e5f-8a9b-0c1d2e00a7a7");
 const parent = E("0d9e8f7a-6b5c-4d3e-9f2a-1b0c9d003333");
@@ -178,8 +179,8 @@ test("order: critical > high > normal > low, then `created`", () => {
 		at("critical", "3", "critical"),
 	];
 	expect<unknown>(ordered(all).map((e) => e.id)).toEqual(["critical", "late-critical", "high", "normal", "low"]);
-	expect<unknown>(next(all, all[4]!)?.id).toBe("late-critical");
-	expect<unknown>(next(all, all[3]!)?.id).toBe("high");
+	expect<unknown>(next(all, present(all[4]))?.id).toBe("late-critical");
+	expect<unknown>(next(all, present(all[3]))?.id).toBe("high");
 });
 
 test("order and Next: priority first, then `created`", () => {

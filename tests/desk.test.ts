@@ -18,6 +18,7 @@ import { Refusal } from "../src/errors";
 import { Store } from "../src/store";
 import { refusal } from "../src/wording";
 import { E, S } from "./support/ids";
+import { present } from "./support/present";
 import { eventually } from "./support/service";
 
 let root: string;
@@ -198,9 +199,9 @@ test("only referenced attachments are stored, and they go with the last entry po
 	);
 	const [stored] = await attachments();
 	expect(stored).toMatch(/^[0-9a-f-]{36}\.png$/);
-	const answered = (await entries())[0]!;
+	const answered = present((await entries())[0]);
 	expect(answered.answer).toBe(`![kept](/attachments/${stored})`);
-	await desk((d) => d.delivered(answered.pending!.message));
+	await desk((d) => d.delivered(present(answered.pending).message));
 	await desk((d) => d.resolve(entry.id, "agent"));
 	expect(await attachments()).toEqual([]);
 });
@@ -219,11 +220,11 @@ test("a reply's entries share one pending message per session; delivered clears 
 			"queue",
 		),
 	);
-	const byId = async (id: string) => (await entries()).find((entry) => entry.id === id)!;
+	const byId = async (id: string) => present((await entries()).find((entry) => entry.id === id));
 	const [ea, eb, ec] = [await byId(a.id), await byId(b.id), await byId(c.id)];
-	expect(ea!.pending!.message).toBe(ec!.pending!.message);
-	expect(eb!.pending!.message).not.toBe(ea!.pending!.message);
-	await desk((d) => d.delivered(ea!.pending!.message));
+	expect(present(present(ea).pending).message).toBe(present(present(ec).pending).message);
+	expect(present(present(eb).pending).message).not.toBe(present(present(ea).pending).message);
+	await desk((d) => d.delivered(present(present(ea).pending).message));
 	expect(
 		[(await byId(a.id)).pending, (await byId(b.id)).pending, (await byId(c.id)).pending].map(
 			(pending) => pending === null,
@@ -235,10 +236,10 @@ test("the files are the state: a file put back to an earlier version is what the
 	const asked = await ask("Kept?");
 	const before = await readFile(join(root, `${asked.id}.md`), "utf8");
 	await desk((d) => d.prioritize(asked.id, "high", false));
-	expect((await entries())[0]!.priority).toBe("high");
+	expect(present((await entries())[0]).priority).toBe("high");
 	// Restored by hand (git checkout, a sync tool) to the version the desk itself wrote first.
 	await writeFile(join(root, `${asked.id}.md`), before);
-	expect((await entries())[0]!.priority).toBe("normal");
+	expect(present((await entries())[0]).priority).toBe("normal");
 	await rm(join(root, `${asked.id}.md`));
 	expect(await failure((d) => d.prioritize(asked.id, "low", false))).toContain(`No desk entry ${asked.id}`);
 });

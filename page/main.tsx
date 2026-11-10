@@ -75,15 +75,23 @@ const projectIn = (pathname: string) =>
 const [project, setProject] = createSignal(projectIn(location.pathname));
 const draftsPrefix = "desk.drafts.";
 const draftsKey = (id: string | undefined) => `${draftsPrefix}${id ?? ""}`;
-const loadDrafts = (key: string): Record<string, string> => JSON.parse(localStorage.getItem(key) ?? "{}");
+const loadDrafts = (key: string): Partial<Record<string, string>> => JSON.parse(localStorage.getItem(key) ?? "{}");
 /** A project's desk, and an entry on the current one. */
 const projectPath = (id: string) => `/projects/${encodeURIComponent(id)}`;
-const home = () => (project() === undefined ? "/" : projectPath(project()!));
-const entryPath = (id: string) => `${project() === undefined ? "" : projectPath(project()!)}/questions/${id}`;
+const home = () => {
+	const id = project();
+	return id === undefined ? "/" : projectPath(id);
+};
+const entryPath = (id: string) => {
+	const current = project();
+	return `${current === undefined ? "" : projectPath(current)}/questions/${id}`;
+};
 
 function Markdown(props: { text: string; entry: string; local?: Local }) {
-	let container!: HTMLDivElement;
+	let container: HTMLDivElement | undefined;
 	createEffect(() => {
+		// Solid sets the ref before effects run.
+		if (!container) return;
 		container.innerHTML = markdown(props.text, `/files/${props.entry}/`, props.local);
 		void renderDiagrams(container);
 	});
@@ -94,7 +102,7 @@ function App() {
 	const [state, setState] = createStore<{ view: View | null; online: boolean }>({ view: null, online: true });
 	/** The current project's drafts, saved under its key; another project swaps them for its own. */
 	let currentDrafts = draftsKey(project());
-	const [drafts, setDrafts] = createStore<Record<string, string>>(loadDrafts(currentDrafts));
+	const [drafts, setDrafts] = createStore<Partial<Record<string, string>>>(loadDrafts(currentDrafts));
 	const [toast, setToast] = createSignal<{ message: string; error: boolean }>();
 	createEffect(() => localStorage.setItem(currentDrafts, JSON.stringify(drafts)));
 	createEffect(
@@ -108,7 +116,7 @@ function App() {
 		),
 	);
 	/** The drafts' attachments, with object URLs for their previews; the files themselves wait in IndexedDB until sent. */
-	const [files, setFiles] = createStore<Record<string, Attachments.Local & { url: string }>>({});
+	const [files, setFiles] = createStore<Partial<Record<string, Attachments.Local & { url: string }>>>({});
 	const keep = (file: Attachments.Local) => setFiles(file.id, { ...file, url: URL.createObjectURL(file.blob) });
 	/**
 	 * Lets go of the attachments no draft references anymore: those just sent, those whose draft went, and links deleted
@@ -120,8 +128,9 @@ function App() {
 		const used = new Set(texts.flatMap((text) => [...Attachments.referenced(text ?? "")]));
 		const unused = Object.keys(files).filter((id) => !used.has(id));
 		for (const id of unused) {
-			URL.revokeObjectURL(files[id]!.url);
-			setFiles(id, undefined!);
+			const file = files[id];
+			if (file) URL.revokeObjectURL(file.url);
+			setFiles(id, undefined);
 		}
 		return Attachments.remove(unused);
 	};
@@ -146,7 +155,7 @@ function App() {
 								setState("view", reconcile(view, { key: "id", merge: true }));
 								// A draft for an entry that left the desk can't be sent anymore.
 								const gone = Object.keys(drafts).filter((entry) => !view.entries.some((other) => other.id === entry));
-								for (const entry of gone) setDrafts(entry, undefined!);
+								for (const entry of gone) setDrafts(entry, undefined);
 								if (gone.length > 0) void loaded.then(prune);
 							}),
 						),
@@ -218,6 +227,15 @@ function App() {
 	const outOfDeskMode = (entry: Entry) => !state.view?.deskMode.includes(entry.session);
 	/** Why the last try to deliver the entry's text failed, if it did. */
 	const failure = (entry: Entry) => (entry.pending === null ? undefined : state.view?.failures[entry.pending.message]);
+	/** Why the entry's text hasn't reached its session. */
+	const undelivered = (entry: Entry) => {
+		const failed = failure(entry);
+		if (failed)
+			return `Your text hasn't reached the session: the last try failed (${deliveryFailed(failed)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`;
+		return outOfDeskMode(entry)
+			? "Your text hasn't reached the session yet: it isn't in desk mode, so it couldn't reply on the desk. It goes out when the session turns desk mode on."
+			: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does.";
+	};
 
 	const Pills = (props: { entry: Entry }) => (
 		<>
@@ -225,16 +243,7 @@ function App() {
 				{drafted(props.entry) ? "drafted" : props.entry.status}
 			</span>
 			<Show when={props.entry.pending !== null}>
-				<span
-					class={`pill undelivered${failure(props.entry) ? " failed" : ""}`}
-					title={
-						failure(props.entry)
-							? `Your text hasn't reached the session: the last try failed (${deliveryFailed(failure(props.entry)!)}). It's tried again on every change, when an OpenCode connects, and every 30 s.`
-							: outOfDeskMode(props.entry)
-								? "Your text hasn't reached the session yet: it isn't in desk mode, so it couldn't reply on the desk. It goes out when the session turns desk mode on."
-								: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does."
-					}
-				>
+				<span class={`pill undelivered${failure(props.entry) ? " failed" : ""}`} title={undelivered(props.entry)}>
 					{outOfDeskMode(props.entry) ? "waiting for desk mode" : "not delivered"}
 				</span>
 			</Show>
@@ -305,7 +314,7 @@ function App() {
 			<Show when={(state.view?.projects.length ?? 0) > 0} fallback={<div class="empty">No desk has entries yet.</div>}>
 				<div class="section">Projects</div>
 				<div class="list">
-					<For each={state.view!.projects}>
+					<For each={state.view?.projects ?? []}>
 						{(other) => (
 							<A class={`item${other.waiting ? " turn" : ""}`} href={projectPath(other.id)}>
 								<span class="title">{other.name}</span>
@@ -336,8 +345,10 @@ function App() {
 		const entry = () => byId(params.id);
 		/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
 		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>(
-			(previous) =>
-				entry() ? { parent: entry()!.parent, created: entry()!.created, priority: entry()!.priority } : previous,
+			(previous) => {
+				const now = entry();
+				return now ? { parent: now.parent, created: now.created, priority: now.priority } : previous;
+			},
 			{ parent: null, created: "", priority: "normal" },
 		);
 		const goNext = () => {
@@ -370,7 +381,7 @@ function App() {
 			setDragging(false);
 			if (!droppable(event)) return;
 			event.preventDefault();
-			void attach(params.id, [...event.dataTransfer!.files]);
+			void attach(params.id, [...(event.dataTransfer?.files ?? [])]);
 		};
 		const events = { dragenter: drag, dragover: drag, dragleave: drag, drop } as const;
 		for (const [name, handler] of Object.entries(events)) window.addEventListener(name, handler as EventListener);
@@ -407,10 +418,13 @@ function App() {
 					</aside>
 					<Show when={entry()} fallback={<div class="empty">#{shortId(params.id)} is no longer on the desk.</div>}>
 						{(entry) => {
-							const parent = () => (entry().parent === null ? undefined : byId(entry().parent!));
+							const parent = () => {
+								const id = entry().parent;
+								return id === null ? undefined : byId(id);
+							};
 							const children = () => entries().filter((other) => other.parent === entry().id);
 							const further = () => openBelow(entries(), entry());
-							let picker!: HTMLInputElement;
+							let picker: HTMLInputElement | undefined;
 							return (
 								<div class={`card${yours(entry()) ? " turn" : ""}`}>
 									<div class="head">
@@ -521,14 +535,14 @@ function App() {
 													hidden
 													onChange={(event) => {
 														const input = event.currentTarget;
-														void attach(entry().id, [...input.files!]).then(() => (input.value = ""));
+														void attach(entry().id, [...(input.files ?? [])]).then(() => (input.value = ""));
 													}}
 												/>
 												<button
 													type="button"
 													class="secondary"
 													title="Attach files, or paste or drop them into the box"
-													onClick={() => picker.click()}
+													onClick={() => picker?.click()}
 												>
 													<Icon name="attach" /> Attach
 												</button>
@@ -541,7 +555,7 @@ function App() {
 														void attempt(async () => {
 															const sent = await outgoing(draft);
 															await call((client) => client.send(sent));
-															setDrafts(draft.entry, undefined!);
+															setDrafts(draft.entry, undefined);
 															await prune();
 															return "Sent to the agents";
 														});
@@ -603,7 +617,7 @@ function App() {
 																#{shortId(deep.id)} {deep.title}
 															</A>{" "}
 															<Pills entry={deep} />
-															<Show when={byId(deep.parent!)}>
+															<Show when={deep.parent === null ? undefined : byId(deep.parent)}>
 																{(parent) => (
 																	<span class="muted">
 																		{" "}
@@ -632,94 +646,100 @@ function App() {
 		createEffect(() => setProject(projectIn(route.pathname)));
 		return (
 			<Show when={state.view} fallback={<div class="empty">Connecting…</div>}>
-				<header>
-					<div class="bar">
-						<h1>
-							<A href="/">Desk</A>
-						</h1>
-						<Show
-							when={state.view!.projects.length > 1 || state.view!.project}
-							fallback={<span class="muted">{state.view!.project?.name}</span>}
-						>
-							<select
-								ref={(select) =>
-									createEffect(() => {
-										// After the options for this view exist: a value set before them doesn't stick.
-										void state.view!.projects.length;
-										const id = project() ?? "";
-										queueMicrotask(() => (select.value = id));
-									})
+				{(view) => (
+					<>
+						<header>
+							<div class="bar">
+								<h1>
+									<A href="/">Desk</A>
+								</h1>
+								<Show
+									when={view().projects.length > 1 || view().project}
+									fallback={<span class="muted">{view().project?.name}</span>}
+								>
+									<select
+										ref={(select) =>
+											createEffect(() => {
+												// After the options for this view exist: a value set before them doesn't stick.
+												void view().projects.length;
+												const id = project() ?? "";
+												queueMicrotask(() => (select.value = id));
+											})
+										}
+										class="project"
+										title="Each project has its own desk"
+										onChange={(event) =>
+											navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")
+										}
+									>
+										<Show when={project() === undefined}>
+											<option value="" selected>
+												Choose a project
+											</option>
+										</Show>
+										<Show when={view().project && !view().projects.some((other) => other.id === project())}>
+											<option value={project()} selected>
+												{view().project?.name ?? ""}
+											</option>
+										</Show>
+										<For each={view().projects}>
+											{(other) => (
+												<option value={other.id} selected={other.id === project()}>
+													{other.name}
+													{other.placement._tag === "Folder" ? " (folder)" : ""}
+													{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
+												</option>
+											)}
+										</For>
+									</select>
+								</Show>
+								<span class="spacer" />
+								<span
+									class={`connection${view().deskMode.length === 0 ? " none" : ""}`}
+									title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
+								>
+									{view().deskMode.length === 0
+										? "No session in desk mode"
+										: `${view().deskMode.length} ${view().deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
+								</span>
+								<Show when={!state.online}>
+									<span class="offline">reconnecting…</span>
+								</Show>
+								<button
+									type="button"
+									class="primary"
+									disabled={pending().length === 0}
+									title="Send every draft, one queued message per session"
+									onClick={submit}
+								>
+									<Icon name="send" />{" "}
+									{pending().length ? `Submit ${pending().length} draft${pending().length === 1 ? "" : "s"}` : "Submit"}
+								</button>
+							</div>
+						</header>
+						<main>
+							<Show
+								when={
+									view().deskMode.length === 0 ||
+									view().project?.placement._tag === "Folder" ||
+									(project() === undefined && view().projects.some((other) => other.placement._tag === "Folder"))
 								}
-								class="project"
-								title="Each project has its own desk"
-								onChange={(event) => navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")}
 							>
-								<Show when={project() === undefined}>
-									<option value="" selected>
-										Choose a project
-									</option>
-								</Show>
-								<Show when={state.view!.project && !state.view!.projects.some((other) => other.id === project())}>
-									<option value={project()} selected>
-										{state.view!.project!.name}
-									</option>
-								</Show>
-								<For each={state.view!.projects}>
-									{(other) => (
-										<option value={other.id} selected={other.id === project()}>
-											{other.name}
-											{other.placement._tag === "Folder" ? " (folder)" : ""}
-											{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
-										</option>
-									)}
-								</For>
-							</select>
-						</Show>
-						<span class="spacer" />
-						<span
-							class={`connection${state.view!.deskMode.length === 0 ? " none" : ""}`}
-							title="Sessions with desk mode on (/desk-mode). Answers go out through their OpenCode; with none, answers wait until one is on again."
-						>
-							{state.view!.deskMode.length === 0
-								? "No session in desk mode"
-								: `${state.view!.deskMode.length} ${state.view!.deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
-						</span>
-						<Show when={!state.online}>
-							<span class="offline">reconnecting…</span>
-						</Show>
-						<button
-							type="button"
-							class="primary"
-							disabled={pending().length === 0}
-							title="Send every draft, one queued message per session"
-							onClick={submit}
-						>
-							<Icon name="send" />{" "}
-							{pending().length ? `Submit ${pending().length} draft${pending().length === 1 ? "" : "s"}` : "Submit"}
-						</button>
-					</div>
-				</header>
-				<main>
-					<Show
-						when={
-							state.view!.deskMode.length === 0 ||
-							state.view!.project?.placement._tag === "Folder" ||
-							(project() === undefined && state.view!.projects.some((other) => other.placement._tag === "Folder"))
-						}
-					>
-						<div class="notice">
-							<Show when={state.view!.deskMode.length === 0}>
-								No session is in desk mode: answers wait as <em>not delivered</em> until one is.{" "}
+								<div class="notice">
+									<Show when={view().deskMode.length === 0}>
+										No session is in desk mode: answers wait as <em>not delivered</em> until one is.{" "}
+									</Show>
+									Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected
+									OpenCode knows their session yet.
+								</div>
 							</Show>
-							Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected
-							OpenCode knows their session yet.
-						</div>
-					</Show>
-					{props.children}
-				</main>
-				<Show when={toast()} keyed>
-					{(toast) => <div class={`toast${toast.error ? " error" : ""}`}>{toast.message}</div>}
-				</Show>
+							{props.children}
+						</main>
+						<Show when={toast()} keyed>
+							{(toast) => <div class={`toast${toast.error ? " error" : ""}`}>{toast.message}</div>}
+						</Show>
+					</>
+				)}
 			</Show>
 		);
 	};

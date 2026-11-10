@@ -66,7 +66,9 @@ export class Api extends Context.Service<
 						),
 						(placements) => {
 							const byEntry = new Map<string, Placement>(placements);
-							return (entry: Entry) => byEntry.get(entry.id)!;
+							// Every entry was placed just now; the folder only satisfies the types.
+							return (entry: Entry): Placement =>
+								byEntry.get(entry.id) ?? { _tag: "Folder", directory: entry.directory };
 						},
 					);
 				/** Entries in the same project as `session` (working in `directory`, when known). */
@@ -99,17 +101,18 @@ export class Api extends Context.Service<
 								};
 							}),
 						);
-						const shown = project === undefined ? undefined : (placements.get(project) ?? fromKey(project));
-						const name =
-							project === undefined
-								? undefined
-								: (summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown!)));
-						return {
-							project: project === undefined ? null : { id: project, name: name!, placement: shown! },
-							entries: project === undefined ? [] : entries.filter((entry) => keyOf(entry) === project),
+						const all = {
 							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
 							deskMode: yield* opencode.inDeskMode,
 							failures: Object.fromEntries(yield* failures.current),
+						};
+						if (project === undefined) return { project: null, entries: [], ...all } satisfies View;
+						const shown = placements.get(project) ?? fromKey(project);
+						const name = summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown));
+						return {
+							project: { id: project, name, placement: shown },
+							entries: entries.filter((entry) => keyOf(entry) === project),
+							...all,
 						} satisfies View;
 					});
 

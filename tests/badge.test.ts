@@ -9,6 +9,7 @@ import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { count, type Status, watch } from "../src/badge";
 import { P, S } from "./support/ids";
+import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";
 
 const cleanup: Array<() => Promise<unknown>> = [];
@@ -50,7 +51,7 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	await plugin.request("ask", { asker: asked, question: { title: "One?", body: "" } });
 	await plugin.request("ask", { asker: asked, question: { title: "Two?", body: "", priority: "critical" } });
 	const counted = await eventually(() => latest()?.projects.find((project) => project.waiting === 2));
-	expect(latest()!).toMatchObject({ url: first.url, deskMode: ["ses_a"] });
+	expect(present(latest())).toMatchObject({ url: first.url, deskMode: ["ses_a"] });
 	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
 
 	// The service goes (its registration first, as `registration.ts` does); the badge hides, then finds the next one.
@@ -61,7 +62,7 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	cleanup.push(() => rm(join(home, "service.json"), { force: true }).then(() => second.close(false)));
 	await register(second);
 	await eventually(() => latest()?.url === second.url);
-	expect(latest()!.projects).toHaveLength(1);
+	expect(present(latest()).projects).toHaveLength(1);
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {

@@ -33,6 +33,7 @@ import * as App from "../src/service/app";
 import { changedOnDisk } from "../src/service/socket";
 import { E, P, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
+import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";
 
 let service: Service;
@@ -43,9 +44,11 @@ afterEach(() => service.close());
 
 const entryFiles = async () => (await readdir(service.store)).filter((name) => name.endsWith(".md")).sort();
 const read = async (id: string) =>
-	parse(id as EntryId, await readFile(join(service.store, `${id}.md`), "utf8")).pipe((option) =>
-		option._tag === "Some" ? option.value : undefined,
-	)!;
+	present(
+		parse(id as EntryId, await readFile(join(service.store, `${id}.md`), "utf8")).pipe((option) =>
+			option._tag === "Some" ? option.value : undefined,
+		),
+	);
 const question = (title: string, extra: { parent?: EntryId; labels?: Array<string> } = {}) => ({
 	title,
 	body: `About ${title}.`,
@@ -55,7 +58,7 @@ const question = (title: string, extra: { parent?: EntryId; labels?: Array<strin
 const view = (project?: string) =>
 	service
 		.rpc((client) => client.view({ project }).pipe(Stream.take(1), Stream.runCollect))
-		.then((views) => Array.from(views)[0]!);
+		.then((views) => present(Array.from(views)[0]));
 
 describe("entries", () => {
 	test("an agent's question is a file in the flat store, with its root session and directory", async () => {
@@ -156,7 +159,7 @@ describe("delivery", () => {
 			}),
 		);
 		await eventually(() => fine.admitted.length === 1);
-		const message = (await read(a.id))!.pending!.message;
+		const message = present(present(await read(a.id)).pending).message;
 		await eventually(async () => (await view()).failures[message]?.cause.includes("Session is archived"));
 		refusing.refuse = undefined;
 		await eventually(() => refusing.admitted.length === 1);
@@ -192,8 +195,8 @@ describe("delivery", () => {
 		expect(sent).toBe(3);
 		await eventually(() => server.admitted.length === 2);
 		const [toA, toB] = [
-			server.admitted.find((p) => p.sessionID === "ses_a")!,
-			server.admitted.find((p) => p.sessionID === "ses_b")!,
+			present(server.admitted.find((p) => p.sessionID === "ses_a")),
+			present(server.admitted.find((p) => p.sessionID === "ses_b")),
 		];
 		expect(toA.text).toContain(`## ${a.id} Answered: A?\n\nyes`);
 		// Where to reply is said with it: on the desk, under the entry.
@@ -241,7 +244,7 @@ describe("delivery", () => {
 		const pending = await read(asked.id);
 		expect(pending).toMatchObject({ status: "answered", pending: { delivery: "steer" } });
 		expect(pending?.pending?.message).toStartWith("msg_");
-		expect((await view(folder("/w"))).entries[0]!.pending).toEqual(pending!.pending);
+		expect(present((await view(folder("/w"))).entries[0]).pending).toEqual(present(pending).pending);
 		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
 
 		const server = service.fake.server("http://opencode-1");
@@ -250,7 +253,7 @@ describe("delivery", () => {
 		await eventually(() => server.admitted.length === 1);
 		expect(server.admitted[0]).toMatchObject({
 			sessionID: S("ses_a"),
-			id: pending!.pending!.message,
+			id: present(present(pending).pending).message,
 			delivery: "steer",
 		});
 		await eventually(async () => (await read(asked.id))?.pending === null);
@@ -305,7 +308,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		service.plugin(server);
 		await eventually(() => server.admitted.length === 1);
-		expect(server.admitted[0]!.id).toBe(message);
+		expect(present(server.admitted[0]).id).toBe(message);
 	});
 
 	test("the user's reply on an entry not waiting for an answer is a follow-up in the same session", async () => {
@@ -321,14 +324,14 @@ describe("delivery", () => {
 			client.submit({ drafts: [{ entry: asked.id, text: "A question back?\n\nDetails." }] }),
 		);
 		await eventually(() => server.admitted.length === 2);
-		const followUp = (await view("prj_default")).entries.find((entry) => entry.asker === "user")!;
+		const followUp = present((await view("prj_default")).entries.find((entry) => entry.asker === "user"));
 		expect(followUp).toMatchObject({
 			parent: asked.id,
 			session: S("ses_a"),
 			directory: "/w",
 			title: "A question back?",
 		});
-		expect(server.admitted[1]!.text).toContain(
+		expect(present(server.admitted[1]).text).toContain(
 			`## ${followUp.id} New question from the user (follow-up to ${asked.id})`,
 		);
 		await plugin.request("answer", { id: followUp.id, body: "Here." });
@@ -357,9 +360,9 @@ describe("delivery", () => {
 			}),
 		);
 		await eventually(() => server.admitted.length === 1);
-		const answer = (await read(asked.id))!.answer!;
-		const file = /\/(attachments\/[0-9a-f-]{36}\.png)/.exec(answer)![1]!;
-		expect(server.admitted[0]!.files).toEqual([{ uri: `file://${service.store}/${file}`, name: "shot" }]);
+		const answer = present(present(await read(asked.id)).answer);
+		const file = present(present(/\/(attachments\/[0-9a-f-]{36}\.png)/.exec(answer))[1]);
+		expect(present(server.admitted[0]).files).toEqual([{ uri: `file://${service.store}/${file}`, name: "shot" }]);
 		expect(await (await fetch(`${service.url}${file}`)).text()).toBe("PNGDATA");
 	});
 });
@@ -434,7 +437,7 @@ describe("projects", () => {
 		expect(await service.attached()).toBe(1);
 
 		await first.close();
-		server.sessions.set(S("ses_p"), { ...server.sessions.get(S("ses_p"))!, projectID: P("prj_moved") }); // moved, nobody told
+		server.sessions.set(S("ses_p"), { ...present(server.sessions.get(S("ses_p"))), projectID: P("prj_moved") }); // moved, nobody told
 		await eventually(async () => (await service.attached()) === 0);
 		expect((await view()).projects.map((project) => [project.id, project.placement._tag])).toEqual([
 			["prj_phantom", "Project"],
@@ -592,7 +595,7 @@ describe("the service's life", () => {
 	test("the page takes its port when it's free, and any free port when it isn't", async () => {
 		const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("someone else") });
 		const store = await mkdtemp(join(tmpdir(), "desk-"));
-		const started = await another(store, taken.port!);
+		const started = await another(store, present(taken.port));
 		const url = JSON.parse(await readFile(join(store, "service.json"), "utf8")).url as string;
 		expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
 		expect(url).not.toContain(`:${taken.port}/`);

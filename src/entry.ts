@@ -58,13 +58,17 @@ export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "cr
 	entries: ReadonlyArray<E>,
 ): Array<E> {
 	const byCreated = [...entries].sort((a, b) => (a.created < b.created ? -1 : a.created > b.created ? 1 : 0));
-	const walk = new Map<EntryId, number>();
-	const visit = (entry: E): void => {
-		for (const child of byCreated) if (child.parent === entry.id) visit(child);
-		walk.set(entry.id, walk.size);
-	};
-	for (const entry of byCreated) if (!entries.some((other) => other.id === entry.parent)) visit(entry);
-	return byCreated.sort((a, b) => rank[a.priority] - rank[b.priority] || walk.get(a.id)! - walk.get(b.id)!);
+	const postOrder = (entry: E): Array<E> => [
+		...byCreated.filter((child) => child.parent === entry.id).flatMap(postOrder),
+		entry,
+	];
+	const walked = byCreated.filter((entry) => !entries.some((other) => other.id === entry.parent)).flatMap(postOrder);
+	// Entries in a cycle of parents (only a hand-edited file makes one) have no root to be walked from: last.
+	const seen = new Set(walked);
+	// The sort is stable: within a priority, the walk's order.
+	return [...walked, ...byCreated.filter((entry) => !seen.has(entry))].sort(
+		(a, b) => rank[a.priority] - rank[b.priority],
+	);
 }
 
 /** queue: after the session's current turn. steer: into it (urgent). */
@@ -210,7 +214,7 @@ export const newId = () => EntryId.make(crypto.randomUUID());
 const attachmentReference = /\]\(attachment:([0-9a-f-]{36})\)/g;
 /** The attachment ids a draft's text references. */
 export const referencedAttachments = (text: string) =>
-	new Set([...text.matchAll(attachmentReference)].map(([, id]) => id!));
+	new Set([...text.matchAll(attachmentReference)].flatMap(([, id]) => (id === undefined ? [] : [id])));
 /** The text with each attachment reference pointed elsewhere; `to` returns undefined to leave one as it is. */
 export const pointAttachments = (text: string, to: (id: string) => string | undefined) =>
 	text.replaceAll(attachmentReference, (whole, id: string) => {
@@ -219,10 +223,9 @@ export const pointAttachments = (text: string, to: (id: string) => string | unde
 	});
 
 export const attachmentsIn = (text: string) =>
-	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].map(([, name, file]) => ({
-		name: name || file!,
-		file: file!,
-	}));
+	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].flatMap(([, name, file]) =>
+		file === undefined ? [] : [{ name: name || file, file }],
+	);
 
 /** The last six hex digits: enough to tell entries apart where the full id is too long to show. */
 export const shortId = (id: string) => id.slice(-6);
@@ -261,7 +264,7 @@ export function parse(id: EntryId, text: string): Option.Option<Entry> {
 		pending: outbox === null ? null : { message: outbox, delivery },
 		id,
 		title: title.trim(),
-		question: question!.trim(),
+		question: (question ?? "").trim(),
 		answer: answer === undefined ? null : answer.trim(),
 	}));
 }

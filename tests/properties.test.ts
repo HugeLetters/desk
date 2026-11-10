@@ -20,6 +20,7 @@ import { answerer, type Entry, next, ordered, Party, Priority, Status, waitingOn
 import { due } from "../src/outbox";
 import { Store } from "../src/store";
 import { E, M, S } from "./support/ids";
+import { present } from "./support/present";
 
 const runs = Number(process.env.PROPERTY_RUNS ?? 200);
 
@@ -92,7 +93,7 @@ test("the order: every entry once, priority first, and within a priority an entr
 		return (
 			order.length === all.length &&
 			all.every((entry) => order.includes(entry)) &&
-			order.every((entry, index) => index === 0 || rank(order[index - 1]!) <= rank(entry)) &&
+			order.every((entry, index) => index === 0 || rank(present(order[index - 1])) <= rank(entry)) &&
 			all.every((entry) =>
 				below(all, entry).every((other) => other.priority !== entry.priority || at(other) < at(entry)),
 			)
@@ -102,7 +103,7 @@ test("the order: every entry once, priority first, and within a priority an entr
 test("Next: the first entry after this one in the order, wrapping round, that waits on the user; none when nothing else does", () =>
 	check(Arbitrary.all([desks, pick]), ([all, choice]) => {
 		if (all.length === 0) return true;
-		const current = all[choice % all.length]!;
+		const current = present(all[choice % all.length]);
 		const order = ordered(all);
 		const at = order.indexOf(current);
 		const after = [...order.slice(at + 1), ...order.slice(0, at)];
@@ -162,7 +163,7 @@ const outboxes = Arbitrary.all({
 	Arbitrary.map(({ desk, seeds, on }) => {
 		const session = (i: number) => S(`ses_${i}`);
 		const entries = desk.map((entry, index): Entry => {
-			const seed = seeds[index]!;
+			const seed = present(seeds[index]);
 			const at = session(seed % 3);
 			return {
 				...entry,
@@ -210,17 +211,17 @@ test(
 									);
 								case "adopt":
 									if (!nth(change.id) || !nth(change.parent)) return;
-									return yield* desk.adopt(nth(change.id)!.id, nth(change.parent)!.id);
+									return yield* desk.adopt(present(nth(change.id)).id, present(nth(change.parent)).id);
 								case "answer":
 									if (!nth(change.id)) return;
-									return yield* desk.answer(nth(change.id)!.id, "an answer");
+									return yield* desk.answer(present(nth(change.id)).id, "an answer");
 								case "reply": {
 									if (!nth(change.id)) return;
 									const also =
 										change.also === null
 											? []
 											: [{ entry: nth(change.also)?.id ?? E(crypto.randomUUID()), text: "more" }];
-									return yield* desk.reply([{ entry: nth(change.id)!.id, text: "a reply" }, ...also], "queue");
+									return yield* desk.reply([{ entry: present(nth(change.id)).id, text: "a reply" }, ...also], "queue");
 								}
 								case "delivered": {
 									const pending = nth(change.id)?.pending;
@@ -229,7 +230,7 @@ test(
 								}
 								case "resolve":
 									if (!nth(change.id)) return;
-									return yield* desk.resolve(nth(change.id)!.id, change.by);
+									return yield* desk.resolve(present(nth(change.id)).id, change.by);
 							}
 						}),
 					);
@@ -240,7 +241,7 @@ test(
 					if (now.some((entry) => entry.parent !== null && !ids.has(entry.parent))) return false;
 					for (const entry of now) {
 						const seen = new Set<string>();
-						for (let at: Entry | undefined = entry; at; at = now.find((other) => other.id === at!.parent)) {
+						for (let at: Entry | undefined = entry; at; at = now.find((other) => other.id === present(at).parent)) {
 							if (seen.has(at.id)) return false;
 							seen.add(at.id);
 						}

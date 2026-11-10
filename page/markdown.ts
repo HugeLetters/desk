@@ -51,7 +51,8 @@ export function render(text: string, base: string, local?: Local): string {
 			className: "mermaid",
 			textContent: code.textContent,
 		});
-		code.parentElement!.replaceWith(diagram);
+		// Matched by `pre > code`, so it has its `pre`.
+		code.parentElement?.replaceWith(diagram);
 	}
 	return template.innerHTML;
 }

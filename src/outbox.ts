@@ -22,11 +22,14 @@ export const due = (entries: ReadonlyArray<Entry>, deskMode: ReadonlySet<Session
 	messages(entries).filter((message) => deskMode.has(message.session));
 
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
-	const byMessage = new Map<MessageID, Array<Entry>>();
+	const byMessage = new Map<MessageID, { readonly session: SessionID; readonly sent: ReadonlyArray<Entry> }>();
 	for (const entry of entries)
 		if (entry.pending !== null)
-			byMessage.set(entry.pending.message, [...(byMessage.get(entry.pending.message) ?? []), entry]);
-	return [...byMessage].map(([id, sent]) => {
+			byMessage.set(entry.pending.message, {
+				session: entry.session,
+				sent: [...(byMessage.get(entry.pending.message)?.sent ?? []), entry],
+			});
+	return [...byMessage].map(([id, { session, sent }]) => {
 		const sections = sent.map((entry) =>
 			entry.asker === "agent"
 				? { text: `## ${entry.id} Answered: ${entry.title}\n\n${entry.answer ?? ""}`, body: entry.answer ?? "" }
@@ -37,7 +40,7 @@ export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 		);
 		return {
 			id,
-			session: sent[0]!.session,
+			session,
 			delivery: sent.some((entry) => entry.pending?.delivery === "steer") ? "steer" : "queue",
 			text: [
 				// Where the reply goes, said where the agent decides it: elsewhere, it would answer in chat. The rest is in the

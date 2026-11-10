@@ -14,6 +14,7 @@ import { chromium, type Page } from "playwright-core";
 import type { EntryId } from "../src/entry";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
 import { P, S } from "../tests/support/ids";
+import { present } from "../tests/support/present";
 import { eventually, startService } from "../tests/support/service";
 
 const out = resolve(process.argv[2] ?? join(import.meta.dir, "../docs/demo"));
@@ -213,7 +214,7 @@ try {
 	);
 	await rm(join(out, ".frames"), { recursive: true, force: true });
 	console.log(
-		`wrote desk-walk.gif\ndelivered to ${opencode.admitted[0]!.sessionID} as ${opencode.admitted[0]!.id}:\n${opencode.admitted[0]!.text.split("\n\n").slice(0, 3).join("\n\n")}\n\nDemo in ${out}`,
+		`wrote desk-walk.gif\ndelivered to ${present(opencode.admitted[0]).sessionID} as ${present(opencode.admitted[0]).id}:\n${present(opencode.admitted[0]).text.split("\n\n").slice(0, 3).join("\n\n")}\n\nDemo in ${out}`,
 	);
 } finally {
 	await browser.close();

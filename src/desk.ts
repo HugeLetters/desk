@@ -188,7 +188,7 @@ export class Desk extends Context.Service<
 							labels: entry.labels,
 							priority: entry.priority,
 							created: DateTime.formatIso(yield* DateTime.now),
-							title: text.split("\n")[0]!.slice(0, 100),
+							title: text.replace(/\n[\s\S]*$/, "").slice(0, 100),
 							question: text,
 							answer: null,
 							pending,
