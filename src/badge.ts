@@ -1,7 +1,7 @@
 /**
- * What the TUI's footer badge shows (`tui.tsx`): per project on the desk, how many entries wait on the user and how many
- * of those are critical, and where the page is. Read from the running service's page API (`view` without a project:
- * just the project list), found through its registration (`<store>/service.json`). The badge doesn't start the
+ * What the TUI's footer badge shows (`tui.tsx`): per desk, how many entries wait on the user and how many
+ * of those are critical, and where the page is. Read from the running service's page API (`view` without a session:
+ * just the list of desks), found through its registration (`<store>/service.json`). The badge doesn't start the
  * service (the server part does); while there's none, or after it goes, it looks again every couple of seconds.
  */
 import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
@@ -15,13 +15,13 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { DeskApi, ProjectSummary } from "./page-api";
+import { DeskApi, DeskSummary } from "./page-api";
 import { decode } from "./service-info";
 
 export const Status = Schema.Struct({
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
 	url: Schema.String,
-	projects: Schema.Array(ProjectSummary),
+	desks: Schema.Array(DeskSummary),
 	/** The top-level sessions in desk mode. */
 	deskMode: Schema.Array(Schema.String),
 });
@@ -42,7 +42,7 @@ const registered = (home: string) =>
 /** One service's statuses, until it goes. */
 const from = (url: string): Stream.Stream<Status, unknown> =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
-		Stream.map((view) => ({ url, projects: view.projects, deskMode: view.deskMode })),
+		Stream.map((view) => ({ url, desks: view.desks, deskMode: view.deskMode })),
 		Stream.provide(
 			RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
 				Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
@@ -76,6 +76,6 @@ export const watch = (
 		Stream.provide(BunFileSystem.layer),
 	);
 
-/** The footer's count for a project: none when nothing waits on the user, else how many do and how many of those are critical. */
-export const count = (summary: ProjectSummary | undefined) =>
+/** The footer's count for a desk: none when nothing waits on the user, else how many do and how many of those are critical. */
+export const count = (summary: DeskSummary | undefined) =>
 	summary === undefined || summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };

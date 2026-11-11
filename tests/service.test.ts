@@ -8,30 +8,25 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunServices from "@effect/platform-bun/BunServices";
+import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
-import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
-import { type EntryId, parse } from "../src/entry";
-import type { View } from "../src/page-api";
-import { key } from "../src/projects";
-
-/** The key (URL) of an entry placed by its folder. */
-const folder = (directory: string) => key({ _tag: "Folder", directory });
-
-import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import { type EntryId, parse } from "../src/entry";
 import { Refusal } from "../src/errors";
+import type { View } from "../src/page-api";
 import { build, Outdated, protocol } from "../src/protocol";
 import * as App from "../src/service/app";
 import { changedOnDisk } from "../src/service/socket";
-import { E, P, S } from "./support/ids";
+import { E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";
@@ -54,10 +49,10 @@ const question = (title: string, extra: { parent?: EntryId; labels?: Array<strin
 	body: `About ${title}.`,
 	...extra,
 });
-/** The latest view of `project` (waits for the first). */
-const view = (project?: string) =>
+/** The latest view of `session`'s desk (waits for the first). */
+const view = (session?: string) =>
 	service
-		.rpc((client) => client.view({ project }).pipe(Stream.take(1), Stream.runCollect))
+		.rpc((client) => client.view({ session }).pipe(Stream.take(1), Stream.runCollect))
 		.then((views) => present(Array.from(views)[0]));
 
 describe("entries", () => {
@@ -76,9 +71,7 @@ describe("entries", () => {
 			title: "Which icon?",
 			pending: null,
 		});
-		expect(asked.url).toBe(
-			`${service.url}projects/${encodeURIComponent(folder("/work/phantom"))}/questions/${asked.id}`,
-		);
+		expect(asked.url).toBe(`${service.url}sessions/ses_a/questions/${asked.id}`);
 	});
 
 	test("the service reads the store again on restart, and takes in edits made by others", async () => {
@@ -168,8 +161,8 @@ describe("delivery", () => {
 
 	test("the user's answer reaches its session once, as one message per session, and leaves the outbox", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_a"), projectID: P("prj_phantom"), directory: "/work/phantom" });
-		server.session({ id: S("ses_b"), projectID: P("prj_phantom"), directory: "/work/phantom" });
+		server.session({ id: S("ses_a"), directory: "/work/phantom" });
+		server.session({ id: S("ses_b"), directory: "/work/phantom" });
 		const plugin = service.plugin(server);
 		const a = await plugin.request("ask", {
 			asker: { session: S("ses_a"), directory: "/work/phantom" },
@@ -244,7 +237,7 @@ describe("delivery", () => {
 		const pending = await read(asked.id);
 		expect(pending).toMatchObject({ status: "answered", pending: { delivery: "steer" } });
 		expect(pending?.pending?.message).toStartWith("msg_");
-		expect(present((await view(folder("/w"))).entries[0]).pending).toEqual(present(pending).pending);
+		expect(present((await view("ses_a")).entries[0]).pending).toEqual(present(pending).pending);
 		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
 
 		const server = service.fake.server("http://opencode-1");
@@ -268,7 +261,7 @@ describe("delivery", () => {
 			question: question("Off?"),
 		});
 		await plugin.request("modes", { sessions: [] });
-		await eventually(async () => (await view(folder("/w"))).deskMode.length === 0);
+		await eventually(async () => (await view("ses_a")).deskMode.length === 0);
 		await service.rpc((client) => client.send({ entry: asked.id, text: "later" }));
 		await Bun.sleep(200);
 		expect(server.calls).toHaveLength(0);
@@ -324,7 +317,7 @@ describe("delivery", () => {
 			client.submit({ drafts: [{ entry: asked.id, text: "A question back?\n\nDetails." }] }),
 		);
 		await eventually(() => server.admitted.length === 2);
-		const followUp = present((await view("prj_default")).entries.find((entry) => entry.asker === "user"));
+		const followUp = present((await view("ses_a")).entries.find((entry) => entry.asker === "user"));
 		expect(followUp).toMatchObject({
 			parent: asked.id,
 			session: S("ses_a"),
@@ -367,127 +360,168 @@ describe("delivery", () => {
 	});
 });
 
-describe("projects", () => {
-	test("the page shows one project's desk; entries follow a session that moves", async () => {
+describe("desks", () => {
+	test("each top-level session has its own desk, named after its title and folder; it follows the session that moves", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
-		server.session({ id: S("ses_q"), projectID: P("prj_other") });
-		const plugin = service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
-		service.plugin(server, { id: P("prj_other"), directory: "/work/other" });
+		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
+		server.session({ id: S("ses_q"), title: "Persona", directory: "/work/phantom-p5" });
+		const plugin = service.plugin(server, "/work/phantom");
 		const p = await plugin.request("ask", {
 			asker: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("P?"),
 		});
-		await plugin.request("ask", { asker: { session: S("ses_q"), directory: "/work/other" }, question: question("Q?") });
-		expect(p.url).toBe(`${service.url}projects/prj_phantom/questions/${p.id}`);
-		const phantom = await view("prj_phantom");
-		expect(phantom.project).toEqual({
-			id: P("prj_phantom"),
-			name: "phantom",
-			placement: { _tag: "Project", id: P("prj_phantom") },
+		await plugin.request("ask", {
+			asker: { session: S("ses_q"), directory: "/work/phantom-p5" },
+			question: question("Q?"),
 		});
-		expect(phantom.entries.map((entry) => entry.title)).toEqual(["P?"]);
-		expect(phantom.projects.map((project) => [project.name, project.waiting])).toEqual([
-			["other", 1],
-			["phantom", 1],
+		expect(p.url).toBe(`${service.url}sessions/ses_p/questions/${p.id}`);
+		const desk = await view("ses_p");
+		expect(desk.desk).toEqual({ session: "ses_p", title: "Phantom", folder: "phantom", known: true });
+		expect(desk.entries.map((entry) => entry.title)).toEqual(["P?"]);
+		expect(desk.desks.map((other) => [other.title, other.folder, other.waiting])).toEqual([
+			["Persona", "phantom-p5", 1],
+			["Phantom", "phantom", 1],
 		]);
 		expect(await plugin.request("list", { session: S("ses_p") })).not.toContain("Q?");
 
-		server.move(S("ses_q"), P("prj_phantom"));
-		await eventually(async () => (await view("prj_phantom")).entries.length === 2);
+		server.move(S("ses_p"), "/work/elsewhere");
+		await eventually(async () => (await view("ses_p")).desk?.folder === "elsewhere");
+		expect((await view("ses_p")).entries.map((entry) => entry.title)).toEqual(["P?"]);
 	});
 
-	test("an entry no connected OpenCode knows goes under its folder until one that knows it connects", async () => {
+	test("a desk whose session no connected OpenCode knows is unknown, named after its entries' folder, until one does", async () => {
 		await service
 			.plugin()
 			.request("ask", { asker: { session: S("ses_p"), directory: "/work/phantom/app" }, question: question("Where?") });
-		expect((await view()).projects.map((project) => [project.id, project.name, project.placement._tag])).toEqual([
-			[folder("/work/phantom/app"), "app", "Folder"],
+		expect((await view()).desks.map((desk) => [desk.session, desk.title, desk.known])).toEqual([
+			["ses_p", "app", false],
 		]);
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
-		service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
-		await eventually(async () => (await view()).projects[0]?.id === "prj_phantom");
-		expect(await service.attached()).toBe(2);
+		server.session({ id: S("ses_p"), title: "App work", directory: "/work/phantom/app" });
+		service.plugin(server);
+		await eventually(async () => (await view()).desks[0]?.title === "App work");
 	});
 
-	test("a lookup that fails isn't taken for an unknown session: the entry is placed once the plugin answers, with no reconnect", async () => {
+	test("a lookup that fails isn't taken for an unknown session: the name comes once the plugin answers, with no reconnect", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
-		const plugin = service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
+		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
+		const plugin = service.plugin(server);
 		await plugin.url();
 		server.down = true;
 		await plugin.request("ask", {
 			asker: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("Where?"),
 		});
-		expect((await view()).projects.map((project) => project.placement._tag)).toEqual(["Folder"]);
+		expect((await view()).desks.map((desk) => desk.known)).toEqual([false]);
 		server.down = false;
-		await eventually(async () => (await view()).projects[0]?.id === "prj_phantom");
+		await eventually(async () => (await view()).desks[0]?.title === "Phantom");
 	});
 
-	test("a known project stays while OpenCode is away; the next connect catches a move missed meanwhile", async () => {
+	test("a known name stays while OpenCode is away; the next connect catches a rename missed meanwhile", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), projectID: P("prj_phantom") });
-		const first = service.plugin(server, { id: P("prj_phantom"), directory: "/work/phantom" });
+		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
+		const first = service.plugin(server);
 		await first.request("ask", {
 			asker: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("Where?"),
 		});
-		expect(await service.attached()).toBe(1);
+		await eventually(async () => (await view()).desks[0]?.title === "Phantom");
 
 		await first.close();
-		server.sessions.set(S("ses_p"), { ...present(server.sessions.get(S("ses_p"))), projectID: P("prj_moved") }); // moved, nobody told
+		server.sessions.set(S("ses_p"), { ...present(server.sessions.get(S("ses_p"))), title: "Renamed" });
 		await eventually(async () => (await service.attached()) === 0);
-		expect((await view()).projects.map((project) => [project.id, project.placement._tag])).toEqual([
-			["prj_phantom", "Project"],
-		]);
+		expect((await view()).desks.map((desk) => [desk.title, desk.known])).toEqual([["Phantom", true]]);
 
 		service.plugin(server);
-		await eventually(async () => (await view()).projects[0]?.id === "prj_moved");
-		expect(await service.attached()).toBe(1);
+		await eventually(async () => (await view()).desks[0]?.title === "Renamed");
 	});
 
-	test("a project no plugin instance has reported is named after its session's folder, not its id", async () => {
+	test("a desk with nothing on it yet is named, from its session in desk mode", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), projectID: P("prj_phantom"), directory: "/work/phantom" });
-		// This plugin instance's own location is another project: nobody reports prj_phantom's directory.
-		const plugin = service.plugin(server, { id: P("prj_other"), directory: "/work/other" });
-		const { url } = await plugin.request("page", { session: S("ses_p") });
-		expect(url).toBe(`${service.url}projects/prj_phantom`);
-		expect((await view("prj_phantom")).project).toEqual({
-			id: P("prj_phantom"),
-			name: "phantom",
-			placement: { _tag: "Project", id: P("prj_phantom") },
+		server.session({ id: S("ses_p"), title: "Fresh", directory: "/work/desk" });
+		const plugin = service.plugin(server);
+		expect(await plugin.request("page", { session: S("ses_p") })).toEqual({ url: `${service.url}sessions/ses_p` });
+		await eventually(async () => (await view("ses_p")).desk?.title === "Fresh");
+	});
+
+	test("a parent on another session's desk is refused, asking and adopting: a thread stays on one desk", async () => {
+		const plugin = service.plugin();
+		const theirs = await plugin.request("ask", {
+			asker: { session: S("ses_a"), directory: "/w" },
+			question: question("Theirs?"),
 		});
+		await expect(
+			plugin.request("ask", {
+				asker: { session: S("ses_b"), directory: "/w" },
+				question: question("Mine?", { parent: theirs.id }),
+			}),
+		).rejects.toThrow("another session's desk");
+		const mine = await plugin.request("ask", {
+			asker: { session: S("ses_b"), directory: "/w" },
+			question: question("Mine?"),
+		});
+		await expect(plugin.request("adopt", { id: mine.id, parent: theirs.id })).rejects.toThrow("another session's desk");
 	});
 
-	test("a project is named from its sessions in desk mode, even with nothing on the desk, when the location reports another id", async () => {
+	test("a PR's question is filed under its review entry on the asker's desk only", async () => {
+		const plugin = service.plugin();
+		const elsewhere = await plugin.request("ask", {
+			asker: { session: S("ses_a"), directory: "/w" },
+			question: question("Review PR #7", { labels: ["review", "pr:7"] }),
+		});
+		const asked = await plugin.request("ask", {
+			asker: { session: S("ses_b"), directory: "/w" },
+			question: question("About #7?", { labels: ["pr:7"] }),
+		});
+		expect(asked.parent).toBeNull();
+		const own = await plugin.request("ask", {
+			asker: { session: S("ses_b"), directory: "/w" },
+			question: question("Review PR #7 here", { labels: ["review", "pr:7"] }),
+		});
+		const filed = await plugin.request("ask", {
+			asker: { session: S("ses_b"), directory: "/w" },
+			question: question("And now?", { labels: ["pr:7"] }),
+		});
+		expect(filed.parent).toBe(own.id);
+		expect(filed.parent).not.toBe(elsewhere.id);
+	});
+
+	test("a session claims another's desk: its entries and their undelivered answers become the claimer's; refused while that session is in desk mode", async () => {
 		const server = service.fake.server("http://opencode-1");
-		// The session kept the repository's older project id; the plugin's location has the new one.
-		server.session({ id: S("ses_p"), projectID: P("prj_old"), directory: "/work/desk" });
-		service.plugin(server, { id: P("prj_new"), directory: "/work/desk" });
-		await eventually(async () => (await view("prj_old")).project?.name === "desk");
+		server.session({ id: S("ses_new"), title: "New", directory: "/w" });
+		const plugin = service.plugin(server);
+		const old = await plugin.request("ask", {
+			asker: { session: S("ses_old"), directory: "/w" },
+			question: question("Old?"),
+		});
+		await service.rpc((client) => client.submit({ drafts: [{ entry: old.id, text: "The answer" }] }));
+		expect(await plugin.request("claim", { session: S("ses_new"), from: S("ses_old") })).toBe(1);
+		expect((await read(old.id)).session).toBe(S("ses_new"));
+		// Delivered to the claimer now: it's in desk mode in this OpenCode.
+		await eventually(() => server.admitted.length === 1);
+		expect(present(server.admitted[0]).sessionID).toBe(S("ses_new"));
+		await expect(plugin.request("claim", { session: S("ses_other"), from: S("ses_new") })).rejects.toThrow(
+			"is in desk mode",
+		);
+		await expect(plugin.request("claim", { session: S("ses_new"), from: S("ses_none") })).rejects.toThrow(
+			"nothing on the desk",
+		);
 	});
 
-	test("without a project, the page lists the projects only", async () => {
+	test("without a session, the page lists the desks only", async () => {
 		await service
 			.plugin()
 			.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Somewhere?") });
 		const all = await view();
-		expect(all.project).toBeNull();
+		expect(all.desk).toBeNull();
 		expect(all.entries).toEqual([]);
-		expect(all.projects).toEqual([
-			{ id: folder("/w"), name: "w", placement: { _tag: "Folder", directory: "/w" }, waiting: 1, critical: 0 },
-		]);
+		expect(all.desks).toEqual([{ session: "ses_a", title: "w", folder: "w", known: false, waiting: 1, critical: 0 }]);
 	});
 
 	test("a live view follows changes", async () => {
 		const plugin = service.plugin();
 		await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("First") });
-		const views = service.rpc((client) =>
-			client.view({ project: folder("/w") }).pipe(Stream.take(2), Stream.runCollect),
-		);
+		const views = service.rpc((client) => client.view({ session: "ses_a" }).pipe(Stream.take(2), Stream.runCollect));
 		await Bun.sleep(200);
 		await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Second") });
 		expect(Array.from(await views).map((one: View) => one.entries.length)).toEqual([1, 2]);
@@ -530,9 +564,9 @@ describe("the page server", () => {
 		await rm(join(tmpdir(), "desk-outside.txt"), { force: true });
 	});
 
-	test("a link to a project or an entry opens the page, its assets from the root", async () => {
+	test("a link to a desk or an entry opens the page, its assets from the root", async () => {
 		const shell = await (await fetch(service.url)).text();
-		for (const path of ["projects/prj_phantom", "projects/prj_phantom/questions/0190abcd"]) {
+		for (const path of ["sessions/ses_a", "sessions/ses_a/questions/0190abcd"]) {
 			const response = await fetch(`${service.url}${path}`, { headers: { accept: "text/html" } });
 			expect(response.status).toBe(200);
 			expect(await response.text()).toBe(shell);

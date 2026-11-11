@@ -4,7 +4,6 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import { Entry, EntryId } from "./entry";
 import { DeliveryFailed, Refusal } from "./errors";
-import { Placement } from "./placement";
 
 /** An attachment the page sends: its bytes, base64 on the wire. */
 export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.Uint8ArrayFromBase64 });
@@ -21,21 +20,26 @@ export const Draft = Schema.Struct({
 });
 export type Draft = typeof Draft.Type;
 
-/** A project with entries. `id` is its placement's key (its URL); a `Folder` is a guess: no connected OpenCode knows its sessions. */
-export const ProjectSummary = Schema.Struct({
-	id: Schema.String,
-	name: Schema.String,
-	placement: Placement,
-	waiting: Schema.Int,
-	critical: Schema.Int,
+/** A desk: a top-level session's, named after it (`sessions.ts`). */
+export const DeskName = Schema.Struct({
+	session: Schema.String,
+	title: Schema.String,
+	/** The last segment of the folder the session works in. */
+	folder: Schema.String,
+	/** Whether a connected OpenCode knows the session; one nobody knows may be gone, and its desk can be claimed. */
+	known: Schema.Boolean,
 });
-export type ProjectSummary = typeof ProjectSummary.Type;
+export type DeskName = typeof DeskName.Type;
 
-/** One project's desk, every project with entries (for switching), and how many OpenCode instances are connected. */
+/** A desk with entries, for the list: how many wait on the user, and how many of those are critical. */
+export const DeskSummary = Schema.Struct({ ...DeskName.fields, waiting: Schema.Int, critical: Schema.Int });
+export type DeskSummary = typeof DeskSummary.Type;
+
+/** One session's desk, every desk with entries (for switching), and the sessions in desk mode. */
 export const View = Schema.Struct({
-	project: Schema.NullOr(Schema.Struct({ id: Schema.String, name: Schema.String, placement: Placement })),
+	desk: Schema.NullOr(DeskName),
 	entries: Schema.Array(Entry),
-	projects: Schema.Array(ProjectSummary),
+	desks: Schema.Array(DeskSummary),
 	/** The (top-level) sessions in desk mode, across the connected OpenCode instances. */
 	deskMode: Schema.Array(Schema.String),
 	/** Outbox (message id) → why its last delivery failed, for undelivered entries whose try failed. */
@@ -44,8 +48,8 @@ export const View = Schema.Struct({
 export type View = typeof View.Type;
 
 export const DeskApi = RpcGroup.make(
-	/** `project`'s desk now, then after every change; without one, only the project list. */
-	Rpc.make("view", { payload: { project: Schema.optional(Schema.String) }, success: View, stream: true }),
+	/** `session`'s desk now, then after every change; without one, only the list of desks. */
+	Rpc.make("view", { payload: { session: Schema.optional(Schema.String) }, success: View, stream: true }),
 	/** Every draft, all or nothing; one queued message per session. Returns how many went. */
 	Rpc.make("submit", { payload: { drafts: Schema.Array(Draft) }, success: Schema.Int, error: Refusal }),
 	/** One draft, steering its session's current turn. */

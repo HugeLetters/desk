@@ -25,6 +25,12 @@ export const refusal = (refused: Refusal): string => {
 			return `Entry ${refused.id}: attachment ${refused.attachment} is missing from the draft; attach the file again.`;
 		case "NothingUndelivered":
 			return `Entry ${refused.id} has nothing waiting to be delivered; it may have just gone out.`;
+		case "OtherDesk":
+			return `Entry ${refused.id} is on another session's desk; a thread stays on one desk. Ask without a parent, or claim that desk first (desk_claim).`;
+		case "NoSuchDesk":
+			return `Session ${refused.session} has nothing on the desk to claim.`;
+		case "DeskInUse":
+			return `Session ${refused.session} is in desk mode, so its desk is still its own; it can be claimed once desk mode is off there or the session is gone.`;
 	}
 };
 

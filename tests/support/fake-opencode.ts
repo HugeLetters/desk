@@ -5,12 +5,10 @@
  * in its OpenCode.
  */
 
-import type { ProjectID } from "@opencode/schema/project-id";
 import * as Effect from "effect/Effect";
 import type { SessionID } from "../../src/entry";
 import type { Options } from "../../src/plugin/connection";
 import type { Prompt, SessionInfo } from "../../src/protocol";
-import { P } from "./ids";
 import { present } from "./present";
 
 export interface FakeServer {
@@ -27,7 +25,8 @@ export interface FakeServer {
 	/** Prompts are refused with this message, while set. */
 	refuse: string | undefined;
 	session(info: Partial<SessionInfo> & { id: SessionID }): void;
-	move(sessionID: SessionID, projectID: ProjectID): void;
+	/** The session moves to another folder, and the plugin reports it. */
+	move(sessionID: SessionID, directory: string): void;
 }
 
 export function fakeOpenCode() {
@@ -46,11 +45,11 @@ export function fakeOpenCode() {
 			loseNextReply: false,
 			refuse: undefined,
 			session(info) {
-				this.sessions.set(info.id, { projectID: P("prj_default"), directory: "/work/default", ...info });
+				this.sessions.set(info.id, { title: "", directory: "/work/default", ...info });
 			},
-			move(sessionID, projectID) {
+			move(sessionID, directory) {
 				const session = present(this.sessions.get(sessionID));
-				this.sessions.set(sessionID, { ...session, projectID });
+				this.sessions.set(sessionID, { ...session, directory });
 				for (const notify of watchers.get(url) ?? []) notify(sessionID);
 			},
 		};

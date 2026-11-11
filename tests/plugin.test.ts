@@ -22,6 +22,7 @@ interface Session {
 	id: string;
 	parentID?: string;
 	projectID: string;
+	title?: string;
 	location: { directory: string };
 }
 
@@ -108,11 +109,11 @@ async function load(context: ReturnType<typeof fakeContext>) {
 }
 
 const sessions: Array<Session> = [
-	{ id: S("ses_main"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
+	{ id: S("ses_main"), title: "Main", projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
 	{ id: S("ses_sub"), parentID: S("ses_main"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
 	{ id: S("ses_other"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
 ];
-const desk = ["desk_adopt", "desk_answer", "desk_ask", "desk_list", "desk_prioritize", "desk_resolve"];
+const desk = ["desk_adopt", "desk_answer", "desk_ask", "desk_claim", "desk_list", "desk_prioritize", "desk_resolve"];
 
 let home: string;
 let first: ReturnType<typeof fakeContext>;
@@ -146,18 +147,21 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(present(first.synthetic.at(-1)).text).toMatch(
-		/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/projects\//,
+		/Desk mode is on for this session.*http:\/\/127\.0\.0\.1:\d+\/sessions\/ses_main/,
 	);
 	// Replies go on the desk too, to what's said there and in chat.
 	expect(present(first.synthetic.at(-1)).text).toContain(
 		"your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat",
 	);
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
-	expect(present(first.synthetic.at(-1)).description).toMatch(/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/projects\//);
+	expect(present(first.synthetic.at(-1)).description).toMatch(
+		/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/sessions\/ses_main$/,
+	);
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
 	// The rarely needed ones are in Code Mode; the rest are direct tools.
 	expect(desk.filter((name) => present(first.tools.get(name)).options?.codemode !== false)).toEqual([
 		"desk_adopt",
+		"desk_claim",
 		"desk_prioritize",
 	]);
 	expect(await first.visible("ses_sub")).toEqual([...desk, "read"]);
@@ -184,17 +188,18 @@ test("the plugin is the service's way into its OpenCode: the user's reply goes o
 	const prompt = await eventually(() => first.prompts.find((candidate) => candidate.text.includes("Yes, deliver.")));
 	expect(prompt.sessionID).toBe("ses_main");
 	expect(prompt.id).toMatch(/^msg_/);
-	// The plugin looked the session's project up for the service; a move in its OpenCode makes the service ask again.
-	const projects = async () =>
-		present(
-			Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0],
-		).projects.map((project) => project.id);
-	expect(await projects()).toEqual(["prj_phantom"]);
-	present(sessions[0]).projectID = "prj_moved";
+	// The plugin looked the session up for the service (the desk's name); a move in its OpenCode makes the service ask again.
+	const desks = async () =>
+		present(Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]).desks.map(
+			(desk) => [desk.session, desk.title, desk.folder],
+		);
+	await eventually(async () => (await desks())[0]?.[1] === "Main");
+	expect(await desks()).toEqual([["ses_main", "Main", "phantom"]]);
+	// Moved (within this directory, so the plugin stays connected), and renamed meanwhile: the desk's name follows.
+	present(sessions[0]).title = "Main, renamed";
 	first.emit({ type: "session.moved", data: { sessionID: S("ses_main") } });
-	await eventually(async () => (await projects()).includes("prj_moved"));
-	present(sessions[0]).projectID = "prj_phantom";
-	first.emit({ type: "session.moved", data: { sessionID: S("ses_main") } });
+	await eventually(async () => (await desks())[0]?.[1] === "Main, renamed");
+	present(sessions[0]).title = "Main";
 });
 
 test("a second plugin instance (another OpenCode) shares the one service and the switch", async () => {

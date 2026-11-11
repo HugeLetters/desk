@@ -8,7 +8,6 @@ import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import { dirname, join } from "node:path";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
-import type { ProjectID } from "@opencode/schema/project-id";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -33,8 +32,8 @@ export interface Options {
 	readonly socket: string;
 	/** Starts the service; run when nothing answers on the socket. */
 	readonly start: Effect.Effect<void>;
-	/** This plugin instance's location's project. */
-	readonly project: { readonly id: ProjectID; readonly directory: string };
+	/** This plugin instance's directory. */
+	readonly directory: string;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
 	readonly modes: Effect.Effect<ReadonlyArray<SessionID>>;
 	/** Answers the service's calls, in this OpenCode. */
@@ -140,7 +139,7 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 			);
 			yield* SubscriptionRef.set(state, { _tag: "Live", client, url });
 			yield* client
-				.attach({ project: options.project, sessions: yield* options.modes })
+				.attach({ directory: options.directory, sessions: yield* options.modes })
 				.pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
 		}).pipe(Effect.scoped, Effect.provide(transport));
 

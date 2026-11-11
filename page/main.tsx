@@ -1,8 +1,8 @@
 /** @jsxImportSource solid-js */
 /**
- * The desk page: one project's desk (`/projects/<id>`; at `/`, the list of projects), its open entries as a flat
- * list, and an entry view (`/projects/<id>/questions/<entry id>`) with its parent, follow-ups, a draft box and Next.
- * Moving to another project, like every link here, stays on the page: the view and the drafts follow the route.
+ * The desk page: one session's desk (`/sessions/<id>`; at `/`, the list of desks), its open entries as a flat list,
+ * and an entry view (`/sessions/<id>/questions/<entry id>`) with its parent, follow-ups, a draft box and Next.
+ * Moving to another desk, like every link here, stays on the page: the view and the drafts follow the route.
  * Drafts live in the browser until Submit (all of them, one message per session), ⌘↵ (the same, then Next) or Send now (one, steering).
  */
 
@@ -68,23 +68,26 @@ const Icon = (props: { name: keyof typeof icons }) => (
 	</svg>
 );
 
-/** The project in a path (`/projects/<id>/…`), if any. */
-const projectIn = (pathname: string) =>
-	((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/projects\/([^/]+)/)?.[1]);
-/** The project the page shows, following the route; drafts are kept per project. */
-const [project, setProject] = createSignal(projectIn(location.pathname));
+/** The desk (its session) in a path (`/sessions/<id>/…`), if any. */
+const sessionIn = (pathname: string) =>
+	((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/sessions\/([^/]+)/)?.[1]);
+/** The desk the page shows, following the route; drafts are kept per desk. */
+const [session, setSession] = createSignal(sessionIn(location.pathname));
 const draftsPrefix = "desk.drafts.";
 const draftsKey = (id: string | undefined) => `${draftsPrefix}${id ?? ""}`;
 const loadDrafts = (key: string): Partial<Record<string, string>> => JSON.parse(localStorage.getItem(key) ?? "{}");
-/** A project's desk, and an entry on the current one. */
-const projectPath = (id: string) => `/projects/${encodeURIComponent(id)}`;
+/** A session's desk, and an entry on the current one. */
+const deskPath = (id: string) => `/sessions/${encodeURIComponent(id)}`;
+/** How a desk is shown: its session's title and folder. */
+const deskName = (desk: { readonly title: string; readonly folder: string } | null | undefined) =>
+	!desk ? "" : desk.title === desk.folder ? desk.title : `${desk.title} · ${desk.folder}`;
 const home = () => {
-	const id = project();
-	return id === undefined ? "/" : projectPath(id);
+	const id = session();
+	return id === undefined ? "/" : deskPath(id);
 };
 const entryPath = (id: string) => {
-	const current = project();
-	return `${current === undefined ? "" : projectPath(current)}/questions/${id}`;
+	const current = session();
+	return `${current === undefined ? "" : deskPath(current)}/questions/${id}`;
 };
 
 function Markdown(props: { text: string; entry: string; local?: Local }) {
@@ -100,14 +103,14 @@ function Markdown(props: { text: string; entry: string; local?: Local }) {
 
 function App() {
 	const [state, setState] = createStore<{ view: View | null; online: boolean }>({ view: null, online: true });
-	/** The current project's drafts, saved under its key; another project swaps them for its own. */
-	let currentDrafts = draftsKey(project());
+	/** The current desk's drafts, saved under its key; another desk swaps them for its own. */
+	let currentDrafts = draftsKey(session());
 	const [drafts, setDrafts] = createStore<Partial<Record<string, string>>>(loadDrafts(currentDrafts));
 	const [toast, setToast] = createSignal<{ message: string; error: boolean }>();
 	createEffect(() => localStorage.setItem(currentDrafts, JSON.stringify(drafts)));
 	createEffect(
 		on(
-			project,
+			session,
 			(id) => {
 				currentDrafts = draftsKey(id);
 				setDrafts(reconcile(loadDrafts(currentDrafts)));
@@ -120,7 +123,7 @@ function App() {
 	const keep = (file: Attachments.Local) => setFiles(file.id, { ...file, url: URL.createObjectURL(file.blob) });
 	/**
 	 * Lets go of the attachments no draft references anymore: those just sent, those whose draft went, and links deleted
-	 * from the text. Other projects' drafts count too: their files share the browser's store.
+	 * from the text. Other desks' drafts count too: their files share the browser's store.
 	 */
 	const prune = () => {
 		const others = Object.keys(localStorage).filter((key) => key.startsWith(draftsPrefix) && key !== currentDrafts);
@@ -141,16 +144,16 @@ function App() {
 		})
 		.catch(() => {});
 
-	// One view at a time, of the project the route shows.
+	// One view at a time, of the desk the route shows.
 	createEffect(
-		on(project, (id) => {
+		on(session, (id) => {
 			const subscription = runtime.runFork(
 				withClient((desk) =>
-					desk.view({ project: id }).pipe(
+					desk.view({ session: id }).pipe(
 						Stream.runForEach((view) =>
 							Effect.sync(() => {
-								// The previous project's stream may still deliver one before it stops.
-								if ((view.project?.id ?? undefined) !== id) return;
+								// The previous desk's stream may still deliver one before it stops.
+								if ((view.desk?.session ?? undefined) !== id) return;
 								setState("online", true);
 								setState("view", reconcile(view, { key: "id", merge: true }));
 								// A draft for an entry that left the desk can't be sent anymore.
@@ -169,8 +172,8 @@ function App() {
 		}),
 	);
 
-	/** The entries of the project shown; none while the previous project's view is still up. */
-	const entries = () => (state.view && (state.view.project?.id ?? undefined) === project() ? state.view.entries : []);
+	/** The entries of the desk shown; none while the previous desk's view is still up. */
+	const entries = () => (state.view && (state.view.desk?.session ?? undefined) === session() ? state.view.entries : []);
 	const mine = createMemo(() => waitingFor(entries(), "user"));
 	const theirs = createMemo(() => waitingFor(entries(), "agent"));
 	const yours = (entry: Entry) => waitingOn(entry) === "user";
@@ -237,6 +240,16 @@ function App() {
 			: "Your text hasn't reached the session yet: no connected OpenCode knows it. It goes out when one does.";
 	};
 
+	/** A desk whose session no connected OpenCode knows: it may be gone, and another session can claim its desk. */
+	const Unknown = (props: { session: string }) => (
+		<span
+			class="label"
+			title={`No connected OpenCode knows session ${props.session}: it may be gone. Answers to it wait until one does; another session can take this desk over (desk_claim ${props.session}).`}
+		>
+			unknown session
+		</span>
+	);
+
 	const Pills = (props: { entry: Entry }) => (
 		<>
 			<span class={`pill ${drafted(props.entry) ? "drafted" : props.entry.status}`}>
@@ -294,7 +307,7 @@ function App() {
 			</Show>
 		);
 		return (
-			<Show when={project() !== undefined} fallback={<Projects />}>
+			<Show when={session() !== undefined} fallback={<Desks />}>
 				<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
 					<Section
 						title="Waiting on you"
@@ -308,20 +321,18 @@ function App() {
 		);
 	}
 
-	/** No project picked: every project with entries, each its own desk. */
-	function Projects() {
+	/** No desk picked: every session's desk with entries. */
+	function Desks() {
 		return (
-			<Show when={(state.view?.projects.length ?? 0) > 0} fallback={<div class="empty">No desk has entries yet.</div>}>
-				<div class="section">Projects</div>
+			<Show when={(state.view?.desks.length ?? 0) > 0} fallback={<div class="empty">No desk has entries yet.</div>}>
+				<div class="section">Desks</div>
 				<div class="list">
-					<For each={state.view?.projects ?? []}>
+					<For each={state.view?.desks ?? []}>
 						{(other) => (
-							<A class={`item${other.waiting ? " turn" : ""}`} href={projectPath(other.id)}>
-								<span class="title">{other.name}</span>
-								<Show when={other.placement._tag === "Folder"}>
-									<span class="label" title="Guessed from the folder: no connected OpenCode knows these sessions yet">
-										folder
-									</span>
+							<A class={`item${other.waiting ? " turn" : ""}`} href={deskPath(other.session)}>
+								<span class="title">{deskName(other)}</span>
+								<Show when={!other.known}>
+									<Unknown session={other.session} />
 								</Show>
 								<Show when={other.critical}>
 									<span class="crit" title="Critical: blocking work right now">
@@ -643,7 +654,11 @@ function App() {
 	const Shell = (props: ParentProps) => {
 		const navigate = useNavigate();
 		const route = useLocation();
-		createEffect(() => setProject(projectIn(route.pathname)));
+		createEffect(() => setSession(sessionIn(route.pathname)));
+		// Desks used to be per project: an old link goes to the list.
+		createEffect(() => {
+			if (route.pathname.startsWith("/projects/")) navigate("/", { replace: true });
+		});
 		return (
 			<Show when={state.view} fallback={<div class="empty">Connecting…</div>}>
 				{(view) => (
@@ -654,40 +669,40 @@ function App() {
 									<A href="/">Desk</A>
 								</h1>
 								<Show
-									when={view().projects.length > 1 || view().project}
-									fallback={<span class="muted">{view().project?.name}</span>}
+									when={view().desks.length > 1 || view().desk}
+									fallback={<span class="muted">{deskName(view().desk)}</span>}
 								>
 									<select
 										ref={(select) =>
 											createEffect(() => {
 												// After the options for this view exist: a value set before them doesn't stick.
-												void view().projects.length;
-												const id = project() ?? "";
+												void view().desks.length;
+												const id = session() ?? "";
 												queueMicrotask(() => (select.value = id));
 											})
 										}
 										class="project"
-										title="Each project has its own desk"
+										title="Each session has its own desk (its subagents share it)"
 										onChange={(event) =>
-											navigate(event.currentTarget.value ? projectPath(event.currentTarget.value) : "/")
+											navigate(event.currentTarget.value ? deskPath(event.currentTarget.value) : "/")
 										}
 									>
-										<Show when={project() === undefined}>
+										<Show when={session() === undefined}>
 											<option value="" selected>
-												Choose a project
+												Choose a desk
 											</option>
 										</Show>
-										<Show when={view().project && !view().projects.some((other) => other.id === project())}>
-											<option value={project()} selected>
-												{view().project?.name ?? ""}
+										<Show when={view().desk && !view().desks.some((other) => other.session === session())}>
+											<option value={session()} selected>
+												{deskName(view().desk)}
 											</option>
 										</Show>
-										<For each={view().projects}>
+										<For each={view().desks}>
 											{(other) => (
-												<option value={other.id} selected={other.id === project()}>
-													{other.name}
-													{other.placement._tag === "Folder" ? " (folder)" : ""}
-													{other.id !== project() && other.waiting ? ` (${other.waiting})` : ""}
+												<option value={other.session} selected={other.session === session()}>
+													{deskName(other)}
+													{other.known ? "" : " (unknown session)"}
+													{other.session !== session() && other.waiting ? ` (${other.waiting})` : ""}
 												</option>
 											)}
 										</For>
@@ -718,19 +733,15 @@ function App() {
 							</div>
 						</header>
 						<main>
-							<Show
-								when={
-									view().deskMode.length === 0 ||
-									view().project?.placement._tag === "Folder" ||
-									(project() === undefined && view().projects.some((other) => other.placement._tag === "Folder"))
-								}
-							>
+							<Show when={view().deskMode.length === 0 || view().desk?.known === false}>
 								<div class="notice">
 									<Show when={view().deskMode.length === 0}>
 										No session is in desk mode: answers wait as <em>not delivered</em> until one is.{" "}
 									</Show>
-									Projects marked <span class="label">folder</span> are guessed from the question's folder: no connected
-									OpenCode knows their session yet.
+									<Show when={view().desk?.known === false}>
+										No connected OpenCode knows this desk's session ({view().desk?.session}): it may be gone. Answers to
+										it wait; another session can take this desk over with <code>desk_claim</code>.
+									</Show>
 								</div>
 							</Show>
 							{props.children}
@@ -746,10 +757,10 @@ function App() {
 
 	return (
 		<MetaProvider>
-			<Title>{`${mine().length ? `(${mine().length}) ` : ""}${state.view?.project ? `${state.view.project.name} · ` : ""}Desk`}</Title>
+			<Title>{`${mine().length ? `(${mine().length}) ` : ""}${state.view?.desk ? `${deskName(state.view.desk)} · ` : ""}Desk`}</Title>
 			<Router root={Shell}>
-				<Route path={["/", "/projects/:project"]} component={List} />
-				<Route path="/projects/:project/questions/:id" component={EntryView} />
+				<Route path={["/", "/sessions/:session", "/projects/*"]} component={List} />
+				<Route path="/sessions/:session/questions/:id" component={EntryView} />
 			</Router>
 		</MetaProvider>
 	);

@@ -10,7 +10,6 @@
  */
 
 import { readFileSync } from "node:fs";
-import { ProjectID } from "@opencode/schema/project-id";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Rpc from "effect/rpc/Rpc";
@@ -22,7 +21,7 @@ import { Refusal } from "./errors";
 export const SessionInfo = Schema.Struct({
 	id: SessionID,
 	parentID: Schema.optional(SessionID),
-	projectID: ProjectID,
+	title: Schema.String,
 	directory: Schema.String,
 });
 export type SessionInfo = typeof SessionInfo.Type;
@@ -74,16 +73,16 @@ export const PluginApi = RpcGroup.make(
 		success: Schema.Struct({ url: Schema.String }),
 		error: Outdated,
 	}),
-	/** The plugin instance's location's project (for the project's name) and the sessions in desk mode there. */
+	/** The plugin instance's directory (for the log) and the sessions in desk mode there. */
 	Rpc.make("attach", {
-		payload: { project: Schema.Struct({ id: ProjectID, directory: Schema.String }), sessions: Schema.Array(SessionID) },
+		payload: { directory: Schema.String, sessions: Schema.Array(SessionID) },
 		success: ServiceCall,
 		stream: true,
 	}),
 	Rpc.make("reply", { payload: { call: Schema.Int, outcome: Outcome } }),
 	/** The sessions in desk mode in this plugin instance's directory, all of them, whenever one turns it on or off. */
 	Rpc.make("modes", { payload: { sessions: Schema.Array(SessionID) } }),
-	/** A session in this OpenCode moved to another directory (perhaps another project). */
+	/** A session in this OpenCode moved to another directory: its desk's folder changes. */
 	Rpc.make("moved", { payload: { session: SessionID } }),
 	Rpc.make("ask", {
 		payload: { asker: Asker, question: Question },
@@ -94,14 +93,16 @@ export const PluginApi = RpcGroup.make(
 	Rpc.make("answer", { payload: { id: EntryId, body: Schema.String }, error: Refusal }),
 	Rpc.make("resolve", { payload: { id: EntryId }, error: Refusal }),
 	Rpc.make("prioritize", { payload: { id: EntryId, priority: Priority, subtree: Schema.Boolean }, error: Refusal }),
-	/** The desk of `session`'s project, or one entry in full. */
+	/** `session`'s desk, or one entry in full. */
 	Rpc.make("list", {
 		payload: { session: SessionID, id: Schema.optional(EntryId) },
 		success: Schema.String,
 		error: Refusal,
 	}),
-	/** The page for `session`'s project. */
+	/** The page of `session`'s desk. */
 	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
+	/** `session` takes over `from`'s desk: every entry of `from` becomes `session`'s. Returns how many. */
+	Rpc.make("claim", { payload: { session: SessionID, from: SessionID }, success: Schema.Int, error: Refusal }),
 );
 
 /**

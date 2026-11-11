@@ -36,6 +36,13 @@ export class NothingUndelivered extends Schema.TaggedError<NothingUndelivered>()
 	id: EntryId,
 }) {}
 
+/** The entry is on another session's desk: a thread never spans two desks. */
+export class OtherDesk extends Schema.TaggedError<OtherDesk>()("OtherDesk", { id: EntryId }) {}
+/** No entries belong to that session: there's no desk to claim. */
+export class NoSuchDesk extends Schema.TaggedError<NoSuchDesk>()("NoSuchDesk", { session: Schema.String }) {}
+/** That session is in desk mode: its desk can't be taken from under it. */
+export class DeskInUse extends Schema.TaggedError<DeskInUse>()("DeskInUse", { session: Schema.String }) {}
+
 export const Refusal = Schema.Union([
 	NoSuchEntry,
 	HasParent,
@@ -48,6 +55,9 @@ export const Refusal = Schema.Union([
 	EmptyText,
 	MissingAttachment,
 	NothingUndelivered,
+	OtherDesk,
+	NoSuchDesk,
+	DeskInUse,
 ]);
 export type Refusal = typeof Refusal.Type;
 

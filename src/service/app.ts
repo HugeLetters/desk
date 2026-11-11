@@ -10,7 +10,7 @@ import * as Layer from "effect/Layer";
 import * as Delivery from "../delivery";
 import { Desk } from "../desk";
 import { OpenCode } from "../opencode";
-import { Projects } from "../projects";
+import { Sessions } from "../sessions";
 import { Store } from "../store";
 import { Api } from "./api";
 import { Clients } from "./clients";
@@ -33,7 +33,7 @@ export interface Config {
 }
 
 export const layer = (config: Config) => {
-	const core = Layer.mergeAll(Desk.layer, Projects.layer, Delivery.Failures.layer).pipe(
+	const core = Layer.mergeAll(Desk.layer, Sessions.layer, Delivery.Failures.layer).pipe(
 		Layer.provideMerge(Store.layer(config.store)),
 		Layer.provideMerge(OpenCode.layer),
 		Layer.provideMerge(Clients.layer(config.idle)),

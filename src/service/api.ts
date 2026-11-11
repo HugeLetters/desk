@@ -1,6 +1,6 @@
 /**
  * What the service does for its clients: the plugin's requests (`protocol.ts`) and the page's views, in terms of
- * the desk and the projects its entries belong to. The socket and the HTTP server only carry these.
+ * the desk and the sessions its desks belong to. The socket and the HTTP server only carry these.
  */
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -12,12 +12,12 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { Failures } from "../delivery";
 import { Desk } from "../desk";
-import { type Entry, type EntryId, type SessionID, waitingFor } from "../entry";
-import type { Refusal } from "../errors";
+import { type Entry, type EntryId, SessionID, waitingFor } from "../entry";
+import { DeskInUse, type Refusal } from "../errors";
 import { OpenCode } from "../opencode";
 import { type Draft, View } from "../page-api";
-import { fromKey, key, type Placement, Projects } from "../projects";
 import type { PluginApi } from "../protocol";
+import { Sessions } from "../sessions";
 
 const sameView = Schema.toEquivalence(View);
 
@@ -37,7 +37,8 @@ export class Api extends Context.Service<
 		readonly prioritize: Handler<"prioritize">;
 		readonly list: Handler<"list">;
 		readonly page: Handler<"page">;
-		readonly view: (project: string | undefined) => Stream.Stream<View>;
+		readonly claim: Handler<"claim">;
+		readonly view: (session: string | undefined) => Stream.Stream<View>;
 		readonly submit: (drafts: ReadonlyArray<Draft>) => Effect.Effect<number, Refusal>;
 		readonly send: (draft: Draft) => Effect.Effect<void, Refusal>;
 		readonly resolveByUser: (id: EntryId) => Effect.Effect<void, Refusal>;
@@ -52,66 +53,46 @@ export class Api extends Context.Service<
 				const server = yield* HttpServer.HttpServer;
 				const url = server.address._tag === "UnixPathAddress" ? "" : `http://127.0.0.1:${server.address.port}/`;
 				const desk = yield* Desk;
-				const projects = yield* Projects;
+				const sessions = yield* Sessions;
 				const opencode = yield* OpenCode;
 				const failures = yield* Failures;
-				const link = (project: Placement, entry?: string) =>
-					`${url}projects/${encodeURIComponent(key(project))}${entry ? `/questions/${entry}` : ""}`;
+				const link = (session: string, entry?: string) =>
+					`${url}sessions/${encodeURIComponent(session)}${entry ? `/questions/${entry}` : ""}`;
 
-				/** Each entry's project (one lookup per root session; `Projects` remembers them). */
-				const placed = (entries: ReadonlyArray<Entry>) =>
-					Effect.map(
-						Effect.forEach(entries, (entry) =>
-							Effect.map(projects.of(entry), (placement) => [entry.id, placement] as const),
-						),
-						(placements) => {
-							const byEntry = new Map<string, Placement>(placements);
-							// Every entry was placed just now; the folder only satisfies the types.
-							return (entry: Entry): Placement =>
-								byEntry.get(entry.id) ?? { _tag: "Folder", directory: entry.directory };
-						},
-					);
-				/** Entries in the same project as `session` (working in `directory`, when known). */
-				const scope = (session: SessionID, directory?: string) =>
+				/** `session`'s desk: `session` is a top-level session's id (the page's URL). */
+				const view = (session: string | undefined, entries: ReadonlyArray<Entry>) =>
 					Effect.gen(function* () {
-						const all = yield* desk.entries;
-						const where = directory ?? all.find((entry) => entry.session === session)?.directory ?? "";
-						const project = yield* projects.of({ session, directory: where });
-						const projectOf = yield* placed(all);
-						return { project, scope: (entry: Entry) => key(projectOf(entry)) === key(project) };
-					});
-
-				/** `project` is a placement's key (the page's URL). */
-				const view = (project: string | undefined, entries: ReadonlyArray<Entry>) =>
-					Effect.gen(function* () {
-						const projectOf = yield* placed(entries);
-						const keyOf = (entry: Entry) => key(projectOf(entry));
-						const placements = new Map(entries.map((entry) => [keyOf(entry), projectOf(entry)]));
-						const summaries = yield* Effect.forEach(placements, ([id, placement]) =>
-							Effect.gen(function* () {
-								const mine = entries.filter((entry) => keyOf(entry) === id);
+						const bySession = new Map<string, Array<Entry>>();
+						for (const entry of entries) bySession.set(entry.session, [...(bySession.get(entry.session) ?? []), entry]);
+						const name = (id: string, mine: ReadonlyArray<Entry>) =>
+							Effect.map(
+								// The folder its latest entry was asked from, for a session OpenCode doesn't know.
+								sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
+								(name) => ({ session: id, ...name }),
+							);
+						const desks = yield* Effect.forEach(bySession, ([id, mine]) =>
+							Effect.map(name(id, mine), (named) => {
 								const waiting = waitingFor(mine, "user");
-								const name = yield* projects.name(placement, mine[0]?.directory);
 								return {
-									id,
-									name,
-									placement,
+									...named,
 									waiting: waiting.length,
 									critical: waiting.filter((entry) => entry.priority === "critical").length,
 								};
 							}),
 						);
 						const all = {
-							projects: summaries.sort((a, b) => a.name.localeCompare(b.name)),
+							desks: desks.sort((a, b) => a.title.localeCompare(b.title) || a.folder.localeCompare(b.folder)),
 							deskMode: yield* opencode.inDeskMode,
 							failures: Object.fromEntries(yield* failures.current),
 						};
-						if (project === undefined) return { project: null, entries: [], ...all } satisfies View;
-						const shown = placements.get(project) ?? fromKey(project);
-						const name = summaries.find((summary) => summary.id === project)?.name ?? (yield* projects.name(shown));
+						if (session === undefined) return { desk: null, entries: [], ...all } satisfies View;
+						const mine = bySession.get(session) ?? [];
+						const listed = desks.find((other) => other.session === session);
 						return {
-							project: { id: project, name, placement: shown },
-							entries: entries.filter((entry) => keyOf(entry) === project),
+							desk: listed
+								? { session, title: listed.title, folder: listed.folder, known: listed.known }
+								: yield* name(session, mine),
+							entries: mine,
 							...all,
 						} satisfies View;
 					});
@@ -119,29 +100,34 @@ export class Api extends Context.Service<
 				return Api.of({
 					url,
 					ask: ({ asker, question }) =>
-						Effect.gen(function* () {
-							const { project, scope: mine } = yield* scope(asker.session, asker.directory);
-							const entry = yield* desk.ask(asker, question, mine);
-							return { id: entry.id, parent: entry.parent, url: link(project, entry.id) };
-						}),
+						Effect.map(desk.ask(asker, question), (entry) => ({
+							id: entry.id,
+							parent: entry.parent,
+							url: link(asker.session, entry.id),
+						})),
 					adopt: ({ id, parent }) => Effect.asVoid(desk.adopt(id, parent)),
 					answer: ({ id, body }) => Effect.asVoid(desk.answer(id, body)),
 					resolve: ({ id }) => Effect.asVoid(desk.resolve(id, "agent")),
 					prioritize: ({ id, priority, subtree }) => Effect.asVoid(desk.prioritize(id, priority, subtree)),
-					list: ({ session, id }) => Effect.flatMap(scope(session), ({ scope: mine }) => desk.describe(id, mine)),
-					page: ({ session }) => Effect.map(scope(session), ({ project }) => ({ url: link(project) })),
-					view: (project) =>
+					list: ({ session, id }) => desk.describe(id, session),
+					page: ({ session }) => Effect.succeed({ url: link(session) }),
+					claim: ({ session, from }) =>
+						Effect.gen(function* () {
+							if ((yield* opencode.inDeskMode).includes(from)) return yield* new DeskInUse({ session: from });
+							return yield* desk.claim(session, from);
+						}),
+					view: (session) =>
 						Stream.mergeAll(
 							[
 								Stream.map(desk.changes, () => undefined),
-								Stream.map(projects.changes, () => undefined),
+								Stream.map(sessions.changes, () => undefined),
 								Stream.map(failures.changes, () => undefined),
 								Stream.map(opencode.deskMode, () => undefined),
 							],
 							{ concurrency: "unbounded" },
 						).pipe(
 							Stream.debounce("10 millis"),
-							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(project, entries))),
+							Stream.mapEffect(() => Effect.flatMap(desk.entries, (entries) => view(session, entries))),
 							// The desk is read again every few seconds anyway: send a view only when it differs.
 							Stream.changesWith(sameView),
 						),

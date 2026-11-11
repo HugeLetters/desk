@@ -1,8 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 /**
  * The desk in OpenCode's TUI: a footer badge in sessions with desk mode on, `desk`, or `desk [N]` when N entries of
- * the session's project wait on the user (`desk [N !M]`, M in red, when M of them are critical). Clicking it opens that
- * project's desk page. Hidden in sessions without desk mode, and while no desk service runs. It's the `./tui` part
+ * the session's desk wait on the user (`desk [N !M]`, M in red, when M of them are critical). Clicking it opens that
+ * desk's page. Hidden in sessions without desk mode, and while no desk service runs. It's the `./tui` part
  * beside the plugin, so it loads wherever the plugin does. Options as the plugin's (`home`).
  */
 import { homedir } from "node:os";
@@ -30,12 +30,14 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 	const context = props.context;
 	const [hovered, setHovered] = createSignal(false);
 	/** Shown only in a session with desk mode on (a subagent follows its top-level session). */
-	const on = () =>
-		props.sessionID !== undefined &&
-		(props.status?.deskMode.includes(context.data.session.root(props.sessionID) ?? props.sessionID) ?? false);
-	const projectID = () =>
-		props.sessionID === undefined ? undefined : context.data.session.get(props.sessionID)?.projectID;
-	const waiting = () => count(props.status?.projects.find((summary) => summary.id === projectID()));
+	/** The top-level session: its desk is this session's. */
+	const root = () =>
+		props.sessionID === undefined ? undefined : (context.data.session.root(props.sessionID) ?? props.sessionID);
+	const on = () => {
+		const session = root();
+		return session !== undefined && (props.status?.deskMode.includes(session) ?? false);
+	};
+	const waiting = () => count(props.status?.desks.find((summary) => summary.session === root()));
 	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.
 	return (
 		<text
@@ -46,11 +48,11 @@ function Badge(props: { context: Context; status: Status | undefined; sessionID:
 			onMouseOver={() => setHovered(true)}
 			onMouseOut={() => setHovered(false)}
 			onMouseDown={(event) => {
-				const id = projectID();
+				const id = root();
 				if (event.button !== 0 || !id || !props.status) return;
 				event.preventDefault();
 				event.stopPropagation();
-				Effect.runFork(open(`${props.status.url}projects/${encodeURIComponent(id)}`));
+				Effect.runFork(open(`${props.status.url}sessions/${encodeURIComponent(id)}`));
 			}}
 		>
 			desk

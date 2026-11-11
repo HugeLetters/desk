@@ -44,11 +44,13 @@ import {
 	EmptyText,
 	HasParent,
 	MissingAttachment,
+	NoSuchDesk,
 	NoSuchEntry,
 	NothingUndelivered,
 	NotTheAnswerer,
 	NotTheAsker,
 	OpenBelow,
+	OtherDesk,
 	type Refusal,
 	Undelivered,
 	WouldCycle,
@@ -76,7 +78,7 @@ export interface Asker {
 
 /**
  * The newest unresolved top-level entry labelled `review` and the question's `pr:<n>`: where a PR's questions belong.
- * An entry labelled `review` is itself a review root, so it has none. Only entries of `scope` (the asker's project) count.
+ * An entry labelled `review` is itself a review root, so it has none. Pass the asker's desk: only its entries count.
  */
 export function reviewRoot(all: Entries, labels: ReadonlyArray<string>): Entry | undefined {
 	if (labels.includes("review")) return undefined;
@@ -101,14 +103,13 @@ export class Desk extends Context.Service<
 		readonly changes: Stream.Stream<void>;
 		readonly entries: Effect.Effect<Entries>;
 		/**
-		 * An agent asks. `scope` is the asker's project: a PR's review root is looked for among those entries only.
+		 * An agent asks, on its session's desk: a PR's review root is looked for there, and a `parent` must be there too.
 		 */
-		readonly ask: (
-			asker: Asker,
-			question: Question,
-			scope?: (entry: Entry) => boolean,
-		) => Effect.Effect<Entry, Refusal>;
-		/** Files a top-level entry under `parent` (not in its own subtree); an entry's parent never changes once set. */
+		readonly ask: (asker: Asker, question: Question) => Effect.Effect<Entry, Refusal>;
+		/**
+		 * Files a top-level entry under `parent` (on the same desk, not in its own subtree); an entry's parent never
+		 * changes once set.
+		 */
 		readonly adopt: (id: EntryId, parent: EntryId) => Effect.Effect<Entry, Refusal>;
 		/** An agent answers the user's question. */
 		readonly answer: (id: EntryId, body: string) => Effect.Effect<Entry, Refusal>;
@@ -119,8 +120,10 @@ export class Desk extends Context.Service<
 		 * hasn't reached the session); it leaves the desk once it has no follow-ups, and so on up its parents.
 		 */
 		readonly resolve: (id: EntryId, by: Party) => Effect.Effect<void, Refusal>;
-		/** Unresolved entries of `scope`, one per line, or one entry's thread in full. */
-		readonly describe: (id: EntryId | undefined, scope: (entry: Entry) => boolean) => Effect.Effect<string, Refusal>;
+		/** The unresolved entries of `session`'s desk, one per line, or one entry's thread in full. */
+		readonly describe: (id: EntryId | undefined, session: SessionID) => Effect.Effect<string, Refusal>;
+		/** `session` takes over `from`'s desk: every entry of `from` becomes `session`'s. Returns how many. */
+		readonly claim: (session: SessionID, from: SessionID) => Effect.Effect<number, Refusal>;
 		/**
 		 * The user's drafts, all or nothing, into the outbox: one message per session. The attachments their texts
 		 * reference are stored on the way, and only if every draft is taken. Returns how many were.
@@ -204,13 +207,17 @@ export class Desk extends Context.Service<
 					),
 					// A store that can't be read is a broken service, not a desk error.
 					entries: Effect.orDie(store.load),
-					ask: (asker, question, scope = () => true) =>
+					ask: (asker, question) =>
 						modify((all) =>
 							Effect.gen(function* () {
 								const parent =
 									question.parent === undefined
-										? reviewRoot(all.filter(scope), question.labels ?? [])
+										? reviewRoot(
+												all.filter((entry) => entry.session === asker.session),
+												question.labels ?? [],
+											)
 										: yield* find(all, question.parent);
+								if (parent && parent.session !== asker.session) return yield* new OtherDesk({ id: parent.id });
 								const entry: Entry = {
 									id: newId(),
 									parent: parent?.id ?? null,
@@ -234,8 +241,9 @@ export class Desk extends Context.Service<
 						modify((all) =>
 							Effect.gen(function* () {
 								const entry = yield* find(all, id);
-								yield* find(all, parentID);
+								const parent = yield* find(all, parentID);
 								if (entry.parent !== null) return yield* new HasParent({ id, parent: entry.parent });
+								if (parent.session !== entry.session) return yield* new OtherDesk({ id: parentID });
 								if (parentID === id || descendants(all, entry).some((other) => other.id === parentID))
 									return yield* new WouldCycle({ id, parent: parentID });
 								const adopted: Entry = { ...entry, parent: parentID };
@@ -287,11 +295,20 @@ export class Desk extends Context.Service<
 								yield* store.detach(new Set(texts(pruned).filter((file) => !still.has(file))));
 							}),
 						),
-					describe: (id, scope) =>
+					claim: (session, from) =>
+						modify((all) =>
+							Effect.gen(function* () {
+								const theirs = all.filter((entry) => entry.session === from);
+								if (theirs.length === 0) return yield* new NoSuchDesk({ session: from });
+								yield* Effect.forEach(theirs, (entry) => store.write({ ...entry, session }), { discard: true });
+								return theirs.length;
+							}),
+						),
+					describe: (id, session) =>
 						Effect.gen(function* () {
 							const all = yield* Effect.orDie(store.load);
 							if (id === undefined) {
-								const mine = all.filter(scope);
+								const mine = all.filter((entry) => entry.session === session);
 								const open = ordered(mine).filter((entry) => entry.status !== "resolved");
 								if (open.length === 0) return "The desk is empty: nothing open or waiting.";
 								// One short line each: [status, whose turn, priority unless normal, "from the user" for the user's own questions].

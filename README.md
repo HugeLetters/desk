@@ -16,7 +16,7 @@ whose turn it is, and the thread it belongs to. You answer them on one page, in 
 or one at a time; each answer reaches the asking session tagged with the question it answers. Agents ask there
 instead of in chat, and refer to an entry by its title.
 
-![The desk of one project](docs/demo/desk-list.png)
+![The desk of one session](docs/demo/desk-list.png)
 
 ![Answering: the answer waits as "not delivered" until that session's OpenCode is connected, then goes out](docs/demo/desk-walk.gif)
 
@@ -37,8 +37,8 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
    question for the user on the desk, not in chat.
 4. The page is `http://127.0.0.1:47400/` (or the `url` in `<store>/service.json` if that port was taken);
-   `/desk-mode` links to the session's project there. In a session with desk mode on, the TUI's footer shows `desk`, or
-   `desk [N]` when N entries of the session's project wait on you (`[N !M]`, M in red, for critical ones); clicking it
+   `/desk-mode` links to the session's desk there. In a session with desk mode on, the TUI's footer shows `desk`, or
+   `desk [N]` when N entries of the session's desk wait on you (`[N !M]`, M in red, for critical ones); clicking it
    opens the page. The badge is the plugin's `./tui`
    part, so it loads wherever the plugin does.
 
@@ -79,12 +79,15 @@ flowchart LR
   sent with `session.prompt({ id })` through a connected plugin instance whose OpenCode knows the session. OpenCode admits a message id
   once, so retries can't duplicate. With no such OpenCode connected, the entry stays "answered, not delivered" (a
   pill on the page; `outbox:` in its file) and goes out when one connects.
-- **Projects**: entries store their root session and directory, not a project. The service asks OpenCode for the
-  root session's `projectID` (through a plugin) and remembers it in memory only. A session is asked again when it
-  moves, and every session when a plugin connects (catching moves missed meanwhile); while OpenCode is away, what was
-  known stays. A session no connected OpenCode knows goes under its folder, marked as a guess. The page's header says
-  how many sessions are in desk mode. An answer for a session whose OpenCode has nothing in desk mode waits until something is. The page shows one project at a time (`/projects/<id>`, an entry at
-  `/projects/<id>/questions/<entry id>`); `/` lists the projects.
+- **Desks**: each top-level session has its own desk; its subagents ask on it too, and it stays the session's through
+  moves and worktree changes. Entries store their top-level session, so a desk is simply that session's entries. A
+  thread stays on one desk: a `parent` on another session's desk is refused. A desk is named after its session's title
+  and folder ("Phantom · phantom-p5"), asked of OpenCode through a plugin and remembered in memory only; asked again
+  when the session moves and when a plugin connects. A session no connected OpenCode knows shows as *unknown session*,
+  named after its entries' folder; another session can take its desk over with `desk_claim` (refused while that
+  session is in desk mode). The page's header says how many sessions are in desk mode. An answer for a session whose
+  OpenCode has nothing in desk mode waits until something is. The page shows one desk at a time (`/sessions/<id>`, an
+  entry at `/sessions/<id>/questions/<entry id>`); `/` lists the desks.
 
 | Module                               | What it is                                                                                                                      |
 | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -94,10 +97,10 @@ flowchart LR
 | `src/outbox.ts`                      | outbox entries → the messages to send                                                                                           |
 | `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                     |
 | `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                   |
-| `src/projects.ts`                    | entry → project, cached                                                                                                         |
+| `src/sessions.ts`                    | a desk's name: its session's title and folder, cached                                                                           |
 | `src/service/`                       | `api.ts` (what each request does), `socket.ts`, `http.ts`, `clients.ts` (idle exit), `app.ts` (assembly), `main.ts`             |
 | `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service)                                   |
-| `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's project list, through restarts                                   |
+| `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's list of desks, through restarts                                   |
 | `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts                                                                                           |
 | `page/`                              | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                          |
 
@@ -133,8 +136,8 @@ The answer.
 - **Status:** `open` (waiting on the answerer) → `answered` (waiting on the asker) → `resolved` (the asker marked it done; refused while anything below it is unresolved, or while the user's text on it is undelivered). A resolved entry with no follow-ups leaves the desk, then its parent gets the same check, up the chain; attachments only they referenced go too.
 - **Session and directory:** the top-level session the entry belongs to (a subagent's question goes to the session above it) and where it works. Relative paths in the entry's Markdown resolve against the directory (`/files/<id>/<path>` on the page).
 - **Outbox and delivery:** present only while the user's text hasn't reached the session. Entries sharing an outbox go out as one message (one per session per Submit).
-- **Parents:** set once, never changed; a top-level entry may be adopted once (`desk_adopt`), never into its own subtree.
-- **PR questions:** `desk_ask` with a `pr:<n>` label and no `parent` files the entry under the newest unresolved top-level `review` + `pr:<n>` entry of the same project.
+- **Parents:** set once, never changed, and on the same desk; a top-level entry may be adopted once (`desk_adopt`), never into its own subtree.
+- **PR questions:** `desk_ask` with a `pr:<n>` label and no `parent` files the entry under the newest unresolved top-level `review` + `pr:<n>` entry on the asker's desk.
 - **Priority:** `critical`, `high`, `normal` (absent), `low`. Follow-ups inherit their parent's unless given one.
 - **Order:** priority, then each tree post-order (follow-ups before what they hang under), trees by `created`.
 

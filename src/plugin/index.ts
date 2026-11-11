@@ -85,7 +85,7 @@ export default Plugin.define({
 			const options: Connection.Options = {
 				socket: join(home, "desk.sock"),
 				start: Connection.startService({ DESK_HOME: home, DESK_PORT: port }),
-				project: { id: ctx.location.project.id, directory: ctx.location.project.directory },
+				directory: ctx.location.directory,
 				modes,
 				serve: {
 					session: (sessionID) =>
@@ -93,7 +93,7 @@ export default Plugin.define({
 							Effect.map((session) => ({
 								id: session.id,
 								parentID: session.parentID ?? undefined,
-								projectID: session.projectID,
+								title: session.title ?? "",
 								directory: session.location.directory,
 							})),
 							// Not this OpenCode's session; anything else is an error the service retries.
@@ -144,7 +144,7 @@ export default Plugin.define({
 								}),
 							),
 				);
-			// The service's project cache drops a session that moves, so its entries follow it.
+			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				// A session moving in or out of this directory may connect or hang up this instance, too.
 				Stream.runForEach((event) =>
@@ -193,7 +193,15 @@ export default Plugin.define({
 						),
 				});
 
-			const names = ["desk_ask", "desk_adopt", "desk_answer", "desk_resolve", "desk_prioritize", "desk_list"];
+			const names = [
+				"desk_ask",
+				"desk_adopt",
+				"desk_answer",
+				"desk_resolve",
+				"desk_prioritize",
+				"desk_list",
+				"desk_claim",
+			];
 			/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 			const tool =
 				<I>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, unknown>) =>
@@ -241,7 +249,7 @@ export default Plugin.define({
 			yield* ctx.tool.transform((editor) => {
 				editor.add({
 					name: "desk_ask",
-					description: `Ask the user a question, request a review, or reply to them, on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. To file an entry under another later (desk_adopt) or change its priority (desk_prioritize), find those tools with Code Mode's search. ${media}`,
+					description: `Ask the user a question, request a review, or reply to them, on the desk. With desk mode on, every question for the user goes here, never in chat, where it gets lost among out-of-order answers. The user answers on the desk page; the answer arrives later as a message in this session's top-level session. Use parent to follow up on an entry. A PR's questions (label pr:<n>) are filed under that PR's review entry automatically when parent is omitted; an entry labelled review is itself a PR's review entry and stays top-level. The user reads the whole question on the desk: in chat, refer to it by its title instead of repeating its content. Each top-level session has its own desk; a parent must be on it. To file an entry under another later (desk_adopt), change its priority (desk_prioritize) or take over a gone session's desk (desk_claim), find those tools with Code Mode's search. ${media}`,
 					input: Schema.Struct({
 						title: described(Schema.String, "One line: the question itself."),
 						body: described(Schema.String, "Context, options and your recommendation, in Markdown."),
@@ -323,11 +331,28 @@ export default Plugin.define({
 				editor.add({
 					name: "desk_list",
 					description:
-						"Show this project's desk: every unresolved entry, one line each (id, title, [status, whose turn, priority, from the user]), or one entry in full when id is given (with the entries it hangs under and its follow-ups as one line each). Entry ids are full UUIDs; the user may paste one.",
+						"Show this session's desk (its subagents share it): every unresolved entry, one line each (id, title, [status, whose turn, priority, from the user]), or one entry in full when id is given (with the entries it hangs under and its follow-ups as one line each). Entry ids are full UUIDs; the user may paste one.",
 					input: Schema.Struct({ id: Schema.optional(EntryId) }),
 					options: { codemode: false },
 					execute: tool((input: { id?: EntryId | undefined }, sessionID) =>
 						Effect.flatMap(root(sessionID), (session) => service((client) => client.list({ session, id: input.id }))),
+					),
+				});
+				editor.add({
+					name: "desk_claim",
+					description:
+						"Take over another session's desk: every entry of that session (open questions, undelivered answers) becomes this session's, so this session can list, answer and resolve them, and their answers come here. For a desk left by a session that's gone (the page shows it as unknown). Refused while that session is in desk mode.",
+					input: Schema.Struct({ from: described(SessionID, "The session whose desk to take over (ses_…).") }),
+					// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
+					options: { codemode: true },
+					execute: tool((input: { from: SessionID }, sessionID) =>
+						Effect.flatMap(root(sessionID), (session) =>
+							service((client) => client.claim({ session, from: input.from })).pipe(
+								Effect.map(
+									(count) => `Claimed ${count} ${count === 1 ? "entry" : "entries"} from ${input.from}'s desk.`,
+								),
+							),
+						),
 					),
 				});
 			});

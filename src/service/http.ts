@@ -1,5 +1,5 @@
 /**
- * The page on 127.0.0.1, one port for every project (`/projects/<id>` picks one): the built page
+ * The page on 127.0.0.1, one port for every desk (`/sessions/<id>` picks one): the built page
  * (`page/dist/`), its RPC API, the user's attachments (`/attachments/`), and files relative to an entry's directory
  * for its Markdown media (`/files/<entry id>/<path>`).
  *
@@ -46,7 +46,7 @@ const Rpcs = RpcServer.layerHttp({ group: DeskApi, path: "/rpc", protocol: "http
 				const api = yield* Api;
 				const clients = yield* Clients;
 				return {
-					view: ({ project }) => Stream.unwrap(Effect.as(clients.hold, api.view(project))),
+					view: ({ session }) => Stream.unwrap(Effect.as(clients.hold, api.view(session))),
 					submit: ({ drafts }) => api.submit(drafts),
 					send: (draft) => api.send(draft),
 					resolve: ({ id }) => api.resolveByUser(id),
@@ -85,7 +85,7 @@ export const layer = (store: string) =>
 			Files,
 			HttpStaticServer.layer({ root: join(store, "attachments"), prefix: "/attachments" }),
 			// The page as built by Vite (`bun install`, or `bun run page` while editing it); unbuilt, it's a 404.
-			// Any other path is one of the page's own routes (`/projects/<id>/…`): it gets index.html.
+			// Any other path is one of the page's own routes (`/sessions/<id>/…`): it gets index.html.
 			HttpStaticServer.layer({ root: fileURLToPath(new URL("../../page/dist", import.meta.url)), spa: true }),
 		),
 		{ disableLogger: true, disableListenLog: true },

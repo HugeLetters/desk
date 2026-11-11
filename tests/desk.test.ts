@@ -101,24 +101,24 @@ test("follow-ups inherit their parent's priority unless given one; prioritize ca
 	await desk((d) => d.prioritize(top.id, "critical", true));
 	expect((await entries()).map((entry) => entry.priority)).toEqual(["critical", "critical", "critical"]);
 	await desk((d) => d.prioritize(own.id, "normal", false));
-	expect((await desk((d) => d.describe(undefined, () => true))).split("\n")[0]).toContain("Inherited");
+	expect((await desk((d) => d.describe(undefined, S("ses_a")))).split("\n")[0]).toContain("Inherited");
 });
 
-test("describe: unresolved entries of the scope, flat with full ids, or one thread", async () => {
+test("describe: unresolved entries of the session's desk, flat with full ids, or one thread", async () => {
 	const first = await ask("Root", { body: "Details" });
 	await Bun.sleep(2);
 	const second = await ask("Child", { body: "More", parent: first.id });
 	await desk((d) => d.ask({ session: S("ses_elsewhere"), directory: "/x" }, { title: "Elsewhere", body: "" }));
-	expect(await desk((d) => d.describe(undefined, (entry) => entry.session === "ses_a"))).toBe(
+	expect(await desk((d) => d.describe(undefined, S("ses_a")))).toBe(
 		`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, user's turn]`,
 	);
 	// One entry in full; what it hangs under, and its follow-ups, one line each (the agent has their bodies already).
-	const child = await desk((d) => d.describe(second.id, () => true));
+	const child = await desk((d) => d.describe(second.id, S("ses_a")));
 	expect(child).toContain(`Under: ${first.id} Root (open)`);
 	expect(child).toContain(`# ${second.id} Child`);
 	expect(child).toContain("More");
 	expect(child).not.toContain("Details");
-	const root = await desk((d) => d.describe(first.id, () => true));
+	const root = await desk((d) => d.describe(first.id, S("ses_a")));
 	expect(root).toContain(`Follow-ups: ${second.id} Child (open)`);
 	expect(root).not.toContain("More");
 });

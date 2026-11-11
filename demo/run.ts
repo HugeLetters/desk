@@ -13,7 +13,7 @@ import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import type { EntryId } from "../src/entry";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
-import { P, S } from "../tests/support/ids";
+import { S } from "../tests/support/ids";
 import { present } from "../tests/support/present";
 import { eventually, startService } from "../tests/support/service";
 
@@ -48,20 +48,19 @@ await writeFile(
 );
 const fake = fakeOpenCode();
 const opencode = fake.server("http://127.0.0.1:4096");
-for (const [id, projectID, directory] of [
-	["ses_main", "prj_phantom", phantom],
-	["ses_review", "prj_phantom", phantom],
-	["ses_desk", "prj_desk", deskDir],
+for (const [id, title, directory] of [
+	["ses_main", "Phantom", phantom],
+	["ses_desk", "Desk", deskDir],
 ] as const)
-	opencode.session({ id: S(id), projectID: P(projectID), directory });
+	opencode.session({ id: S(id), title, directory });
 const service = await startService({ store, fake });
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
 	await rm(out, { recursive: true, force: true });
 	await mkdir(join(out, ".frames"), { recursive: true });
 
-	// The agents ask in that OpenCode, which tells the service each question's project.
-	const agent = service.plugin(opencode, { id: P("prj_phantom"), directory: phantom });
+	// The agents ask in that OpenCode; each session's questions go on its own desk.
+	const agent = service.plugin(opencode, phantom);
 	const ask = (
 		session: string,
 		question: {
@@ -76,18 +75,18 @@ try {
 			asker: { session: S(session), directory: session === "ses_desk" ? deskDir : phantom },
 			question,
 		});
-	const review = await ask("ses_review", {
+	const review = await ask("ses_main", {
 		title: "Review PR #84: virtualise the torrent list",
 		body: "The list now renders only visible rows. Questions below; screenshots in the PR.",
 		labels: ["pr:84", "review"],
 		priority: "high",
 	});
-	const rows = await ask("ses_review", {
+	const rows = await ask("ses_main", {
 		title: "Keep the row height fixed at 28 px?",
 		body: "Variable heights would need measuring every row. **Recommendation:** fixed, 28 px.",
 		labels: ["pr:84"],
 	});
-	await ask("ses_review", {
+	await ask("ses_main", {
 		title: "Which empty-state icon?",
 		body: 'For an empty list:\n\n![options](design/empty.svg)\n\nI\'d take **B** (the circle): it reads as "nothing here" without looking like an error.',
 		labels: ["pr:84", "design"],
@@ -113,10 +112,10 @@ try {
 		body: "47400 is free here; Phantom's old desk uses 47309.",
 	});
 	console.log(`sample desk at ${service.url}`);
-	const page = (project?: string, entry?: string) =>
-		`${service.url}${project ? `projects/${project}` : ""}${entry ? `/questions/${entry}` : ""}`;
+	const page = (session?: string, entry?: string) =>
+		`${service.url}${session ? `sessions/${session}` : ""}${entry ? `/questions/${entry}` : ""}`;
 
-	// Every link stays on the page: across projects, into an entry and back, and through the project picker.
+	// Every link stays on the page: across desks, into an entry and back, and through the desk picker.
 	{
 		const context = await browser.newContext();
 		const tab = await context.newPage();
@@ -128,15 +127,15 @@ try {
 			await tab.waitForURL(`${service.url}${path}`);
 			await tab.waitForSelector(`text=${shows}`);
 		};
-		await step(() => tab.click('.list a:has-text("phantom")'), "projects/prj_phantom", "daemon restart");
+		await step(() => tab.click('.list a:has-text("Phantom")'), "sessions/ses_main", "daemon restart");
 		await step(
 			() => tab.click('.list a:has-text("daemon restart")'),
-			`projects/prj_phantom/questions/**`,
+			`sessions/ses_main/questions/**`,
 			"Proposed handshake",
 		);
-		await step(() => tab.click("text=← All entries"), "projects/prj_phantom", "empty-state icon");
-		await step(() => tab.selectOption("select.project", "prj_desk"), "projects/prj_desk", "Default port");
-		await step(() => tab.click('h1 a:has-text("Desk")'), "", "Projects");
+		await step(() => tab.click("text=← All entries"), "sessions/ses_main", "empty-state icon");
+		await step(() => tab.selectOption("select.project", "ses_desk"), "sessions/ses_desk", "Default port");
+		await step(() => tab.click('h1 a:has-text("Desk")'), "", "Desks");
 		if (!(await tab.evaluate(() => (window as { stayed?: boolean }).stayed)))
 			throw new Error("a link reloaded the page");
 		await context.close();
@@ -145,11 +144,11 @@ try {
 
 	const stills: Array<[name: string, url: string, scheme: "light" | "dark", width?: number]> = [
 		["desk-projects", page(), "light"],
-		["desk-list", page("prj_phantom"), "light"],
+		["desk-list", page("ses_main"), "light"],
 		["desk-entry-mermaid", "mermaid", "light"],
 		["desk-entry-image", "image", "light"],
 		// Wide: the entry's back link and actions sit beside it.
-		["desk-review-dark", page("prj_phantom", review.id), "dark", 1500],
+		["desk-review-dark", page("ses_main", review.id), "dark", 1500],
 	];
 	for (const [name, target, scheme, width = 1000] of stills) {
 		const context = await browser.newContext({
@@ -159,7 +158,7 @@ try {
 		});
 		const tab = await context.newPage();
 		if (target === "mermaid" || target === "image") {
-			await tab.goto(page("prj_phantom"));
+			await tab.goto(page("ses_main"));
 			await settle(tab);
 			await tab.click(`.list a:has-text("${target === "mermaid" ? "daemon restart" : "empty-state icon"}")`);
 		} else await tab.goto(target);
@@ -178,11 +177,11 @@ try {
 		for (let i = 0; i < count; i++)
 			await tab.screenshot({ path: join(out, ".frames", `frame_${String(frame++).padStart(4, "0")}.png`) });
 	};
-	await tab.goto(page("prj_phantom"));
+	await tab.goto(page("ses_main"));
 	await settle(tab);
 	await tab.waitForSelector("text=No session in desk mode");
 	await snap(16);
-	await tab.click(`.list a[href="/projects/prj_phantom/questions/${rows.id}"]`);
+	await tab.click(`.list a[href="/sessions/ses_main/questions/${rows.id}"]`);
 	await settle(tab);
 	await snap(10);
 	await tab.click("textarea");
@@ -197,7 +196,7 @@ try {
 	await tab.click("text=← All entries");
 	await settle(tab);
 	await snap(16);
-	service.plugin(opencode, { id: P("prj_phantom"), directory: phantom }); // that OpenCode comes back
+	service.plugin(opencode, phantom); // that OpenCode comes back
 	await eventually(() => opencode.admitted.length === 1);
 	await tab.waitForSelector(".pill.undelivered", { state: "detached" });
 	await snap(20);

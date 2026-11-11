@@ -8,7 +8,7 @@ import * as Fiber from "effect/Fiber";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { count, type Status, watch } from "../src/badge";
-import { P, S } from "./support/ids";
+import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";
 
@@ -50,7 +50,9 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	const asked = { session: S("ses_a"), directory: "/work/a" };
 	await plugin.request("ask", { asker: asked, question: { title: "One?", body: "" } });
 	await plugin.request("ask", { asker: asked, question: { title: "Two?", body: "", priority: "critical" } });
-	const counted = await eventually(() => latest()?.projects.find((project) => project.waiting === 2));
+	const counted = await eventually(() =>
+		latest()?.desks.find((desk) => desk.session === "ses_a" && desk.waiting === 2),
+	);
 	expect(present(latest())).toMatchObject({ url: first.url, deskMode: ["ses_a"] });
 	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
 
@@ -62,11 +64,11 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	cleanup.push(() => rm(join(home, "service.json"), { force: true }).then(() => second.close(false)));
 	await register(second);
 	await eventually(() => latest()?.url === second.url);
-	expect(present(latest()).projects).toHaveLength(1);
+	expect(present(latest()).desks).toHaveLength(1);
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
-	const summary = { id: "p", name: "p", placement: { _tag: "Project", id: P("p") } } as const;
+	const summary = { session: "ses_a", title: "A", folder: "a", known: true };
 	expect(count(undefined)).toBeUndefined();
 	expect(count({ ...summary, waiting: 0, critical: 0 })).toBeUndefined();
 	expect(count({ ...summary, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });

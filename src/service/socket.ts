@@ -8,7 +8,6 @@
  * settles each, within `callTimeout`.
  */
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import type { ProjectID } from "@opencode/schema/project-id";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -23,8 +22,8 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
 import type { SessionID } from "../entry";
 import { type Client, OpenCode, Unanswered } from "../opencode";
-import { Projects } from "../projects";
 import { build, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../protocol";
+import { Sessions } from "../sessions";
 import { Api } from "./api";
 import { Clients } from "./clients";
 
@@ -59,22 +58,18 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 		Effect.gen(function* () {
 			const api = yield* Api;
 			const opencode = yield* OpenCode;
-			const projects = yield* Projects;
+			const sessions = yield* Sessions;
 			const clients = yield* Clients;
 			/** By RPC client id, while attached. */
 			const attachments = yield* Ref.make<ReadonlyMap<number, Attached>>(new Map());
 			const lastCall = yield* Ref.make(0);
 			/** Work started by a request that outlives it; it ends with the service. */
 			const background = yield* FiberSet.make();
-			/** Looks the sessions up, so their projects are known and named (`Projects`). */
-			const learn = (sessions: ReadonlyArray<SessionID>, directory: string) =>
-				Effect.forEach(sessions, (session) => projects.of({ session, directory }), { discard: true });
+			/** Looks the sessions up, so their desks are named (`Sessions`). */
+			const learn = (inDeskMode: ReadonlyArray<SessionID>, directory: string) =>
+				Effect.forEach(inDeskMode, (session) => sessions.name(session, directory), { discard: true });
 
-			const attach = (
-				id: number,
-				project: { readonly id: ProjectID; readonly directory: string },
-				sessions: ReadonlyArray<SessionID>,
-			) =>
+			const attach = (id: number, directory: string, sessions: ReadonlyArray<SessionID>) =>
 				Effect.gen(function* () {
 					const calls = yield* Queue.unbounded<ServiceCall>();
 					const waiting = yield* Ref.make<ReadonlyMap<number, Deferred.Deferred<Outcome>>>(new Map());
@@ -127,14 +122,10 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 					);
 					yield* opencode.attach(client);
 					yield* opencode.modes(client, sessions);
-					yield* projects.remember(project.id, project.directory);
-					// Where its sessions in desk mode are, and so their projects' names, even with nothing on the desk yet: a
-					// session can belong to another project than the location (an older id of the same repository, say). In
-					// the background: the lookups go out on the stream this returns.
-					yield* Effect.forkScoped(learn(sessions, project.directory));
-					yield* Effect.logInfo(
-						`desk: a plugin attached in ${project.directory} (project ${project.id}), ${sessions.length} in desk mode`,
-					);
+					// Its sessions in desk mode, so their desks are named even with nothing on them yet. In the background: the
+					// lookups go out on the stream this returns.
+					yield* Effect.forkScoped(learn(sessions, directory));
+					yield* Effect.logInfo(`desk: a plugin attached in ${directory}, ${sessions.length} in desk mode`);
 					return Stream.fromQueue(calls);
 				});
 
@@ -154,7 +145,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 						}
 						return yield* new Outdated({ side: "plugin" });
 					}),
-				attach: ({ project, sessions }, { client }) => Stream.unwrap(attach(client.id, project, sessions)),
+				attach: ({ directory, sessions }, { client }) => Stream.unwrap(attach(client.id, directory, sessions)),
 				reply: ({ call, outcome }, { client }) =>
 					Effect.gen(function* () {
 						const attached = (yield* Ref.get(attachments)).get(client.id);
@@ -177,6 +168,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 				prioritize: api.prioritize,
 				list: api.list,
 				page: api.page,
+				claim: api.claim,
 			});
 		}),
 	);
