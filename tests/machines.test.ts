@@ -7,14 +7,17 @@ import * as Arbitrary from "effect/Arbitrary";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Delivery from "../src/delivery";
+import type { Entry } from "../src/entry";
 import { DeliveryFailed } from "../src/errors";
+import * as Lifecycle from "../src/lifecycle";
 import * as Machine from "../src/machine";
 import * as Connection from "../src/plugin/connection";
 import * as Clients from "../src/service/clients";
 import * as Registration from "../src/service/registration";
-import { S } from "./support/ids";
+import { E, M, S } from "./support/ids";
 import { check } from "./support/property";
 
 /** Every state `reconcile` goes through from `initial` on `events`, `initial` first. */
@@ -279,4 +282,123 @@ test("registration: whatever happens, a service that keeps being turned away is 
 	const states = walk(Registration.reconcile, Registration.State.Creating({ attempt: 0 }), turnedAway);
 	expect(states.at(-1)).toEqual(Registration.State.Taken({ pid: 7 }));
 	expect(states.filter((state) => state._tag === "Checking")).toHaveLength(Registration.attempts);
+});
+
+// An entry's lifecycle (`lifecycle.ts`): what can happen to one entry, applied when not refused.
+
+const entryEvents = events(
+	[
+		"AnswerUser",
+		"AnswerAgent",
+		"ResolveUser",
+		"ResolveAgent",
+		"ResolveBlocked",
+		"Delivered",
+		"Discard",
+		"Adopt",
+		"Prioritize",
+		"Claim",
+	],
+	(tag, n): Lifecycle.Event => {
+		switch (tag) {
+			case "AnswerUser":
+				return Lifecycle.Event.Answer({
+					by: "user",
+					text: `a${n}`,
+					pending: { message: M(`msg_${n}`), delivery: "queue" },
+				});
+			case "AnswerAgent":
+				return Lifecycle.Event.Answer({ by: "agent", text: `a${n}` });
+			case "ResolveUser":
+			case "ResolveAgent":
+				return Lifecycle.Event.Resolve({ by: tag === "ResolveUser" ? "user" : "agent", openBelow: [] });
+			case "ResolveBlocked":
+				return Lifecycle.Event.Resolve({ by: n % 2 ? "user" : "agent", openBelow: [uuid(1)] });
+			case "Delivered":
+				return Lifecycle.Event.Delivered();
+			case "Discard":
+				return Lifecycle.Event.Discard();
+			case "Adopt":
+				return Lifecycle.Event.Adopt({ parent: uuid(n) });
+			case "Prioritize":
+				return Lifecycle.Event.Prioritize({ priority: n % 2 ? "high" : "low" });
+			default:
+				return Lifecycle.Event.Claim({ session: S(`ses_${n}`) });
+		}
+	},
+);
+/** A valid entry id, the `n`th. */
+const uuid = (n: number) => E(`00000000-0000-4000-8000-${String(n).padStart(12, "0")}`);
+const entryOf = (asker: "user" | "agent"): Entry => ({
+	id: uuid(0),
+	parent: null,
+	asker,
+	status: "open",
+	session: S("ses_a"),
+	directory: "/w",
+	labels: [],
+	priority: "normal",
+	created: "0001",
+	title: "e",
+	question: "q",
+	answer: null,
+	pending: null,
+});
+/** Each event in turn, from an entry `asker` asked: what came of it, and the entry before and after. */
+const lifecycle = (asker: "user" | "agent", sequence: ReadonlyArray<Lifecycle.Event>) =>
+	sequence.reduce<{
+		readonly entry: Entry;
+		readonly steps: Array<{ before: Entry; event: Lifecycle.Event; after: Entry; refused: boolean }>;
+	}>(
+		({ entry, steps }, event) => {
+			const result = Lifecycle.reconcile(entry, event);
+			const after = Result.isSuccess(result) ? result.success : entry;
+			steps.push({ before: entry, event, after, refused: Result.isFailure(result) });
+			return { entry: after, steps };
+		},
+		{ entry: entryOf(asker), steps: [] },
+	).steps;
+const lifecycles = Arbitrary.all({
+	asker: Arbitrary.schema(Schema.Literals(["user", "agent"])),
+	sequence: entryEvents,
+});
+const rank = { open: 0, answered: 1, resolved: 2 } as const;
+
+test("lifecycle: status only goes forward; a resolved entry takes no answer (resolving it again changes nothing); nobody answers their own question", async () => {
+	await check(lifecycles, ({ asker, sequence }) =>
+		lifecycle(asker, sequence).every(({ before, event, after, refused }) => {
+			if (rank[after.status] < rank[before.status]) return false;
+			if (before.status === "resolved" && event._tag === "Answer") return refused;
+			if (before.status === "resolved" && event._tag === "Resolve" && !refused) return after.status === "resolved";
+			if (event._tag === "Answer" && event.by === before.asker) return refused;
+			if (event._tag === "Resolve" && (event.by !== before.asker || event.openBelow.length > 0)) return refused;
+			return true;
+		}),
+	);
+});
+
+test("lifecycle: pending is set only by the user's answer and cleared only by delivery or discarding; no resolving while it's pending", async () => {
+	await check(lifecycles, ({ asker, sequence }) =>
+		lifecycle(asker, sequence).every(({ before, event, after, refused }) => {
+			if (event._tag === "Resolve" && before.pending !== null) return refused;
+			if (after.pending === before.pending) return true;
+			if (after.pending === null) return event._tag === "Delivered" || event._tag === "Discard";
+			return event._tag === "Answer" && event.by === "user" && after.pending === event.pending;
+		}),
+	);
+});
+
+test("lifecycle: the parent is set once; the id, asker, question and creation never change; the session only by a claim", async () => {
+	await check(lifecycles, ({ asker, sequence }) =>
+		lifecycle(asker, sequence).every(({ before, event, after }) => {
+			const fixed =
+				after.id === before.id &&
+				after.asker === before.asker &&
+				after.question === before.question &&
+				after.created === before.created;
+			const parent = after.parent === before.parent || (before.parent === null && event._tag === "Adopt");
+			const session = after.session === before.session || event._tag === "Claim";
+			return fixed && parent && session;
+		}),
+	);
 });

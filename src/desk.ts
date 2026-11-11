@@ -42,19 +42,15 @@ import {
 import {
 	AlreadyResolved,
 	EmptyText,
-	HasParent,
 	MissingAttachment,
 	NoSuchDesk,
 	NoSuchEntry,
 	NothingUndelivered,
-	NotTheAnswerer,
-	NotTheAsker,
-	OpenBelow,
 	OtherDesk,
 	type Refusal,
-	Undelivered,
 	WouldCycle,
 } from "./errors";
+import { Event, reconcile } from "./lifecycle";
 import type { Attachment, Draft } from "./page-api";
 import { Store } from "./store";
 
@@ -158,6 +154,12 @@ export class Desk extends Context.Service<
 					const entry = all.find((candidate) => candidate.id === id);
 					return entry ? Effect.succeed(entry) : Effect.fail(new NoSuchEntry({ id }));
 				};
+				/** `event` happens to every one of `entries` (all of them, or, refused, none), and they're written. */
+				const each = (entries: Entries, event: Event) =>
+					Effect.flatMap(
+						Effect.forEach(entries, (entry) => Effect.fromResult(reconcile(entry, event))),
+						(after) => Effect.forEach(after, store.write, { discard: true }),
+					);
 				const replace = (all: Entries, entry: Entry) =>
 					all.some((other) => other.id === entry.id)
 						? all.map((other) => (other.id === entry.id ? entry : other))
@@ -180,7 +182,7 @@ export class Desk extends Context.Service<
 						if (!text) return yield* new EmptyText({ id: entry.id });
 						if (entry.status === "resolved") return yield* new AlreadyResolved({ id: entry.id });
 						if (entry.asker === "agent" && entry.status === "open")
-							return { ...entry, answer: text, status: "answered", pending };
+							return yield* Effect.fromResult(reconcile(entry, Event.Answer({ by: "user", text, pending })));
 						return {
 							id: newId(),
 							parent: entry.id,
@@ -242,11 +244,10 @@ export class Desk extends Context.Service<
 							Effect.gen(function* () {
 								const entry = yield* find(all, id);
 								const parent = yield* find(all, parentID);
-								if (entry.parent !== null) return yield* new HasParent({ id, parent: entry.parent });
+								const adopted = yield* Effect.fromResult(reconcile(entry, Event.Adopt({ parent: parentID })));
 								if (parent.session !== entry.session) return yield* new OtherDesk({ id: parentID });
 								if (parentID === id || descendants(all, entry).some((other) => other.id === parentID))
 									return yield* new WouldCycle({ id, parent: parentID });
-								const adopted: Entry = { ...entry, parent: parentID };
 								yield* store.write(adopted);
 								return adopted;
 							}),
@@ -255,9 +256,9 @@ export class Desk extends Context.Service<
 						modify((all) =>
 							Effect.gen(function* () {
 								const entry = yield* find(all, id);
-								if (entry.asker !== "user") return yield* new NotTheAnswerer({ id, by: "agent" });
-								if (entry.status === "resolved") return yield* new AlreadyResolved({ id });
-								const answered: Entry = { ...entry, answer: body.trim(), status: "answered" };
+								const answered = yield* Effect.fromResult(
+									reconcile(entry, Event.Answer({ by: "agent", text: body.trim() })),
+								);
 								yield* store.write(answered);
 								return answered;
 							}),
@@ -267,21 +268,19 @@ export class Desk extends Context.Service<
 							Effect.gen(function* () {
 								yield* find(all, id);
 								const ids = new Set([id, ...(subtree ? descendants(all, { id }).map((entry) => entry.id) : [])]);
-								const changed = all
-									.filter((entry) => ids.has(entry.id))
-									.map((entry): Entry => ({ ...entry, priority }));
-								yield* Effect.forEach(changed, store.write, { discard: true });
+								yield* each(
+									all.filter((entry) => ids.has(entry.id)),
+									Event.Prioritize({ priority }),
+								);
 							}),
 						),
 					resolve: (id, by) =>
 						modify((all) =>
 							Effect.gen(function* () {
 								const entry = yield* find(all, id);
-								if (entry.asker !== by) return yield* new NotTheAsker({ id, asker: entry.asker });
-								if (entry.pending !== null) return yield* new Undelivered({ id });
-								const open = openUnder(all, entry);
-								if (open.length > 0) return yield* new OpenBelow({ id, below: open.map((other) => other.id) });
-								const resolved: Entry = { ...entry, status: "resolved" };
+								const resolved = yield* Effect.fromResult(
+									reconcile(entry, Event.Resolve({ by, openBelow: openUnder(all, entry).map((other) => other.id) })),
+								);
 								yield* store.write(resolved);
 								// A resolved entry without follow-ups leaves the desk; then its parent may, and so on up.
 								const { kept, pruned } = prune(replace(all, resolved), resolved);
@@ -300,7 +299,7 @@ export class Desk extends Context.Service<
 							Effect.gen(function* () {
 								const theirs = all.filter((entry) => entry.session === from);
 								if (theirs.length === 0) return yield* new NoSuchDesk({ session: from });
-								yield* Effect.forEach(theirs, (entry) => store.write({ ...entry, session }), { discard: true });
+								yield* each(theirs, Event.Claim({ session }));
 								return theirs.length;
 							}),
 						),
@@ -398,10 +397,13 @@ export class Desk extends Context.Service<
 					delivered: (message) =>
 						modify((all) =>
 							Effect.gen(function* () {
-								const sent = all
-									.filter((entry) => entry.pending?.message === message)
-									.map((entry): Entry => ({ ...entry, pending: null }));
-								yield* Effect.forEach(sent, store.write, { discard: true });
+								// Delivery is never refused.
+								yield* Effect.orDie(
+									each(
+										all.filter((entry) => entry.pending?.message === message),
+										Event.Delivered(),
+									),
+								);
 							}),
 						),
 					discard: (id) =>
@@ -409,10 +411,10 @@ export class Desk extends Context.Service<
 							Effect.gen(function* () {
 								const { pending } = yield* find(all, id);
 								if (pending === null) return yield* new NothingUndelivered({ id });
-								const held = all
-									.filter((entry) => entry.pending?.message === pending.message)
-									.map((entry): Entry => ({ ...entry, pending: null }));
-								yield* Effect.forEach(held, store.write, { discard: true });
+								yield* each(
+									all.filter((entry) => entry.pending?.message === pending.message),
+									Event.Discard(),
+								);
 							}),
 						),
 				});

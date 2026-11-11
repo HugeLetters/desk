@@ -93,6 +93,7 @@ flowchart LR
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/entry.ts`                       | the entry, its file format, whose turn it is, the desk's order                                                                                                   |
 | `src/store.ts`                       | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename)                                                         |
+| `src/lifecycle.ts`                   | what can happen to one entry: a pure `reconcile(entry, event)`, the entry after or why it's refused                                                              |
 | `src/desk.ts`                        | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first                                  |
 | `src/outbox.ts`                      | outbox entries → the messages to send                                                                                                                            |
 | `src/delivery.ts`                    | sends outbox messages, one machine per due message, retrying on reconnect and every 30 s                                                                         |
