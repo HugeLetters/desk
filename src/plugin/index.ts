@@ -24,7 +24,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import * as ScopedRef from "effect/ScopedRef";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { EntryId, Priority, SessionID } from "../entry";
@@ -115,35 +114,27 @@ export default Plugin.define({
 			// Connected (and so starting the service) only while a session in this directory is in desk mode: the page
 			// counts those sessions, and a plugin instance with none has nothing to ask or deliver.
 			const lock = yield* Semaphore.make(1);
-			/** The connection while there is one: setting it hangs up the one before. */
-			const held = yield* ScopedRef.make<Option.Option<Connection.Connection>>(() => Option.none());
-			/** Connects, reports the sessions in desk mode, or hangs up, to match the storage. */
+			const connection = yield* Connection.make(options);
+			/**
+			 * Connects, reports the sessions in desk mode, or hangs up, to match the storage. Connecting reports them itself
+			 * (`attach` reads them), so only a live connection is told.
+			 */
 			const sync = Semaphore.withPermits(
 				lock,
 				1,
 			)(
 				Effect.gen(function* () {
 					const mine = yield* modes;
-					const now = yield* ScopedRef.get(held);
-					if (mine.length === 0) {
-						if (Option.isSome(now)) yield* ScopedRef.set(held, Effect.succeed(Option.none()));
-					} else if (Option.isSome(now))
-						yield* Effect.ignore(Effect.flatMap(now.value.client, (client) => client.modes({ sessions: mine })));
-					else yield* ScopedRef.set(held, Effect.map(Connection.make(options), Option.some));
+					if (mine.length === 0) return yield* connection.want(false);
+					const live = yield* connection.live;
+					if (Option.isSome(live)) yield* Effect.ignore(live.value.modes({ sessions: mine }));
+					else yield* connection.want(true);
 				}),
 			);
 			yield* sync;
 			/** Runs `f` against the service, while this instance is connected. */
 			const service = <A, E>(f: (client: Connection.Client) => Effect.Effect<A, E>) =>
-				Effect.flatMap(ScopedRef.get(held), (now) =>
-					Option.isSome(now)
-						? Effect.flatMap(now.value.client, f)
-						: Effect.fail(
-								new Connection.DeskError({
-									message: "Desk mode is off in this directory; the user turns it on with /desk-mode.",
-								}),
-							),
-				);
+				Effect.flatMap(connection.client, f);
 			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				// A session moving in or out of this directory may connect or hang up this instance, too.

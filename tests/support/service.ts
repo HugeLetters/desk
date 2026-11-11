@@ -79,6 +79,7 @@ export async function startService(
 						modes: Effect.sync(() => [...opencode.sessions.keys()]),
 						serve: fake.serve(opencode),
 						timeout: 1000,
+						wanted: true,
 					}),
 					held,
 				),

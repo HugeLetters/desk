@@ -98,9 +98,9 @@ flowchart LR
 | `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                                                      |
 | `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                                                    |
 | `src/sessions.ts`                    | a desk's name: its session's title and folder, cached                                                                                                            |
-| `src/machine.ts`                     | state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts                                                      |
+| `src/machine.ts`                     | state machines as actors: a pure `reconcile(state, event) → state`, and what each state (or run of states with one key) runs while it lasts                      |
 | `src/service/`                       | `api.ts` (what each request does), `socket.ts`, `http.ts`, `registration.ts` (the store's lock) and `clients.ts` (idle exit), both machines, `app.ts`, `main.ts` |
-| `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service)                                                                    |
+| `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service; a machine)                                                         |
 | `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's list of desks, through restarts                                                                   |
 | `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts                                                                                                                            |
 | `page/`                              | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                                                           |

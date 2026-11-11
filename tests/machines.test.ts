@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Machine from "../src/machine";
+import * as Connection from "../src/plugin/connection";
 import * as Clients from "../src/service/clients";
 import * as Registration from "../src/service/registration";
 import { check } from "./support/property";
@@ -93,6 +94,83 @@ test("an event that changes nothing leaves the state's run going", async () => {
 		),
 	);
 	expect(starts).toEqual([0, 1]);
+});
+
+test("states with the same key share one run, started in the first of them; another key starts another", async () => {
+	const starts = await Effect.runPromise(
+		Effect.scoped(
+			Effect.gen(function* () {
+				const started: Array<number> = [];
+				const actor = yield* Machine.start<number, "next", never>({
+					initial: 0,
+					reconcile: (state) => state + 1,
+					// 0 and 1 are one key, 2 and 3 another.
+					key: (state) => Math.floor(state / 2),
+					run: (state) => Effect.sync(() => started.push(state)),
+				});
+				yield* Effect.forEach([1, 2, 3], () => actor.send("next"), { discard: true });
+				yield* actor.when((state) => (state === 3 ? Option.some(state) : Option.none()));
+				yield* Effect.sleep("10 millis");
+				return started;
+			}),
+		),
+	);
+	expect(starts).toEqual([0, 2]);
+});
+
+// The plugin's connection.
+
+const client = {} as Connection.Client;
+const connectionEvents = events(["On", "Off", "Hello", "Dropped", "Outdated", "Retry"], (tag, n): Connection.Event => {
+	switch (tag) {
+		case "On":
+		case "Off":
+			return Connection.Event.Want({ on: tag === "On" });
+		case "Hello":
+			return Connection.Event.Hello({ client, url: `http://127.0.0.1:${n}/` });
+		case "Dropped":
+		case "Outdated":
+			return { _tag: tag, message: `why ${n}` };
+		default:
+			return Connection.Event.Retry();
+	}
+});
+const connectionSteps = (sequence: ReadonlyArray<Connection.Event>) =>
+	steps(Connection.reconcile, Connection.State.Off(), sequence);
+
+test("connection: off only when not wanted, and always then; live only by hello while connecting", async () => {
+	await check(connectionEvents, (sequence) =>
+		connectionSteps(sequence).every(({ before, event, after }) => {
+			if (event._tag === "Want" && !event.on) return after._tag === "Off";
+			if (after._tag === "Off") return before._tag === "Off";
+			if (after._tag === "Live" && before._tag !== "Live")
+				return before._tag === "Connecting" && event._tag === "Hello" && after.url === event.url;
+			return true;
+		}),
+	);
+});
+
+test("connection: refused only by an outdated plugin, and for good until turned off; a dropped link backs off, then retries", async () => {
+	await check(connectionEvents, (sequence) =>
+		connectionSteps(sequence).every(({ before, event, after }) => {
+			if (before._tag === "Refused") return after === before || after._tag === "Off";
+			if (after._tag === "Refused") return before._tag === "Connecting" && event._tag === "Outdated";
+			if (after._tag === "Backoff" && before._tag !== "Backoff")
+				return (before._tag === "Connecting" || before._tag === "Live") && event._tag === "Dropped";
+			if (before._tag === "Backoff" && after._tag !== "Backoff")
+				return (after._tag === "Connecting" && event._tag === "Retry") || after._tag === "Off";
+			return true;
+		}),
+	);
+});
+
+test("connection: one link from connecting through live; every other change of state is a new run", async () => {
+	await check(connectionEvents, (sequence) =>
+		connectionSteps(sequence).every(({ before, after }) => {
+			const same = Connection.key(before) === Connection.key(after);
+			return before._tag === after._tag || (before._tag === "Connecting" && after._tag === "Live") ? same : !same;
+		}),
+	);
 });
 
 // Clients.

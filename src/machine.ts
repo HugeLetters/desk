@@ -6,6 +6,8 @@
  * - `run(state)`: what being in `state` requires (a timer, a send, a held file). It's started on entering the state and
  *   interrupted on leaving it, so nothing a state started outlives it. It reports back only through `emit`, and what it
  *   emits once its state is left (a timer that fired as the state changed) is dropped.
+ * - `key(state)`, optional: states with the same key (`Equal.equals`) share one `run`, started in the first of them,
+ *   for a resource that lasts through several (one connection, connecting and then live). By default, the state.
  *
  * The actor is one fiber with a mailbox: it alone holds the state, and takes events one at a time. Others `send` it
  * events and watch its state (`changes`, `when`); nobody sets it.
@@ -22,6 +24,7 @@ export interface Machine<S, E, R = never> {
 	readonly initial: S;
 	readonly reconcile: (state: S, event: E) => S;
 	readonly run: (state: S, emit: (event: E) => Effect.Effect<void>) => Effect.Effect<void, never, R>;
+	readonly key?: (state: S) => unknown;
 }
 
 export interface Actor<S, E> {
@@ -33,7 +36,7 @@ export interface Actor<S, E> {
 	readonly when: <A>(pick: (state: S) => Option.Option<A>) => Effect.Effect<A>;
 }
 
-/** An event, and the state it came from: `undefined` from `send`, else the number of the state whose `run` emitted it. */
+/** An event, and where it came from: `undefined` from `send`, else the number of the `run` that emitted it. */
 interface Message<E> {
 	readonly event: E;
 	readonly from: number | undefined;
@@ -45,14 +48,18 @@ export const start = <S, E, R>(machine: Machine<S, E, R>): Effect.Effect<Actor<S
 		const mailbox = yield* Queue.unbounded<Message<E>>();
 		const states = yield* SubscriptionRef.make(machine.initial);
 
-		/** Events until one changes `state` (the `n`th the actor has been in): the next state. */
+		const key = machine.key ?? ((state: S) => state);
+
+		/** Events, for the `n`th run, until one changes `state`'s key: the state then. */
 		const next = (state: S, n: number): Effect.Effect<S> =>
 			Effect.flatMap(Queue.take(mailbox), ({ event, from }) => {
 				if (from !== undefined && from !== n) return next(state, n);
 				const after = machine.reconcile(state, event);
-				return Equal.equals(after, state) ? next(state, n) : Effect.succeed(after);
+				if (Equal.equals(after, state)) return next(state, n);
+				if (!Equal.equals(key(after), key(state))) return Effect.succeed(after);
+				return Effect.andThen(SubscriptionRef.set(states, after), next(after, n));
 			});
-		/** In `state` until an event moves it on, with `state`'s `run` going meanwhile; then the next state, for good. */
+		/** The `n`th run, from `state` until an event changes the key; then the next, for good. */
 		const enter = (state: S, n: number): Effect.Effect<never, never, R> =>
 			Effect.andThen(SubscriptionRef.set(states, state), () =>
 				Effect.raceFirst(
