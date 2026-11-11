@@ -95,7 +95,7 @@ flowchart LR
 | `src/store.ts`                       | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename)                                                         |
 | `src/desk.ts`                        | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first                                  |
 | `src/outbox.ts`                      | outbox entries → the messages to send                                                                                                                            |
-| `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                                                      |
+| `src/delivery.ts`                    | sends outbox messages, one machine per due message, retrying on reconnect and every 30 s                                                                         |
 | `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                                                    |
 | `src/sessions.ts`                    | a desk's name: its session's title and folder, cached                                                                                                            |
 | `src/machine.ts`                     | state machines as actors: a pure `reconcile(state, event) → state`, and what each state (or run of states with one key) runs while it lasts                      |

@@ -8,10 +8,13 @@ import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Delivery from "../src/delivery";
+import { DeliveryFailed } from "../src/errors";
 import * as Machine from "../src/machine";
 import * as Connection from "../src/plugin/connection";
 import * as Clients from "../src/service/clients";
 import * as Registration from "../src/service/registration";
+import { S } from "./support/ids";
 import { check } from "./support/property";
 
 /** Every state `reconcile` goes through from `initial` on `events`, `initial` first. */
@@ -169,6 +172,31 @@ test("connection: one link from connecting through live; every other change of s
 		connectionSteps(sequence).every(({ before, after }) => {
 			const same = Connection.key(before) === Connection.key(after);
 			return before._tag === after._tag || (before._tag === "Connecting" && after._tag === "Live") ? same : !same;
+		}),
+	);
+});
+
+// Delivery: one machine per due message.
+
+const deliveryEvents = events(
+	["Delivered", "Unknown", "Failed", "Retry"],
+	(tag, n): Delivery.Event =>
+		tag === "Failed"
+			? Delivery.Event.Failed({ failure: new DeliveryFailed({ session: S("ses_a"), cause: `cause ${n}` }) })
+			: ({ _tag: tag } as Delivery.Event),
+);
+
+test("delivery: delivered only by a send that went in, and for good; a waiting message shows why its last try failed, and only a retry sends it again", async () => {
+	await check(deliveryEvents, (sequence) =>
+		steps(Delivery.reconcile, Delivery.State.Sending(), sequence).every(({ before, event, after }) => {
+			if (before._tag === "Delivered") return after === before;
+			if (after._tag === "Delivered") return before._tag === "Sending" && event._tag === "Delivered";
+			if (after._tag === "Waiting" && before._tag === "Sending")
+				return event._tag === "Failed"
+					? after.failure === event.failure
+					: event._tag === "Unknown" && after.failure === undefined;
+			if (after._tag === "Sending" && before._tag === "Waiting") return event._tag === "Retry";
+			return after === before;
 		}),
 	);
 });

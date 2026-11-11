@@ -10,19 +10,28 @@
  *
  * Why the last try of a message failed, when it did (not merely "no OpenCode knows the session"), is kept in memory
  * (`Failures`) for the page to show.
+ *
+ * Each due message is a machine (`machine.ts`) of its own: `Sending`, then `Delivered`, or `Waiting` (no OpenCode knows
+ * the session, or the try failed) until the retry timer or a plugin instance connecting sends it again. Which messages
+ * have one follows the files and the sessions in desk mode: a message that's due gets its machine, one that leaves the
+ * outbox or stops being due loses it.
  */
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Desk } from "./desk";
 import type { MessageID } from "./entry";
 import type { DeliveryFailed } from "./errors";
+import * as Machine from "./machine";
 import { OpenCode } from "./opencode";
-import { due, messages } from "./outbox";
+import { due as dueMessages, messages } from "./outbox";
 import { Store } from "./store";
 import { deliveryFailed } from "./wording";
 
@@ -63,6 +72,49 @@ export class Failures extends Context.Service<
 	);
 }
 
+export type State = Data.TaggedEnum<{
+	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
+	Sending: {};
+	/** Not sent: `failure` says why, or is undefined when no connected OpenCode knows the session. */
+	Waiting: { readonly failure: DeliveryFailed | undefined };
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Delivered: {};
+}>;
+export const State = Data.taggedEnum<State>();
+
+export type Event = Data.TaggedEnum<{
+	/** In, and marked delivered; or it left the outbox meanwhile, so there's nothing to send. */
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Delivered: {};
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Unknown: {};
+	Failed: { readonly failure: DeliveryFailed };
+	/** The retry timer, or a plugin instance connecting: try again. */
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Retry: {};
+}>;
+export const Event = Data.taggedEnum<Event>();
+
+export const reconcile = (state: State, event: Event): State => {
+	switch (state._tag) {
+		case "Delivered":
+			return state;
+		case "Waiting":
+			return event._tag === "Retry" ? State.Sending() : state;
+		case "Sending":
+			switch (event._tag) {
+				case "Delivered":
+					return State.Delivered();
+				case "Unknown":
+					return State.Waiting({ failure: undefined });
+				case "Failed":
+					return State.Waiting({ failure: event.failure });
+				case "Retry":
+					return state;
+			}
+	}
+};
+
 export const layer = (retry: Duration.Input = "30 seconds") =>
 	Layer.effectDiscard(
 		Effect.gen(function* () {
@@ -72,55 +124,83 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const path = yield* Path.Path;
 			const failures = yield* Failures;
 
-			const flush = Effect.gen(function* () {
-				const entries = yield* desk.entries;
-				const pending = messages(entries);
-				// All at once: a plugin that hangs (until its call times out) doesn't hold up the other sessions.
-				yield* Effect.forEach(
-					due(entries, new Set(yield* opencode.inDeskMode)),
-					(message) =>
-						Effect.gen(function* () {
-							// A path below the store always makes a file URL.
-							const files = yield* Effect.forEach(message.files, ({ file, name }) =>
-								Effect.map(Effect.orDie(path.toFileUrl(path.join(store.root, file))), (url) => ({
-									uri: url.href,
-									name,
-								})),
-							);
-							return yield* opencode
-								.prompt({
-									sessionID: message.session,
-									id: message.id,
-									text: message.text,
-									delivery: message.delivery,
-									files,
-								})
-								.pipe(
-									Effect.flatMap((sent) => (sent ? desk.delivered(message.id) : Effect.void)),
-									Effect.andThen(failures.set(message.id, undefined)),
-									Effect.catch((failed) =>
-										Effect.andThen(Effect.logWarning(deliveryFailed(failed)), failures.set(message.id, failed)),
-									),
-								);
-						}),
-					{ concurrency: "unbounded", discard: true },
+			/** Sends the message with id `id` as the files have it now: what came of it. */
+			const send = (id: MessageID) =>
+				Effect.gen(function* () {
+					const message = messages(yield* desk.entries).find((one) => one.id === id);
+					if (message === undefined) return Event.Delivered();
+					// A path below the store always makes a file URL.
+					const files = yield* Effect.forEach(message.files, ({ file, name }) =>
+						Effect.map(Effect.orDie(path.toFileUrl(path.join(store.root, file))), (url) => ({
+							uri: url.href,
+							name,
+						})),
+					);
+					const sent = yield* opencode.prompt({
+						sessionID: message.session,
+						id: message.id,
+						text: message.text,
+						delivery: message.delivery,
+						files,
+					});
+					if (!sent) return Event.Unknown();
+					yield* desk.delivered(message.id);
+					return Event.Delivered();
+				}).pipe(
+					Effect.catch((failure) => Effect.as(Effect.logWarning(deliveryFailed(failure)), Event.Failed({ failure }))),
 				);
-				// Messages that left the outbox (delivered, or their entry went) have nothing to report.
-				yield* failures.retain(new Set(pending.map((message) => message.id)));
-			});
 
-			// One flush at a time; triggers that pile up meanwhile only need one more.
+			const machine = (id: MessageID): Machine.Machine<State, Event> => ({
+				initial: State.Sending(),
+				reconcile,
+				run: (state, emit) => {
+					switch (state._tag) {
+						case "Sending":
+							return Effect.flatMap(send(id), emit);
+						case "Waiting":
+							// Why, for the page, while it waits; then again after `retry`, or once a plugin instance connects.
+							return failures
+								.set(id, state.failure)
+								.pipe(
+									Effect.andThen(Effect.race(Effect.sleep(retry), Stream.runHead(opencode.joined))),
+									Effect.andThen(emit(Event.Retry())),
+								);
+						case "Delivered":
+							return failures.set(id, undefined);
+					}
+				},
+			});
+			/** One message's machine, until it's delivered. */
+			const deliver = (id: MessageID) =>
+				Effect.scoped(
+					Effect.flatMap(Machine.start(machine(id)), (actor) =>
+						actor.when((state) => (state._tag === "Delivered" ? Option.some(undefined) : Option.none())),
+					),
+				);
+
+			// The due messages, each with its machine; a message's machine goes when it's no longer due.
+			const running = yield* FiberMap.make<MessageID>();
 			yield* Stream.mergeAll(
-				[
-					Stream.map(desk.changes, () => undefined),
-					Stream.map(opencode.attached, () => undefined),
-					Stream.map(opencode.deskMode, () => undefined),
-					Stream.tick(retry),
-				],
+				[Stream.map(desk.changes, () => undefined), Stream.map(opencode.deskMode, () => undefined)],
 				{ concurrency: "unbounded" },
 			).pipe(
 				Stream.debounce("20 millis"),
-				Stream.runForEach(() => flush),
+				Stream.runForEach(() =>
+					Effect.gen(function* () {
+						const entries = yield* desk.entries;
+						const due = new Set(dueMessages(entries, new Set(yield* opencode.inDeskMode)).map((message) => message.id));
+						yield* Effect.forEach(due, (id) => FiberMap.run(running, id, deliver(id), { onlyIfMissing: true }), {
+							discard: true,
+						});
+						yield* Effect.forEach(
+							Array.from(running, ([id]) => id).filter((id) => !due.has(id)),
+							(id) => FiberMap.remove(running, id),
+							{ discard: true },
+						);
+						// Messages that left the outbox (delivered, or their entry went) have nothing to report.
+						yield* failures.retain(new Set(messages(entries).map((message) => message.id)));
+					}),
+				),
 				Effect.forkScoped,
 			);
 		}),
