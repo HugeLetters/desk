@@ -3,7 +3,7 @@
  * models: what `entry.ts` derives (order, whose turn, Next) and what `Desk` keeps true whatever happens (no orphans,
  * no cycles, a refused change leaves the files as they were).
  */
-import { afterAll, beforeAll, expect, test } from "bun:test";
+import { afterAll, beforeAll, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,17 +21,7 @@ import { due } from "../src/outbox";
 import { Store } from "../src/store";
 import { E, M, S } from "./support/ids";
 import { present } from "./support/present";
-
-const runs = Number(process.env.PROPERTY_RUNS ?? 200);
-
-/** Runs a property; a counterexample fails the test with the shrunk input and how to replay it. */
-const check = async <A>(
-	arbitrary: Arbitrary.Arbitrary<A>,
-	property: (value: A) => boolean | Effect.Effect<boolean, unknown>,
-) => {
-	const result = await Effect.runPromise(Arbitrary.checkEffect(arbitrary, property, { runs }));
-	expect(Arbitrary.formatCheckFailure(result) ?? "passed").toBe("passed");
-};
+import { check } from "./support/property";
 
 const pick = Arbitrary.schema(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 1000 })));
 

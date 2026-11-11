@@ -83,26 +83,27 @@ flowchart LR
   moves and worktree changes. Entries store their top-level session, so a desk is simply that session's entries. A
   thread stays on one desk: a `parent` on another session's desk is refused. A desk is named after its session's title
   and folder ("Phantom · phantom-p5"), asked of OpenCode through a plugin and remembered in memory only; asked again
-  when the session moves and when a plugin connects. A session no connected OpenCode knows shows as *unknown session*,
+  when the session moves and when a plugin connects. A session no connected OpenCode knows shows as _unknown session_,
   named after its entries' folder; another session can take its desk over with `desk_claim` (refused while that
   session is in desk mode). The page's header says how many sessions are in desk mode. An answer for a session whose
   OpenCode has nothing in desk mode waits until something is. The page shows one desk at a time (`/sessions/<id>`, an
   entry at `/sessions/<id>/questions/<entry id>`); `/` lists the desks.
 
-| Module                               | What it is                                                                                                                      |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `src/entry.ts`                       | the entry, its file format, whose turn it is, the desk's order                                                                  |
-| `src/store.ts`                       | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename)                        |
-| `src/desk.ts`                        | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first |
-| `src/outbox.ts`                      | outbox entries → the messages to send                                                                                           |
-| `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                     |
-| `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                   |
-| `src/sessions.ts`                    | a desk's name: its session's title and folder, cached                                                                           |
-| `src/service/`                       | `api.ts` (what each request does), `socket.ts`, `http.ts`, `clients.ts` (idle exit), `app.ts` (assembly), `main.ts`             |
-| `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service)                                   |
-| `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's list of desks, through restarts                                   |
-| `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts                                                                                           |
-| `page/`                              | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                          |
+| Module                               | What it is                                                                                                                                                       |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/entry.ts`                       | the entry, its file format, whose turn it is, the desk's order                                                                                                   |
+| `src/store.ts`                       | the flat directory: the desk's only state, read fresh every time; writes land whole (temp file + rename)                                                         |
+| `src/desk.ts`                        | the rules: ask, answer, adopt, prioritize, resolve, reply (into the outbox); one change at a time, each reading the files first                                  |
+| `src/outbox.ts`                      | outbox entries → the messages to send                                                                                                                            |
+| `src/delivery.ts`                    | sends outbox messages, retrying on reconnect and every 30 s                                                                                                      |
+| `src/opencode.ts`                    | OpenCode as the service reaches it: the connected plugin instances (`Client`)                                                                                    |
+| `src/sessions.ts`                    | a desk's name: its session's title and folder, cached                                                                                                            |
+| `src/machine.ts`                     | state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts                                                      |
+| `src/service/`                       | `api.ts` (what each request does), `socket.ts`, `http.ts`, `registration.ts` (the store's lock) and `clients.ts` (idle exit), both machines, `app.ts`, `main.ts` |
+| `src/plugin/`                        | `index.ts` (`/desk-mode`, tools, hiding them), `connection.ts` (connect or start the service)                                                                    |
+| `src/tui.tsx`, `src/badge.ts`        | the TUI's footer badge, and its data: the registered service's list of desks, through restarts                                                                   |
+| `src/protocol.ts`, `src/page-api.ts` | the socket's and the page's contracts                                                                                                                            |
+| `page/`                              | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                                                           |
 
 ## Entries
 

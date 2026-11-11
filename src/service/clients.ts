@@ -1,15 +1,62 @@
 /**
  * The service's clients: connected plugin instances and open pages. `idle` completes once there have been none for
  * `after` straight (counting from the start, too), or once the service retires; either way the service exits.
+ *
+ * A machine (`machine.ts`): `Busy` while there are clients, `Quiet` while there are none (its timer runs while it
+ * lasts, so a client that comes and goes starts the wait over), `Done` for good.
  */
 import * as Context from "effect/Context";
-import * as Deferred from "effect/Deferred";
+import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
-import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Machine from "../machine";
+
+export type State = Data.TaggedEnum<{
+	Busy: { readonly clients: number };
+	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
+	Quiet: {};
+	Done: { readonly why: "idle" | "retired" };
+}>;
+export const State = Data.taggedEnum<State>();
+
+export type Event = Data.TaggedEnum<{
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Joined: {};
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Left: {};
+	/** `Quiet` lasted `after`. */
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Elapsed: {};
+	/** A newer service replaces this one. */
+	// biome-ignore lint/complexity/noBannedTypes: as above.
+	Retire: {};
+}>;
+export const Event = Data.taggedEnum<Event>();
+
+export const reconcile = (state: State, event: Event): State => {
+	if (state._tag === "Done") return state;
+	switch (event._tag) {
+		case "Retire":
+			return State.Done({ why: "retired" });
+		case "Joined":
+			return State.Busy({ clients: state._tag === "Busy" ? state.clients + 1 : 1 });
+		case "Left":
+			if (state._tag !== "Busy") return state;
+			return state.clients > 1 ? State.Busy({ clients: state.clients - 1 }) : State.Quiet();
+		case "Elapsed":
+			return state._tag === "Quiet" ? State.Done({ why: "idle" }) : state;
+	}
+};
+
+export const machine = (after: Duration.Input): Machine.Machine<State, Event> => ({
+	initial: State.Quiet(),
+	reconcile,
+	run: (state, emit) =>
+		state._tag === "Quiet" ? Effect.andThen(Effect.sleep(after), emit(Event.Elapsed())) : Effect.void,
+});
 
 export class Clients extends Context.Service<
 	Clients,
@@ -26,23 +73,12 @@ export class Clients extends Context.Service<
 		return Layer.effect(
 			Clients,
 			Effect.gen(function* () {
-				const count = yield* SubscriptionRef.make(0);
-				const idle = yield* Deferred.make<void>();
-				// Every change of the count starts the wait over; it ends only after `after` at none.
-				yield* SubscriptionRef.changes(count).pipe(
-					Stream.switchMap((now) => (now === 0 ? Stream.fromEffect(Effect.sleep(after)) : Stream.empty)),
-					Stream.runHead,
-					Effect.andThen(Deferred.succeed(idle, undefined)),
-					Effect.forkScoped,
-				);
+				const actor = yield* Machine.start(machine(after));
 				return Clients.of({
-					hold: Effect.acquireRelease(
-						SubscriptionRef.update(count, (now) => now + 1),
-						() => SubscriptionRef.update(count, (now) => now - 1),
-					),
-					count: SubscriptionRef.get(count),
-					idle: Deferred.await(idle),
-					retire: Effect.asVoid(Deferred.succeed(idle, undefined)),
+					hold: Effect.acquireRelease(actor.send(Event.Joined()), () => actor.send(Event.Left())),
+					count: Effect.map(actor.state, (state) => (state._tag === "Busy" ? state.clients : 0)),
+					idle: actor.when((state) => (state._tag === "Done" ? Option.some(undefined) : Option.none())),
+					retire: actor.send(Event.Retire()),
 				});
 			}),
 		);
