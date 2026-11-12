@@ -22,9 +22,12 @@ export type Options = Readonly<Record<string, unknown>>;
 export const provider = (options: Options, environment: ConfigProvider.ConfigProvider) =>
 	ConfigProvider.orElse(ConfigProvider.fromUnknown({ desk: options }), ConfigProvider.constantCase(environment));
 
-/** `provider` over the environment, for an entry and everything below it. The service's has no options. */
+/**
+ * `provider` over the process's environment, for an entry and everything below it, added in front of whatever provider
+ * was already there (still asked for anything these two don't have). The service's has no options.
+ */
 export const layer = (options: Options = {}) =>
-	ConfigProvider.layer(Effect.map(ConfigProvider.ConfigProvider, (environment) => provider(options, environment)));
+	ConfigProvider.layerAdd(provider(options, ConfigProvider.fromEnv()), { asPrimary: true });
 
 /** Setting `name`, as `config`, else `fallback`. One that's set but isn't valid is reported, and the fallback used. */
 const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>

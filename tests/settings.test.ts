@@ -45,3 +45,14 @@ test("a leading ~ in the store is the user's home; a setting that isn't valid gi
 		timeout: Duration.seconds(30),
 	});
 });
+
+test("an entry's layer puts the options and the environment in front of a provider already there", async () => {
+	const outer = ConfigProvider.layer(ConfigProvider.fromUnknown({ desk: { port: "1", timeout: "2 seconds" } }));
+	const settings = await Effect.runPromise(
+		Effect.all({ port: Settings.port, timeout: Settings.timeout }).pipe(
+			Effect.provide(Layer.provide(Settings.layer({ port: 2 }), outer)),
+		),
+	);
+	expect(settings.port).toBe(2);
+	if (process.env.DESK_TIMEOUT === undefined) expect(settings.timeout).toEqual(Duration.seconds(2));
+});
