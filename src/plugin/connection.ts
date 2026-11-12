@@ -10,7 +10,6 @@
  */
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
-import { dirname, join } from "node:path";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
@@ -18,6 +17,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -33,10 +33,11 @@ export class DeskError extends Data.TaggedError("DeskError")<{ readonly message:
 
 export type Client = RpcClient.FromGroup<typeof PluginApi, RpcClientError>;
 
-export interface Options {
+/** `R`: what starting the service needs. */
+export interface Options<R = never> {
 	readonly socket: string;
 	/** Starts the service; run when nothing answers on the socket. */
-	readonly start: Effect.Effect<void>;
+	readonly start: Effect.Effect<void, unknown, R>;
 	/** This plugin instance's directory. */
 	readonly directory: string;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
@@ -128,7 +129,7 @@ export const answering = (path: string): Effect.Effect<boolean> =>
 	);
 
 /** The connection, off until wanted; hangs up when the scope closes. */
-export const make = (options: Options): Effect.Effect<Connection, never, Scope.Scope> =>
+export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, never, Scope.Scope | R> =>
 	Effect.gen(function* () {
 		const transport = RpcClient.layerProtocolSocket().pipe(
 			Layer.provide(BunSocket.layerNet({ path: options.socket })),
@@ -203,7 +204,7 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 				Effect.catchCause((cause) => emit(Event.Dropped({ message: errorMessage(Cause.squash(cause)) }))),
 			);
 
-		const actor = yield* Machine.start<State, Event, never>({
+		const actor = yield* Machine.start<State, Event, R>({
 			initial: options.wanted ? State.Connecting() : State.Off(),
 			reconcile,
 			key,
@@ -239,27 +240,35 @@ export const make = (options: Options): Effect.Effect<Connection, never, Scope.S
 	});
 
 /**
- * Starts `bun src/service/main.ts` detached, logging to `<store>/service.log`, which it gets as its own stdout and
- * stderr. With `node:child_process`, not Effect's `ChildProcess`: that one can detach and unref a child, but its output
- * goes to a pipe (or a sink) in this process, which breaks when this OpenCode exits, and the service outlives it. Nor
- * does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The log is closed here once the child has it.
+ * Starts `bun src/service/main.ts` detached, on `store` with `port` as the page's preferred port, logging to `log`,
+ * which it gets as its own stdout and stderr. With `node:child_process`, not Effect's `ChildProcess`: that one can
+ * detach and unref a child, but its output goes to a pipe (or a sink) in this process, which breaks when this OpenCode
+ * exits, and the service outlives it. Nor does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The
+ * log is closed here once the child has it.
  */
-export const startService = (env: { DESK_HOME: string; DESK_PORT: string }) =>
-	Effect.acquireUseRelease(
-		Effect.sync(() => {
-			mkdirSync(env.DESK_HOME, { recursive: true });
-			return openSync(join(env.DESK_HOME, "service.log"), "a");
-		}),
-		(log) =>
+export const startService = (service: { readonly store: string; readonly port: number; readonly log: string }) =>
+	Effect.gen(function* () {
+		const main = yield* (yield* Path.Path).fromFileUrl(new URL("../service/main.ts", import.meta.url));
+		yield* Effect.acquireUseRelease(
 			Effect.sync(() => {
-				const main = join(dirname(import.meta.dir), "service", "main.ts");
-				// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
-				const bun = Bun.which("bun");
-				spawn(bun ?? process.execPath, [main], {
-					detached: true,
-					stdio: ["ignore", log, log],
-					env: { ...process.env, ...env, ...(bun ? {} : { BUN_BE_BUN: "1" }) },
-				}).unref();
+				mkdirSync(service.store, { recursive: true });
+				return openSync(service.log, "a");
 			}),
-		(log) => Effect.sync(() => closeSync(log)),
-	);
+			(log) =>
+				Effect.sync(() => {
+					// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
+					const bun = Bun.which("bun");
+					spawn(bun ?? process.execPath, [main], {
+						detached: true,
+						stdio: ["ignore", log, log],
+						env: {
+							...process.env,
+							DESK_HOME: service.store,
+							DESK_PORT: String(service.port),
+							...(bun ? {} : { BUN_BE_BUN: "1" }),
+						},
+					}).unref();
+				}),
+			(log) => Effect.sync(() => closeSync(log)),
+		);
+	});
