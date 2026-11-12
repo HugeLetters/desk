@@ -1,6 +1,6 @@
 /**
- * `bun src/service/main.ts`: runs the desk service until it has had no clients for `$DESK_IDLE` ms (default 10
- * minutes) or a newer one replaces it, or a signal comes, then exits. A plugin instance starts it when none answers on
+ * `bun src/service/main.ts`: runs the desk service until it has had no clients for `$DESK_IDLE` (a duration or ms,
+ * default 10 minutes) or a newer one replaces it, or a signal comes, then exits. A plugin instance starts it when none answers on
  * the socket; started while another one has the store (`<store>/service.json`), it exits at once.
  *
  * - `DESK_HOME`: the store (default `~/.local/share/desk`); the socket is `$DESK_HOME/desk.sock`.
@@ -17,22 +17,20 @@ import { Api } from "./api";
 import * as App from "./app";
 import { Clients } from "./clients";
 
-/** The settings, from the environment. */
-// TODO main | settings value isnt bound for anything so trying to see what uses idle doesnt bring up anything cause its just coincidentally same options App.layer config needs - thats bad in general | by Evgenii Perminov at Thu, 12 Nov 2026 23:42:00 GMT
-export const settings = Effect.gen(function* () {
+/** The service's configuration, from the settings. */
+export const configuration = Effect.gen(function* () {
 	const store = yield* Settings.store;
 	return {
 		store,
 		socket: (yield* ServiceInfo.files(store)).socket,
 		port: yield* Settings.port,
-		/** In ms. */
 		idle: yield* Settings.idle,
-	};
+	} satisfies App.Config;
 });
 
 if (import.meta.main) {
 	Effect.gen(function* () {
-		const config = yield* settings;
+		const config = yield* configuration;
 		yield* Effect.gen(function* () {
 			yield* Effect.log(`desk: serving ${config.store} on ${(yield* Api).url}`);
 			yield* Clients.use((clients) => clients.idle);

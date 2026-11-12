@@ -27,6 +27,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Desk } from "./desk";
+import type { Empty } from "./empty";
 import type { MessageID } from "./entry";
 import type { DeliveryFailed } from "./errors";
 import * as Machine from "./machine";
@@ -73,25 +74,20 @@ export class Failures extends Context.Service<
 }
 
 export type State = Data.TaggedEnum<{
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Sending: {};
+	Sending: Empty;
 	/** Not sent: `failure` says why, or is undefined when no connected OpenCode knows the session. */
 	Waiting: { readonly failure: DeliveryFailed | undefined };
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Delivered: {};
+	Delivered: Empty;
 }>;
 export const State = Data.taggedEnum<State>();
 
 export type Event = Data.TaggedEnum<{
 	/** In, and marked delivered; or it left the outbox meanwhile, so there's nothing to send. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Delivered: {};
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Unknown: {};
+	Delivered: Empty;
+	Unknown: Empty;
 	Failed: { readonly failure: DeliveryFailed };
 	/** The retry timer, or a plugin instance connecting: try again. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Retry: {};
+	Retry: Empty;
 }>;
 export const Event = Data.taggedEnum<Event>();
 

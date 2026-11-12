@@ -164,4 +164,4 @@ bun run demo        # docs/demo/: stills and the GIF (needs Google Chrome and ff
 
 Tests never touch the real store or port: the service runs in-process on a temp store, port 0 and fake OpenCode
 instances behind fake plugin connections (`tests/support/`); the plugin test starts a real service process on a temp store. To run a service by hand,
-set `DESK_HOME` (store), `DESK_PORT` and optionally `DESK_IDLE` (ms): `DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`.
+set `DESK_HOME` (store), `DESK_PORT` and optionally `DESK_IDLE` (a duration such as `"1 minute"`, or ms): `DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`.

@@ -13,6 +13,7 @@
  */
 import * as Data from "effect/Data";
 import * as Result from "effect/Result";
+import type { Empty } from "./empty";
 import type { Entry, EntryId, Party, Pending, Priority, SessionID } from "./entry";
 import {
 	AlreadyResolved,
@@ -31,11 +32,9 @@ export type Event = Data.TaggedEnum<{
 	/** Its asker resolves it; `openBelow`: its unresolved follow-ups, all the way down. */
 	Resolve: { readonly by: Party; readonly openBelow: ReadonlyArray<EntryId> };
 	/** Its pending text reached the session. */
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Delivered: {};
+	Delivered: Empty;
 	/** The user gives up on delivering its pending text. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Discard: {};
+	Discard: Empty;
 	/** Filed under `parent` (on its desk, not in its own subtree: the desk checked). */
 	Adopt: { readonly parent: EntryId };
 	Prioritize: { readonly priority: Priority };

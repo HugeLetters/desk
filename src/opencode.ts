@@ -15,6 +15,7 @@ import * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import type { Empty } from "./empty";
 import type { SessionID } from "./entry";
 import { DeliveryFailed } from "./errors";
 import type { Prompt, SessionInfo } from "./protocol";
@@ -27,10 +28,8 @@ export type { Prompt, SessionInfo };
  */
 export type Lookup = Data.TaggedEnum<{
 	Known: { readonly session: SessionInfo };
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Unknown: {};
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Unreachable: {};
+	Unknown: Empty;
+	Unreachable: Empty;
 }>;
 export const Lookup = Data.taggedEnum<Lookup>();
 

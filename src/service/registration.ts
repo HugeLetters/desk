@@ -22,6 +22,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Unify from "effect/Unify";
+import type { Empty } from "../empty";
 import * as Machine from "../machine";
 import { protocol } from "../protocol";
 import * as ServiceInfo from "../service-info";
@@ -48,34 +49,26 @@ export type State = Data.TaggedEnum<{
 	Checking: { readonly attempt: number };
 	Replacing: { readonly attempt: number };
 	Waiting: { readonly attempt: number; readonly pid: number };
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Registered: {};
+	Registered: Empty;
 	Taken: { readonly pid: number };
 }>;
 export const State = Data.taggedEnum<State>();
 
 export type Event = Data.TaggedEnum<{
 	/** The file is this service's. */
-	// TODO main | just fucking create an Empty type and reuse and lint ignore once | by Evgenii Perminov at Thu, 12 Nov 2026 23:29:46 GMT
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Created: {};
+	Created: Empty;
 	/** Creating it found one there. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Exists: {};
+	Exists: Empty;
 	/** It names a live process. */
 	Held: { readonly pid: number };
 	/** It names a process that's gone, or isn't a registration. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Stale: {};
+	Stale: Empty;
 	/** Another service is replacing it. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Contended: {};
+	Contended: Empty;
 	/** Something else went wrong (the store can't be written, say). */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Failed: {};
+	Failed: Empty;
 	/** `Waiting` is over. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Retry: {};
+	Retry: Empty;
 }>;
 export const Event = Data.taggedEnum<Event>();
 

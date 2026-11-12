@@ -25,6 +25,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import type { Empty } from "../empty";
 import type { SessionID } from "../entry";
 import * as Machine from "../machine";
 import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type SessionInfo } from "../protocol";
@@ -67,10 +68,8 @@ export interface Connection {
 }
 
 export type State = Data.TaggedEnum<{
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Off: {};
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Connecting: {};
+	Off: Empty;
+	Connecting: Empty;
 	Live: { readonly client: Client; readonly url: string };
 	/** Why the link dropped. */
 	Backoff: { readonly message: string };
@@ -87,8 +86,7 @@ export type Event = Data.TaggedEnum<{
 	/** The service won't take this plugin: it's older. */
 	Outdated: { readonly message: string };
 	/** `Backoff` is over. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Retry: {};
+	Retry: Empty;
 }>;
 export const Event = Data.taggedEnum<Event>();
 

@@ -39,36 +39,35 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 		),
 	);
 
-// TODO main | makes sense but most of this belongs to a code comments, not a jsdoc | by Evgenii Perminov at Thu, 12 Nov 2026 23:48:13 GMT
-/**
- * The store: `home`, else `~/.local/share/desk`. A leading `~` is the user's home. In a terminal the shell replaces
- * `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings as written, so without this
- * `"home": "~/.local/share/desk"` would be a folder literally named `~` in the current directory.
- */
+/** The store: the `home` setting (`DESK_HOME`), else `~/.local/share/desk`; a leading `~` is the user's home. */
 export const store = Effect.gen(function* () {
 	const path = yield* Path.Path;
-	// TODO main | why are we asking for HOME and then home? | by Evgenii Perminov at Thu, 12 Nov 2026 23:44:23 GMT
-	const user = yield* Config.String("HOME");
+	// Not the setting: `HOME` is the user's home directory, the environment's own, where the default store is and what
+	// `~` stands for. The setting is `home` under `desk`, the desk's home.
+	const userHome = yield* Config.String("HOME");
+	// In a terminal the shell replaces `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings
+	// as written: without this, `"home": "~/.local/share/desk"` would be a folder literally named `~` here.
 	const home = Config.map(Config.String("home"), (configured) =>
-		configured === "~" || configured.startsWith("~/") ? path.join(user, configured.slice(1)) : configured,
+		configured === "~" || configured.startsWith("~/") ? path.join(userHome, configured.slice(1)) : configured,
 	);
-	return yield* setting("home", home, path.join(user, ".local", "share", "desk"));
+	return yield* setting("home", home, path.join(userHome, ".local", "share", "desk"));
 });
 
-/** The page's preferred port, else 47400. 0: any free port (`Config.Port` would refuse it). */
-// TODO main | maybe add non negative filter still? | by Evgenii Perminov at Thu, 12 Nov 2026 23:43:04 GMT
-export const port = setting("port", Config.Int("port"), 47400);
+/** A port, or 0 for any free one (`Config.Port` would refuse 0). */
+const PortOrAny = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }));
 
-/** How long the service runs without clients before it exits, in ms; else 10 minutes. */
-// TODO main | should be a duration, thats what it is | by Evgenii Perminov at Thu, 12 Nov 2026 23:42:36 GMT
-export const idle = setting("idle", Config.Int("idle"), 600_000);
+/** The page's preferred port, else 47400; 0: any free port. */
+export const port = setting("port", Config.schema(PortOrAny, "port"), 47400);
 
-/** How long a desk call may take before the agent is told the service seems stuck: a duration or ms, else 30 seconds. */
-export const timeout = setting(
-	"timeout",
-	Config.schema(Schema.Union([Schema.DurationFromString, Schema.DurationFromMillis]), "timeout"),
-	Duration.seconds(30),
-);
+/** A duration, as text (`"5 seconds"`) or ms. */
+const duration = (name: string) =>
+	Config.schema(Schema.Union([Schema.DurationFromString, Schema.DurationFromMillis]), name);
+
+/** How long the service runs without clients before it exits, else 10 minutes. */
+export const idle = setting("idle", duration("idle"), Duration.minutes(10));
+
+/** How long a desk call may take before the agent is told the service seems stuck, else 30 seconds. */
+export const timeout = setting("timeout", duration("timeout"), Duration.seconds(30));
 
 /** What the TUI opens a link with, else `open`; tests replace it. */
 export const opener = setting("opener", Config.String("opener"), "open");

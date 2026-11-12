@@ -12,27 +12,23 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
+import type { Empty } from "../empty";
 import * as Machine from "../machine";
 
 export type State = Data.TaggedEnum<{
 	Busy: { readonly clients: number };
-	// biome-ignore lint/complexity/noBannedTypes: a TaggedEnum member without fields is `{}`.
-	Quiet: {};
+	Quiet: Empty;
 	Done: { readonly why: "idle" | "retired" };
 }>;
 export const State = Data.taggedEnum<State>();
 
 export type Event = Data.TaggedEnum<{
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Joined: {};
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Left: {};
+	Joined: Empty;
+	Left: Empty;
 	/** `Quiet` lasted `after`. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Elapsed: {};
+	Elapsed: Empty;
 	/** A newer service replaces this one. */
-	// biome-ignore lint/complexity/noBannedTypes: as above.
-	Retire: {};
+	Retire: Empty;
 }>;
 export const Event = Data.taggedEnum<Event>();
 

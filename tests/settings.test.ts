@@ -40,6 +40,7 @@ test("a leading ~ in the store is the user's home; a setting that isn't valid gi
 	expect((await read({ home: "~" }, { HOME: "/home/me" })).store).toBe("/home/me");
 	expect((await read({ home: "a/~b" }, { HOME: "/home/me" })).store).toBe("a/~b");
 	expect((await read({}, { HOME: "/home/me", DESK_HOME: "~/env" })).store).toBe("/home/me/env");
+	for (const port of [-1, 65536, 1.5]) expect((await read({ port }, { HOME: "/home/me" })).port).toBe(47400);
 	expect(await read({ port: "nope", timeout: "soon" }, { HOME: "/home/me" })).toMatchObject({
 		port: 47400,
 		timeout: Duration.seconds(30),
@@ -55,4 +56,16 @@ test("an entry's layer puts the options and the environment in front of a provid
 	);
 	expect(settings.port).toBe(2);
 	if (process.env.DESK_TIMEOUT === undefined) expect(settings.timeout).toEqual(Duration.seconds(2));
+});
+
+test("idle is a duration, as text or ms, else 10 minutes", async () => {
+	const idle = (options: Record<string, unknown>, env: Record<string, string>) =>
+		Effect.runPromise(
+			Settings.idle.pipe(
+				Effect.provide(ConfigProvider.layer(Settings.provider(options, ConfigProvider.fromEnv({ env })))),
+			),
+		);
+	expect(await idle({}, {})).toEqual(Duration.minutes(10));
+	expect(await idle({}, { DESK_IDLE: "1000" })).toEqual(Duration.millis(1000));
+	expect(await idle({ idle: "2 minutes" }, { DESK_IDLE: "1000" })).toEqual(Duration.minutes(2));
 });
