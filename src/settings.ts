@@ -40,8 +40,9 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 	);
 
 /**
- * The store: `home`, else `~/.local/share/desk`. A leading `~` is the user's home, as in a shell: the README's example
- * says `"home": "~/.local/share/desk"`, and nothing on the way expands it (JSON isn't a shell).
+ * The store: `home`, else `~/.local/share/desk`. A leading `~` is the user's home. In a terminal the shell replaces
+ * `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings as written, so without this
+ * `"home": "~/.local/share/desk"` would be a folder literally named `~` in the current directory.
  */
 export const store = Effect.gen(function* () {
 	const path = yield* Path.Path;
