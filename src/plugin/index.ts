@@ -8,8 +8,8 @@
  * For the service, it's also the way into this OpenCode (`sessions.ts`): it looks sessions up and delivers the user's
  * replies here when the service asks, and tells the service about sessions that move.
  *
- * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, default
- * `$DESK_HOME` or `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one
+ * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, an absolute
+ * path, default `$DESK_HOME` or `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one
  * when it's taken) and `timeout` (how long a desk call may take before the agent is told the service seems stuck;
  * default 30 seconds).
  */
@@ -32,20 +32,20 @@ export default Plugin.define<Scope.Scope>({
 	id: "desk",
 	effect: (ctx) =>
 		Effect.gen(function* () {
-			const settings = yield* Settings.plugin(ctx.options);
-			const files = yield* ServiceInfo.files(settings.home);
+			const store = yield* Settings.store;
+			const files = yield* ServiceInfo.files(store);
 			const root = yield* Sessions.roots(ctx);
 			const modes = Modes.make(ctx, root);
 			const connection = yield* Connection.make({
 				socket: files.socket,
-				start: Connection.startService({ store: settings.home, port: settings.port, log: files.log }),
+				start: Connection.startService({ store, port: yield* Settings.port, log: files.log }),
 				directory: ctx.location.directory,
 				modes: modes.here,
 				serve: Sessions.serve(ctx),
 			});
 			const sync = yield* Modes.follow(modes, connection);
 			yield* sync;
-			const calls = Calls.make(connection, settings.timeout, files.registration);
+			const calls = Calls.make(connection, yield* Settings.timeout, files.registration);
 
 			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name. A session
 			// moving in or out of this directory may connect or hang up this instance, too.
@@ -62,5 +62,5 @@ export default Plugin.define<Scope.Scope>({
 
 			yield* Command.register(ctx, { ...calls, modes, sync });
 			yield* Tools.register(ctx, { ...calls, modes, root });
-		}).pipe(Effect.provide(BunServices.layer), Effect.orDie),
+		}).pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
 });

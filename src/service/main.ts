@@ -8,7 +8,6 @@
  */
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Runtime from "effect/Runtime";
@@ -26,7 +25,7 @@ export const settings = Effect.gen(function* () {
 		socket: (yield* ServiceInfo.files(store)).socket,
 		port: yield* Settings.port,
 		/** In ms. */
-		idle: yield* Config.Int("DESK_IDLE").pipe(Config.withDefault(600_000)),
+		idle: yield* Settings.idle,
 	};
 });
 
@@ -39,12 +38,13 @@ if (import.meta.main) {
 			yield* Effect.log("desk: exiting");
 		}).pipe(Effect.provide(Layer.fresh(App.layer(config))));
 	}).pipe(
-		Effect.provide(BunServices.layer),
+		Effect.provide([BunServices.layer, Settings.layer()]),
 		// The registration is the lock: a second service finds it taken and leaves.
 		Effect.catchTag("AlreadyRunning", () => Effect.log("desk: another service is running; exiting")),
 		// Done (idle, a signal, or another service): exit, whatever still holds the process open (an open page's
-		// connection, say). Shutting down is bounded on its own (`App.layer`).
-		// TODO main | why are we overriding default teerdown? | by Evgenii Perminov at Thu, 12 Nov 2026 21:47:15 GMT
+		// connection, say). The default teardown exits only after a signal or a failure; done for being idle, it would
+		// leave the process waiting on whatever's still open, holding the port. Shutting down is bounded on its own
+		// (`App.layer`).
 		BunRuntime.runMain({
 			teardown: (exit, onExit) =>
 				Runtime.defaultTeardown(exit, (code) => {

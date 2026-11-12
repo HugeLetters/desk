@@ -21,6 +21,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
+import type * as Schema from "effect/Schema";
 import * as Machine from "../machine";
 import { protocol } from "../protocol";
 import * as ServiceInfo from "../service-info";
@@ -133,7 +134,7 @@ export class Registration extends Context.Service<
 				// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
 				const create = Effect.gen(function* () {
 					const temp = `${path}.${process.pid}.new`;
-					yield* fs.writeFileString(temp, ServiceInfo.encode(own));
+					yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
 					yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 				});
 				const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
@@ -167,7 +168,11 @@ export class Registration extends Context.Service<
 				/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
 				const step = (
 					state: State,
-				): Effect.Effect<Event, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> => {
+				): Effect.Effect<
+					Event,
+					PlatformError.PlatformError | Schema.SchemaError,
+					FileSystem.FileSystem | Path.Path
+				> => {
 					switch (state._tag) {
 						case "Creating":
 							return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
@@ -214,7 +219,7 @@ export class Registration extends Context.Service<
 					publish: (where) =>
 						Effect.gen(function* () {
 							const temp = `${path}.${process.pid}`;
-							yield* fs.writeFileString(temp, ServiceInfo.encode({ ...own, ...where }));
+							yield* fs.writeFileString(temp, yield* ServiceInfo.encode({ ...own, ...where }));
 							yield* fs.rename(temp, path);
 						}).pipe(Effect.orDie),
 				});

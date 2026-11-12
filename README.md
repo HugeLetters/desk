@@ -31,7 +31,8 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
    { "plugins": ["/Users/<you>/projects/personal/desk"] }
    ```
 
-   Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "~/.local/share/desk" } }`.
+   Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "/Users/<you>/.local/share/desk" } }`.
+   Each option can be set in the environment instead, as `DESK_` and its name (`DESK_HOME`, `DESK_PORT`, `DESK_TIMEOUT`); the options win.
    Edits here apply when OpenCode reloads its plugins; there's no release step.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
@@ -105,7 +106,7 @@ flowchart LR
 | `src/tui.tsx`, `src/badge.ts`            | the TUI's footer badge (which desk a session reports, at the TUI's entry), and its data: the registered service's list of desks, through restarts                                                                                                                                                         |
 | `src/protocol.ts`, `src/page-api.ts`     | the socket's and the page's contracts                                                                                                                                                                                                                                                                     |
 | `src/routes.ts`                          | the page's paths (`/sessions/<id>`, its entries, `/rpc`): the page's router matches them, the service, the TUI and the tests link to them                                                                                                                                                                 |
-| `src/settings.ts`, `src/service-info.ts` | the settings as Effect `Config` (the plugin's options, then `DESK_HOME`/`DESK_PORT`, then the defaults); a store's service files (`service.json`, `desk.sock`, `service.log`) and the registration's reader                                                                                               |
+| `src/settings.ts`, `src/service-info.ts` | the settings as Effect `Config`, from one provider: the plugin's options, then `DESK_<NAME>`, then the defaults; a store's service files (`service.json`, `desk.sock`, `service.log`) and the registration's reader                                                                                       |
 | `page/`                                  | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                                                                                                                                                                                                    |
 
 ## Entries

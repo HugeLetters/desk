@@ -19,8 +19,8 @@ export type Info = typeof Info.Type;
 
 /** A registration's text, parsed: fails on anything that isn't one (an empty or half-written file, say). */
 export const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info));
-// TODO main | wht not as effect? | by Evgenii Perminov at Thu, 12 Nov 2026 22:09:45 GMT
-export const encode = Schema.encodeSync(Schema.fromJsonString(Info));
+/** A registration's text. */
+export const encode = Schema.encodeEffect(Schema.fromJsonString(Info));
 
 /** Where the service's files are in `store`. */
 export const files = (store: string) =>

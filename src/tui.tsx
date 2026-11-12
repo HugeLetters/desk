@@ -8,7 +8,6 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/tui";
 import type { Context } from "@opencode/plugin/tui/context";
-import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
@@ -70,12 +69,12 @@ function Badge(props: { theme: Context["theme"]; report: Report | undefined; ope
 
 /**
  * The badge in the footer, for as long as it runs: the settings, the slot, and the registered service's status into
- * it. `DESK_OPENER` replaces `open`, for tests.
+ * it.
  */
 const badge = (context: Context) =>
 	Effect.gen(function* () {
-		const home = yield* Settings.home(context.options);
-		const opener = yield* Config.String("DESK_OPENER").pipe(Config.withDefault("open"));
+		const store = yield* Settings.store;
+		const opener = yield* Settings.opener;
 		const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 		const [status, setStatus] = createSignal<Status>();
 		/** The desk a session's badge reports: its top-level session's (a subagent's desk is its parent's). */
@@ -96,7 +95,7 @@ const badge = (context: Context) =>
 			),
 			(unslot) => Effect.sync(unslot),
 		);
-		yield* Stream.runForEach(watch(home), (next) => Effect.sync(() => setStatus(next)));
+		yield* Stream.runForEach(watch(store), (next) => Effect.sync(() => setStatus(next)));
 	}).pipe(Effect.scoped);
 
 /** What the badge needs, on Bun: provided here, at the TUI's entry, and nowhere below. */
@@ -105,7 +104,7 @@ const services = Layer.mergeAll(BunServices.layer, FetchHttpClient.layer, RpcSer
 export default Plugin.define({
 	id: "desk",
 	setup(context) {
-		const running = Effect.runFork(badge(context).pipe(Effect.provide(services)));
+		const running = Effect.runFork(badge(context).pipe(Effect.provide([services, Settings.layer(context.options)])));
 		return () => Effect.runPromise(Effect.asVoid(Fiber.interrupt(running)));
 	},
 });
