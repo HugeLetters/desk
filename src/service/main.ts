@@ -18,6 +18,7 @@ import * as App from "./app";
 import { Clients } from "./clients";
 
 /** The settings, from the environment. */
+// TODO main | settings value isnt bound for anything so trying to see what uses idle doesnt bring up anything cause its just coincidentally same options App.layer config needs - thats bad in general | by Evgenii Perminov at Thu, 12 Nov 2026 23:42:00 GMT
 export const settings = Effect.gen(function* () {
 	const store = yield* Settings.store;
 	return {

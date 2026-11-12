@@ -39,6 +39,7 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 		),
 	);
 
+// TODO main | makes sense but most of this belongs to a code comments, not a jsdoc | by Evgenii Perminov at Thu, 12 Nov 2026 23:48:13 GMT
 /**
  * The store: `home`, else `~/.local/share/desk`. A leading `~` is the user's home. In a terminal the shell replaces
  * `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings as written, so without this
@@ -46,6 +47,7 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
  */
 export const store = Effect.gen(function* () {
 	const path = yield* Path.Path;
+	// TODO main | why are we asking for HOME and then home? | by Evgenii Perminov at Thu, 12 Nov 2026 23:44:23 GMT
 	const user = yield* Config.String("HOME");
 	const home = Config.map(Config.String("home"), (configured) =>
 		configured === "~" || configured.startsWith("~/") ? path.join(user, configured.slice(1)) : configured,
@@ -54,9 +56,11 @@ export const store = Effect.gen(function* () {
 });
 
 /** The page's preferred port, else 47400. 0: any free port (`Config.Port` would refuse it). */
+// TODO main | maybe add non negative filter still? | by Evgenii Perminov at Thu, 12 Nov 2026 23:43:04 GMT
 export const port = setting("port", Config.Int("port"), 47400);
 
 /** How long the service runs without clients before it exits, in ms; else 10 minutes. */
+// TODO main | should be a duration, thats what it is | by Evgenii Perminov at Thu, 12 Nov 2026 23:42:36 GMT
 export const idle = setting("idle", Config.Int("idle"), 600_000);
 
 /** How long a desk call may take before the agent is told the service seems stuck: a duration or ms, else 30 seconds. */

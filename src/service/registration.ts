@@ -17,11 +17,11 @@ import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import { flow } from "effect/Function";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
-import type * as PlatformError from "effect/PlatformError";
-import type * as Schema from "effect/Schema";
+import * as Unify from "effect/Unify";
 import * as Machine from "../machine";
 import { protocol } from "../protocol";
 import * as ServiceInfo from "../service-info";
@@ -56,6 +56,7 @@ export const State = Data.taggedEnum<State>();
 
 export type Event = Data.TaggedEnum<{
 	/** The file is this service's. */
+	// TODO main | just fucking create an Empty type and reuse and lint ignore once | by Evgenii Perminov at Thu, 12 Nov 2026 23:29:46 GMT
 	// biome-ignore lint/complexity/noBannedTypes: as above.
 	Created: {};
 	/** Creating it found one there. */
@@ -166,32 +167,30 @@ export class Registration extends Context.Service<
 				}).pipe(Effect.scoped);
 
 				/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
-				const step = (
-					state: State,
-				): Effect.Effect<
-					Event,
-					PlatformError.PlatformError | Schema.SchemaError,
-					FileSystem.FileSystem | Path.Path
-				> => {
-					switch (state._tag) {
-						case "Creating":
-							return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
-								Effect.as(Event.Created()),
-								Effect.catchIf(exists, () => Effect.succeed(Event.Exists())),
-							);
-						case "Checking":
-							return Effect.map(read, (holder) =>
-								holder && alive(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
-							);
-						case "Replacing":
-							return replace;
-						case "Waiting":
-							return Effect.as(Effect.sleep("100 millis"), Event.Retry());
-						case "Registered":
-						case "Taken":
-							return Effect.never;
-					}
-				};
+				const step = flow(
+					(state: State) => {
+						switch (state._tag) {
+							case "Creating":
+								return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
+									Effect.as(Event.Created()),
+									Effect.catchIf(exists, () => Effect.succeed(Event.Exists())),
+								);
+							case "Checking":
+								return Effect.map(read, (holder) =>
+									holder && alive(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
+								);
+							case "Replacing":
+								return replace;
+							case "Waiting":
+								return Effect.as(Effect.sleep("100 millis"), Event.Retry());
+							case "Registered":
+							case "Taken":
+								return Effect.never;
+						}
+					},
+					(v) => Unify.unify(v),
+				);
+
 				const machine: Machine.Machine<State, Event, FileSystem.FileSystem | Path.Path> = {
 					initial: State.Creating({ attempt: 0 }),
 					reconcile,
