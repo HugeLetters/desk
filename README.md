@@ -31,7 +31,7 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
    { "plugins": ["/Users/<you>/projects/personal/desk"] }
    ```
 
-   Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "/Users/<you>/.local/share/desk" } }`.
+   Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "~/.local/share/desk" } }`.
    Each option can be set in the environment instead, as `DESK_` and its name (`DESK_HOME`, `DESK_PORT`, `DESK_TIMEOUT`); the options win.
    Edits here apply when OpenCode reloads its plugins; there's no release step.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by

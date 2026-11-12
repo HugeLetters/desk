@@ -36,14 +36,17 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 		),
 	);
 
-/** A path that doesn't depend on where it's read from: `~` isn't one (nothing expands it; JSON isn't a shell). */
-const AbsolutePath = Schema.String.check(Schema.isPattern(/^\//, { expected: "an absolute path" }));
-
-/** The store: `home`, else `~/.local/share/desk`. */
+/**
+ * The store: `home`, else `~/.local/share/desk`. A leading `~` is the user's home, as in a shell: the README's example
+ * says `"home": "~/.local/share/desk"`, and nothing on the way expands it (JSON isn't a shell).
+ */
 export const store = Effect.gen(function* () {
 	const path = yield* Path.Path;
 	const user = yield* Config.String("HOME");
-	return yield* setting("home", Config.schema(AbsolutePath, "home"), path.join(user, ".local", "share", "desk"));
+	const home = Config.map(Config.String("home"), (configured) =>
+		configured === "~" || configured.startsWith("~/") ? path.join(user, configured.slice(1)) : configured,
+	);
+	return yield* setting("home", home, path.join(user, ".local", "share", "desk"));
 });
 
 /** The page's preferred port, else 47400. 0: any free port (`Config.Port` would refuse it). */

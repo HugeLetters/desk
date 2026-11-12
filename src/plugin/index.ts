@@ -8,8 +8,8 @@
  * For the service, it's also the way into this OpenCode (`sessions.ts`): it looks sessions up and delivers the user's
  * replies here when the service asks, and tells the service about sessions that move.
  *
- * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, an absolute
- * path, default `$DESK_HOME` or `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one
+ * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, default
+ * `$DESK_HOME` or `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one
  * when it's taken) and `timeout` (how long a desk call may take before the agent is told the service seems stuck;
  * default 30 seconds).
  */
