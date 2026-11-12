@@ -12,7 +12,7 @@
 		"page": "vite build --watch page",
 		"pretest": "vite build page",
 		"test": "bun test",
-		"typecheck": "tsc --noEmit",
+		"typecheck": "tsc --noEmit && effect-language-service diagnostics --project tsconfig.json --strict",
 		"lint": "biome check .",
 		"format": "biome check --write .",
 		"service": "bun src/service/main.ts",

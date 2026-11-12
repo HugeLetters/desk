@@ -20,6 +20,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
 import * as Machine from "../machine";
 import { protocol } from "../protocol";
 import * as ServiceInfo from "../service-info";
@@ -164,7 +165,9 @@ export class Registration extends Context.Service<
 				}).pipe(Effect.scoped);
 
 				/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
-				const step = (state: State): Effect.Effect<Event, unknown, FileSystem.FileSystem | Path.Path> => {
+				const step = (
+					state: State,
+				): Effect.Effect<Event, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path> => {
 					switch (state._tag) {
 						case "Creating":
 							return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
@@ -187,7 +190,11 @@ export class Registration extends Context.Service<
 				const machine: Machine.Machine<State, Event, FileSystem.FileSystem | Path.Path> = {
 					initial: State.Creating({ attempt: 0 }),
 					reconcile,
-					run: (state, emit) => Effect.flatMap(Effect.orElseSucceed(step(state), Event.Failed), emit),
+					run: (state, emit) =>
+						Effect.flatMap(
+							Effect.orElseSucceed(step(state), () => Event.Failed()),
+							emit,
+						),
 				};
 				const actor = yield* Machine.start(machine);
 				const taken = yield* actor.when((state) =>
