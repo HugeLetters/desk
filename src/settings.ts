@@ -54,7 +54,7 @@ export const store = Effect.gen(function* () {
 });
 
 /** A port, or 0 for any free one (`Config.Port` would refuse 0). */
-const PortOrAny = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 65535 }));
+const PortOrAny = Schema.Union([Schema.Port, Schema.Literal(0)]);
 
 /** The page's preferred port, else 47400; 0: any free port. */
 export const port = setting("port", Config.schema(PortOrAny, "port"), 47400);
