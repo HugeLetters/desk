@@ -17,6 +17,7 @@ import { DeskInUse, type Refusal } from "../errors";
 import { OpenCode } from "../opencode";
 import { type Draft, View } from "../page-api";
 import type { PluginApi } from "../protocol";
+import { deskPath, entryPath, link } from "../routes";
 import { Sessions } from "../sessions";
 
 const sameView = Schema.toEquivalence(View);
@@ -56,8 +57,6 @@ export class Api extends Context.Service<
 				const sessions = yield* Sessions;
 				const opencode = yield* OpenCode;
 				const failures = yield* Failures;
-				const link = (session: string, entry?: string) =>
-					`${url}sessions/${encodeURIComponent(session)}${entry ? `/questions/${entry}` : ""}`;
 
 				/** `session`'s desk: `session` is a top-level session's id (the page's URL). */
 				const view = (session: string | undefined, entries: ReadonlyArray<Entry>) =>
@@ -103,14 +102,14 @@ export class Api extends Context.Service<
 						Effect.map(desk.ask(asker, question), (entry) => ({
 							id: entry.id,
 							parent: entry.parent,
-							url: link(asker.session, entry.id),
+							url: link(url, entryPath(asker.session, entry.id)),
 						})),
 					adopt: ({ id, parent }) => Effect.asVoid(desk.adopt(id, parent)),
 					answer: ({ id, body }) => Effect.asVoid(desk.answer(id, body)),
 					resolve: ({ id }) => Effect.asVoid(desk.resolve(id, "agent")),
 					prioritize: ({ id, priority, subtree }) => Effect.asVoid(desk.prioritize(id, priority, subtree)),
 					list: ({ session, id }) => desk.describe(id, session),
-					page: ({ session }) => Effect.succeed({ url: link(session) }),
+					page: ({ session }) => Effect.succeed({ url: link(url, deskPath(session)) }),
 					claim: ({ session, from }) =>
 						Effect.gen(function* () {
 							if ((yield* opencode.inDeskMode).includes(from)) return yield* new DeskInUse({ session: from });

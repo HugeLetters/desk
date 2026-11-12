@@ -35,6 +35,7 @@ import {
 } from "../src/entry";
 import { Refusal } from "../src/errors";
 import { DeskApi, type Draft, type View } from "../src/page-api";
+import { deskPath, entryPath, patterns, sessionIn } from "../src/routes";
 import { deliveryFailed, refusal } from "../src/wording";
 import * as Attachments from "./attachments";
 import { type Local, render as markdown, renderDiagrams } from "./markdown";
@@ -68,16 +69,11 @@ const Icon = (props: { name: keyof typeof icons }) => (
 	</svg>
 );
 
-/** The desk (its session) in a path (`/sessions/<id>/…`), if any. */
-const sessionIn = (pathname: string) =>
-	((id) => (id === undefined ? undefined : decodeURIComponent(id)))(pathname.match(/^\/sessions\/([^/]+)/)?.[1]);
 /** The desk the page shows, following the route; drafts are kept per desk. */
 const [session, setSession] = createSignal(sessionIn(location.pathname));
 const draftsPrefix = "desk.drafts.";
 const draftsKey = (id: string | undefined) => `${draftsPrefix}${id ?? ""}`;
 const loadDrafts = (key: string): Partial<Record<string, string>> => JSON.parse(localStorage.getItem(key) ?? "{}");
-/** A session's desk, and an entry on the current one. */
-const deskPath = (id: string) => `/sessions/${encodeURIComponent(id)}`;
 /** How a desk is shown: its session's title and folder. */
 const deskName = (desk: { readonly title: string; readonly folder: string } | null | undefined) =>
 	!desk ? "" : desk.title === desk.folder ? desk.title : `${desk.title} · ${desk.folder}`;
@@ -85,10 +81,8 @@ const home = () => {
 	const id = session();
 	return id === undefined ? "/" : deskPath(id);
 };
-const entryPath = (id: string) => {
-	const current = session();
-	return `${current === undefined ? "" : deskPath(current)}/questions/${id}`;
-};
+/** An entry on the current desk. */
+const entryOnDesk = (id: string) => entryPath(session(), id);
 
 function Markdown(props: { text: string; entry: string; local?: Local }) {
 	let container: HTMLDivElement | undefined;
@@ -285,7 +279,7 @@ function App() {
 						{(entry) => (
 							<A
 								class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`}
-								href={entryPath(entry.id)}
+								href={entryOnDesk(entry.id)}
 							>
 								<span class="id">#{shortId(entry.id)}</span>
 								<Show when={entry.priority === "critical"}>
@@ -365,7 +359,7 @@ function App() {
 		const goNext = () => {
 			// Only compared with the entries' ids: a bad one in the URL is simply not among them.
 			const following = next(entries(), { id: params.id as EntryId, ...place() });
-			navigate(following ? entryPath(following.id) : home());
+			navigate(following ? entryOnDesk(following.id) : home());
 		};
 		/** Submits every draft, like the header's Submit, then goes on. Next (Shift) leaves them in the browser instead. */
 		const sendAndNext = () => {
@@ -497,7 +491,7 @@ function App() {
 										{(parent) => (
 											<div class="relation">
 												Follow-up to{" "}
-												<A href={entryPath(parent().id)}>
+												<A href={entryOnDesk(parent().id)}>
 													#{shortId(parent().id)} {parent().title}
 												</A>{" "}
 												<Pills entry={parent()} />
@@ -607,7 +601,7 @@ function App() {
 												<For each={children()}>
 													{(child) => (
 														<li>
-															<A href={entryPath(child.id)}>
+															<A href={entryOnDesk(child.id)}>
 																#{shortId(child.id)} {child.title}
 															</A>{" "}
 															<Pills entry={child} />
@@ -624,7 +618,7 @@ function App() {
 												<For each={further()}>
 													{(deep) => (
 														<li>
-															<A href={entryPath(deep.id)}>
+															<A href={entryOnDesk(deep.id)}>
 																#{shortId(deep.id)} {deep.title}
 															</A>{" "}
 															<Pills entry={deep} />
@@ -759,8 +753,8 @@ function App() {
 		<MetaProvider>
 			<Title>{`${mine().length ? `(${mine().length}) ` : ""}${state.view?.desk ? `${deskName(state.view.desk)} · ` : ""}Desk`}</Title>
 			<Router root={Shell}>
-				<Route path={["/", "/sessions/:session", "/projects/*"]} component={List} />
-				<Route path="/sessions/:session/questions/:id" component={EntryView} />
+				<Route path={[...patterns.list]} component={List} />
+				<Route path={patterns.entry} component={EntryView} />
 			</Router>
 		</MetaProvider>
 	);

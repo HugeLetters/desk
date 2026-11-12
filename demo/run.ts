@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, type Page } from "playwright-core";
 import type { EntryId } from "../src/entry";
+import { deskPath, entryPath, link } from "../src/routes";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
 import { S } from "../tests/support/ids";
 import { present } from "../tests/support/present";
@@ -113,7 +114,7 @@ try {
 	});
 	console.log(`sample desk at ${service.url}`);
 	const page = (session?: string, entry?: string) =>
-		`${service.url}${session ? `sessions/${session}` : ""}${entry ? `/questions/${entry}` : ""}`;
+		link(service.url, entry ? entryPath(session, entry) : session ? deskPath(session) : "/");
 
 	// Every link stays on the page: across desks, into an entry and back, and through the desk picker.
 	{
