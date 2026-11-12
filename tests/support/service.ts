@@ -12,6 +12,7 @@ import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
@@ -24,8 +25,10 @@ import { link, rpcPath } from "../../src/routes";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
+import * as ServiceInfo from "../../src/service-info";
 import { refusal } from "../../src/wording";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
+import { present } from "./present";
 
 export type Service = Awaited<ReturnType<typeof startService>>;
 
@@ -43,7 +46,7 @@ export async function startService(
 ) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
 	const fake = options.fake ?? fakeOpenCode();
-	const socket = join(store, "desk.sock");
+	const { socket } = await Effect.runPromise(ServiceInfo.files(store).pipe(Effect.provide(BunServices.layer)));
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
 		Layer.buildWithScope(
@@ -131,6 +134,13 @@ export const rpc = <A, E>(url: string, f: (desk: Effect.Success<typeof client>) 
 				),
 			),
 		),
+	);
+
+/** The page's URL in `store`'s registration, read as the badge reads it (`service-info.ts`). */
+export const registeredPage = async (store: string) =>
+	present(
+		Option.getOrUndefined(await Effect.runPromise(ServiceInfo.read(store).pipe(Effect.provide(BunServices.layer))))
+			?.url,
 	);
 
 /** Polls `check` until it returns something truthy (or throws after `timeout`). */

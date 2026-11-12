@@ -16,7 +16,7 @@ import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { P, S } from "./support/ids";
 import { present } from "./support/present";
-import { eventually, rpc } from "./support/service";
+import { eventually, registeredPage, rpc } from "./support/service";
 
 interface Session {
 	id: string;
@@ -183,7 +183,7 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 test("the plugin is the service's way into its OpenCode: the user's reply goes out through it, and so do moves", async () => {
 	const asked = (await first.tool("desk_ask", "ses_main", { title: "Deliver me?", body: "Details." })).content;
 	const id = present(present(/Asked ([0-9a-f-]{36})/.exec(asked))[1]) as EntryId;
-	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
+	const page = await registeredPage(home);
 	await rpc(page, (desk) => desk.send({ entry: id, text: "Yes, deliver.", files: [] }));
 	const prompt = await eventually(() => first.prompts.find((candidate) => candidate.text.includes("Yes, deliver.")));
 	expect(prompt.sessionID).toBe("ses_main");
@@ -210,7 +210,7 @@ test("a second plugin instance (another OpenCode) shares the one service and the
 	const log = await readFile(join(home, "service.log"), "utf8");
 	expect(log.match(/desk: serving/g)).toHaveLength(1);
 	// The page counts sessions in desk mode, not plugin instances: both report ses_main, which counts once.
-	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
+	const page = await registeredPage(home);
 	const view = await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect));
 	// One service for both (its log says it started once, above), and the switch is shared.
 	expect(present(Array.from(view)[0])).toMatchObject({ deskMode: ["ses_main"] });
@@ -223,7 +223,7 @@ test("/desk-mode again turns it off", async () => {
 	expect(present(first.synthetic.at(-1)).description).toBe("Desk mode off");
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// Its last session in desk mode gone, the first instance hangs up; the second still has ses_main on.
-	const page = JSON.parse(await readFile(join(home, "service.json"), "utf8")).url as string;
+	const page = await registeredPage(home);
 	const view = async () =>
 		present(Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]);
 	await eventually(async () => (await view()).deskMode.length === 1);
