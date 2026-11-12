@@ -80,13 +80,14 @@ export class Sessions extends Context.Service<
 							const lookup = yield* opencode.session(session);
 							const info =
 								lookup._tag === "Known" ? lookup.session : lookup._tag === "Unknown" ? null : (remembered ?? null);
-							yield* SubscriptionRef.update(state, (now) => {
-								const stale = new Set(now.stale);
+							yield* SubscriptionRef.update(state, (now) => ({
+								sessions: new Map(now.sessions).set(session, info),
 								// Couldn't be asked: what was known stands, and it's asked again next time.
-								if (lookup._tag === "Unreachable") stale.add(session);
-								else stale.delete(session);
-								return { sessions: new Map(now.sessions).set(session, info), stale };
-							});
+								stale:
+									lookup._tag === "Unreachable"
+										? new Set([...now.stale, session])
+										: new Set([...now.stale].filter((other) => other !== session)),
+							}));
 							return named(info, directory);
 						}),
 					// News: what's known of a session changed, or a session is to be asked again. `name` remembering what it

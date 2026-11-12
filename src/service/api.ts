@@ -2,6 +2,7 @@
  * What the service does for its clients: the plugin's requests (`protocol.ts`) and the page's views, in terms of
  * the desk and the sessions its desks belong to. The socket and the HTTP server only carry these.
  */
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HttpServer from "effect/http/HttpServer";
@@ -61,15 +62,14 @@ export class Api extends Context.Service<
 				/** `session`'s desk: `session` is a top-level session's id (the page's URL). */
 				const view = (session: string | undefined, entries: ReadonlyArray<Entry>) =>
 					Effect.gen(function* () {
-						const bySession = new Map<string, Array<Entry>>();
-						for (const entry of entries) bySession.set(entry.session, [...(bySession.get(entry.session) ?? []), entry]);
+						const bySession = Arr.groupBy(entries, (entry): string => entry.session);
 						const name = (id: string, mine: ReadonlyArray<Entry>) =>
 							Effect.map(
 								// The folder its latest entry was asked from, for a session OpenCode doesn't know.
 								sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
 								(name) => ({ session: id, ...name }),
 							);
-						const desks = yield* Effect.forEach(bySession, ([id, mine]) =>
+						const desks = yield* Effect.forEach(Object.entries(bySession), ([id, mine]) =>
 							Effect.map(name(id, mine), (named) => {
 								const waiting = waitingFor(mine, "user");
 								return {
@@ -85,7 +85,7 @@ export class Api extends Context.Service<
 							failures: Object.fromEntries(yield* failures.current),
 						};
 						if (session === undefined) return { desk: null, entries: [], ...all } satisfies View;
-						const mine = bySession.get(session) ?? [];
+						const mine: ReadonlyArray<Entry> = bySession[session] ?? [];
 						const listed = desks.find((other) => other.session === session);
 						return {
 							desk: listed

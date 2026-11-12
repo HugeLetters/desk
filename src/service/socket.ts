@@ -47,11 +47,8 @@ interface Attached {
 	readonly waiting: Ref.Ref<ReadonlyMap<number, Deferred.Deferred<Outcome>>>;
 }
 
-const without = <K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> => {
-	const rest = new Map(map);
-	rest.delete(key);
-	return rest;
-};
+const without = <K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> =>
+	new Map([...map].filter(([other]) => other !== key));
 
 const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>) =>
 	PluginApi.toLayer(

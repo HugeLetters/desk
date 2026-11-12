@@ -2,6 +2,7 @@
  * What waits to reach the sessions: the entries with pending text, as one message per pending message. Rebuilt from the
  * entries each time, so a retry sends the same text under the same message id.
  */
+import * as Arr from "effect/Array";
 import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "./entry";
 
 export interface Message {
@@ -22,14 +23,14 @@ export const due = (entries: ReadonlyArray<Entry>, deskMode: ReadonlySet<Session
 	messages(entries).filter((message) => deskMode.has(message.session));
 
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
-	const byMessage = new Map<MessageID, { readonly session: SessionID; readonly sent: ReadonlyArray<Entry> }>();
-	for (const entry of entries)
-		if (entry.pending !== null)
-			byMessage.set(entry.pending.message, {
-				session: entry.session,
-				sent: [...(byMessage.get(entry.pending.message)?.sent ?? []), entry],
-			});
-	return [...byMessage].map(([id, { session, sent }]) => {
+	const pending = entries.flatMap((entry) =>
+		entry.pending === null ? [] : [{ entry, message: entry.pending.message }],
+	);
+	// A message's entries are all one session's: one message per session per Submit.
+	return Object.values(Arr.groupBy(pending, ({ message }) => message)).map((group) => {
+		const { message: id, entry: first } = group[0];
+		const session = first.session;
+		const sent = group.map(({ entry }) => entry);
 		const sections = sent.map((entry) =>
 			entry.asker === "agent"
 				? { text: `## ${entry.id} Answered: ${entry.title}\n\n${entry.answer ?? ""}`, body: entry.answer ?? "" }
