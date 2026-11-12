@@ -20,12 +20,13 @@ import { Clients } from "./clients";
 /** The service's configuration, from the settings. */
 export const configuration = Effect.gen(function* () {
 	const store = yield* Settings.store;
-	return {
+	const config: App.Config = {
 		store,
 		socket: (yield* ServiceInfo.files(store)).socket,
 		port: yield* Settings.port,
 		idle: yield* Settings.idle,
-	} satisfies App.Config;
+	};
+	return config;
 });
 
 if (import.meta.main) {
