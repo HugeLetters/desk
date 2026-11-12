@@ -1,22 +1,26 @@
 /**
  * What the TUI's footer badge shows (`tui.tsx`): per desk, how many entries wait on the user and how many
  * of those are critical, and where the page is. Read from the running service's page API (`view` without a session:
- * just the list of desks), found through its registration (`<store>/service.json`). The badge doesn't start the
+ * just the list of desks), found through its registration (`service-info.ts`). The badge doesn't start the
  * service (the server part does); while there's none, or after it goes, it looks again every couple of seconds.
+ *
+ * `watch` needs the platform's `FileSystem` and `Path`, an `HttpClient` and the RPC serialization: whoever runs it
+ * provides them (the TUI's entry point, the tests).
  */
-import * as BunFileSystem from "@effect/platform-bun/BunFileSystem";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import * as Layer from "effect/Layer";
+import type * as FileSystem from "effect/FileSystem";
+import type * as HttpClient from "effect/http/HttpClient";
+import * as Option from "effect/Option";
+import type * as Path from "effect/Path";
 import * as RpcClient from "effect/rpc/RpcClient";
-import * as RpcSerialization from "effect/rpc/RpcSerialization";
+import type * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { DeskApi, DeskSummary } from "./page-api";
-import { decode } from "./service-info";
+import { deskPath, link, rpcPath } from "./routes";
+import * as ServiceInfo from "./service-info";
 
 export const Status = Schema.Struct({
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
@@ -33,23 +37,21 @@ class NoService extends Data.TaggedError("NoService")<{ readonly reason: "unregi
 
 /** The running service's page, from its registration. */
 const registered = (home: string) =>
-	// TODO main | this is adhoc logic - why does badge know where registrations are stored? | by Evgenii Perminov at Thu, 12 Nov 2026 18:41:54 GMT
-	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(`${home}/service.json`)).pipe(
-		Effect.flatMap(decode),
-		Effect.flatMap((info) => (info.url === undefined ? Effect.fail("no page yet") : Effect.succeed(info.url))),
-		Effect.mapError(() => new NoService({ reason: "unregistered" })),
+	ServiceInfo.read(home).pipe(
+		Effect.map(Option.flatMap((info) => Option.fromUndefinedOr(info.url))),
+		Effect.flatMap(
+			Option.match({
+				onNone: () => Effect.fail(new NoService({ reason: "unregistered" })),
+				onSome: Effect.succeed,
+			}),
+		),
 	);
 
-/** One service's statuses, until it goes. */
-const from = (url: string): Stream.Stream<Status, unknown> =>
+/** One service's statuses, until it goes. Its RPC protocol is the one layer provided here: it's that service's URL. */
+const from = (url: string) =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
-		Stream.map((view) => ({ url, desks: view.desks, deskMode: view.deskMode })),
-		Stream.provide(
-			RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
-				// TODO main | layer provision should happen at the boundary, not inside functions unless strictly necessary | by Evgenii Perminov at Thu, 12 Nov 2026 18:47:35 GMT
-				Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
-			),
-		),
+		Stream.map((view): Status => ({ url, desks: view.desks, deskMode: view.deskMode })),
+		Stream.provide(RpcClient.layerProtocolHttp({ url: link(url, rpcPath) })),
 	);
 
 /** Fails once the service at `url` is no longer the registered one (a stream from one that hangs might never end). */
@@ -64,7 +66,11 @@ const replaced = (home: string, url: string, every: Schedule.Schedule<unknown>) 
 export const watch = (
 	home: string,
 	every: Schedule.Schedule<unknown> = Schedule.spaced("2 seconds"),
-): Stream.Stream<Status | undefined> =>
+): Stream.Stream<
+	Status | undefined,
+	never,
+	FileSystem.FileSystem | Path.Path | HttpClient.HttpClient | RpcSerialization.RpcSerialization
+> =>
 	Stream.unwrap(
 		Effect.map(registered(home), (url) => Stream.merge(from(url), Stream.fromEffect(replaced(home, url, every)))),
 	).pipe(
@@ -75,10 +81,23 @@ export const watch = (
 		Stream.retry(every),
 		Stream.orDie,
 		Stream.changesWith(sameStatus),
-		// TODO main | inline service/layer provision | by Evgenii Perminov at Thu, 12 Nov 2026 18:48:03 GMT
-		Stream.provide(BunFileSystem.layer),
 	);
 
 /** The footer's count for a desk: none when nothing waits on the user, else how many do and how many of those are critical. */
-export const count = (summary: DeskSummary) =>
-	summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };
+export const count = (summary: DeskSummary | undefined) =>
+	summary === undefined || summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };
+
+/** What the badge shows for one desk: where its page is, and its count. */
+export interface Report {
+	readonly page: string;
+	readonly count: ReturnType<typeof count>;
+}
+
+/** The badge for `desk` (a top-level session): none unless a service answers and the session is in desk mode. */
+export const report = (status: Status | undefined, desk: string | undefined): Report | undefined =>
+	status === undefined || desk === undefined || !status.deskMode.includes(desk)
+		? undefined
+		: {
+				page: link(status.url, deskPath(desk)),
+				count: count(status.desks.find((summary) => summary.session === desk)),
+			};

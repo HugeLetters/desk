@@ -20,6 +20,7 @@ import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
 import { Desk } from "../desk";
 import { DeskApi } from "../page-api";
+import { rpcPath } from "../routes";
 import { Api } from "./api";
 import { Clients } from "./clients";
 
@@ -37,7 +38,7 @@ const Guard = HttpRouter.middleware(
 	{ global: true },
 );
 
-const Rpcs = RpcServer.layerHttp({ group: DeskApi, path: "/rpc", protocol: "http" }).pipe(
+const Rpcs = RpcServer.layerHttp({ group: DeskApi, path: rpcPath, protocol: "http" }).pipe(
 	Layer.provide(
 		DeskApi.toLayer(
 			Effect.gen(function* () {

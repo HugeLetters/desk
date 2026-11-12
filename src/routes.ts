@@ -23,5 +23,8 @@ export const sessionIn = (pathname: string) => {
 	return id === undefined ? undefined : decodeURIComponent(id);
 };
 
+/** The page's RPC API (`page-api.ts`), served beside the routes. */
+export const rpcPath = "/rpc";
+
 /** A path as a link on the page at `page` (the service's URL, e.g. `http://127.0.0.1:47400/`). */
 export const link = (page: string, path: string) => `${page.replace(/\/$/, "")}${path}`;

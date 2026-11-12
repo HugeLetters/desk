@@ -3,11 +3,15 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as Layer from "effect/Layer";
+import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { count, type Status, watch } from "../src/badge";
+import { count, report, type Status, watch } from "../src/badge";
 import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";
@@ -21,7 +25,9 @@ afterEach(async () => {
 const watching = (home: string) => {
 	const seen: Array<Status | undefined> = [];
 	const fiber = Effect.runFork(
-		Stream.runForEach(watch(home, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))),
+		Stream.runForEach(watch(home, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))).pipe(
+			Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer, RpcSerialization.layerNdjson)),
+		),
 	);
 	cleanup.push(() => Effect.runPromise(Fiber.interrupt(fiber)));
 	return { seen, latest: () => seen.at(-1) };
@@ -72,4 +78,20 @@ test("the count: none when nothing waits on the user, else how many and how many
 	expect(count(undefined)).toBeUndefined();
 	expect(count({ ...summary, waiting: 0, critical: 0 })).toBeUndefined();
 	expect(count({ ...summary, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
+});
+
+test("the report for a desk: its page and count while its session is in desk mode, else nothing", () => {
+	const summary = { session: "ses_a", title: "A", folder: "a", known: true, waiting: 2, critical: 0 };
+	const status = { url: "http://127.0.0.1:47400/", desks: [summary], deskMode: ["ses_a"] };
+	expect(report(status, "ses_a")).toEqual({
+		page: "http://127.0.0.1:47400/sessions/ses_a",
+		count: { waiting: 2, critical: 0 },
+	});
+	expect(report({ ...status, desks: [] }, "ses_a")).toEqual({
+		page: "http://127.0.0.1:47400/sessions/ses_a",
+		count: undefined,
+	});
+	expect(report(status, "ses_b")).toBeUndefined();
+	expect(report(status, undefined)).toBeUndefined();
+	expect(report(undefined, "ses_a")).toBeUndefined();
 });

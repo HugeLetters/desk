@@ -35,7 +35,7 @@ import {
 } from "../src/entry";
 import { Refusal } from "../src/errors";
 import { DeskApi, type Draft, type View } from "../src/page-api";
-import { deskPath, entryPath, patterns, sessionIn } from "../src/routes";
+import { deskPath, entryPath, patterns, rpcPath, sessionIn } from "../src/routes";
 import { deliveryFailed, refusal } from "../src/wording";
 import * as Attachments from "./attachments";
 import { type Local, render as markdown, renderDiagrams } from "./markdown";
@@ -43,7 +43,7 @@ import { type Local, render as markdown, renderDiagrams } from "./markdown";
 const isRefusal = Schema.is(Refusal);
 
 const runtime = ManagedRuntime.make(
-	RpcClient.layerProtocolHttp({ url: "/rpc" }).pipe(
+	RpcClient.layerProtocolHttp({ url: rpcPath }).pipe(
 		Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
 	),
 );

@@ -20,6 +20,7 @@ import { Refusal } from "../../src/errors";
 import { OpenCode } from "../../src/opencode";
 import { DeskApi } from "../../src/page-api";
 import * as Connection from "../../src/plugin/connection";
+import { link, rpcPath } from "../../src/routes";
 import { Api } from "../../src/service/api";
 import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
@@ -125,7 +126,7 @@ export const rpc = <A, E>(url: string, f: (desk: Effect.Success<typeof client>) 
 	Effect.runPromise(
 		Effect.scoped(Effect.flatMap(client, f)).pipe(
 			Effect.provide(
-				RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
+				RpcClient.layerProtocolHttp({ url: link(url, rpcPath) }).pipe(
 					Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
 				),
 			),
