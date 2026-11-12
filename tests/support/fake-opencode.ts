@@ -5,11 +5,15 @@
  * in its OpenCode.
  */
 
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type { SessionID } from "../../src/entry";
 import type { Options } from "../../src/plugin/connection";
 import type { Prompt, SessionInfo } from "../../src/protocol";
 import { present } from "./present";
+
+/** What the fake OpenCode fails with: down, refusing, or losing a reply; `message` is what the plugin passes on. */
+class FakeFailure extends Data.TaggedError("FakeFailure")<{ readonly message: string }> {}
 
 export interface FakeServer {
 	/** Names the instance. */
@@ -61,17 +65,19 @@ export function fakeOpenCode() {
 	const serve = (fake: FakeServer): Options["serve"] => ({
 		session: (sessionID) =>
 			Effect.suspend(() =>
-				fake.down ? Effect.fail(new Error("connection refused")) : Effect.succeed(fake.sessions.get(sessionID) ?? null),
+				fake.down
+					? Effect.fail(new FakeFailure({ message: "connection refused" }))
+					: Effect.succeed(fake.sessions.get(sessionID) ?? null),
 			),
 		prompt: (prompt) =>
 			Effect.suspend(() => {
 				fake.calls.push(prompt);
-				if (fake.down) return Effect.fail(new Error("connection refused"));
-				if (fake.refuse !== undefined) return Effect.fail(new Error(fake.refuse));
+				if (fake.down) return Effect.fail(new FakeFailure({ message: "connection refused" }));
+				if (fake.refuse !== undefined) return Effect.fail(new FakeFailure({ message: fake.refuse }));
 				if (!fake.admitted.some((other) => other.id === prompt.id)) fake.admitted.push(prompt);
 				if (fake.loseNextReply) {
 					fake.loseNextReply = false;
-					return Effect.fail(new Error("socket hang up"));
+					return Effect.fail(new FakeFailure({ message: "socket hang up" }));
 				}
 				return Effect.void;
 			}),

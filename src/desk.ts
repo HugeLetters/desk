@@ -396,15 +396,13 @@ export class Desk extends Context.Service<
 						),
 					delivered: (message) =>
 						modify((all) =>
-							Effect.gen(function* () {
-								// Delivery is never refused.
-								yield* Effect.orDie(
-									each(
-										all.filter((entry) => entry.pending?.message === message),
-										Event.Delivered(),
-									),
-								);
-							}),
+							// Delivery is never refused.
+							Effect.orDie(
+								each(
+									all.filter((entry) => entry.pending?.message === message),
+									Event.Delivered(),
+								),
+							),
 						),
 					discard: (id) =>
 						modify((all) =>

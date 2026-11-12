@@ -11,7 +11,15 @@
 		"skipLibCheck": true,
 		"types": ["bun"],
 		"allowImportingTsExtensions": true,
-		"noImplicitOverride": true
+		"noImplicitOverride": true,
+		"plugins": [
+			{
+				"name": "@effect/language-service",
+				// `import * as Effect from "effect/Effect"`, never `import { Effect } from "effect"`.
+				"namespaceImportPackages": ["effect", "@effect/*"],
+				"topLevelNamedReexports": "follow"
+			}
+		]
 	},
 	"include": ["src/**/*.ts", "src/**/*.tsx", "page/**/*.ts", "page/**/*.tsx", "tests/**/*.ts", "demo/**/*.ts"]
 }

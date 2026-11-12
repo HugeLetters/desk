@@ -19,7 +19,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as RpcClient from "effect/rpc/RpcClient";
-import type { RpcClientError } from "effect/rpc/RpcClientError";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
@@ -31,7 +31,7 @@ import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type 
 /** The service can't be reached, or won't take this plugin (the message says why). */
 export class DeskError extends Data.TaggedError("DeskError")<{ readonly message: string }> {}
 
-export type Client = RpcClient.FromGroup<typeof PluginApi, RpcClientError>;
+export type Client = RpcClient.FromGroup<typeof PluginApi, RpcClientError.RpcClientError>;
 
 /** `R`: what starting the service needs. */
 export interface Options<R = never> {

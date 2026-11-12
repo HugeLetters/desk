@@ -16,7 +16,7 @@ import type { Options } from "./connection";
  * a dependency of the desk, and `Schema.is` of a class wants an instance of that very class; this matches the error's
  * tag, which holds however it was made.
  */
-const SessionNotFound = Schema.Struct({ _tag: Schema.Literal("SessionNotFoundError") });
+const SessionNotFound = Schema.TaggedStruct("SessionNotFoundError", {});
 export const notFound = Schema.is(SessionNotFound);
 
 export type Context = Pick<Plugin.Context, "session">;

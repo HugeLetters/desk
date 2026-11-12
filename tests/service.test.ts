@@ -14,7 +14,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
-import type { RpcClientError } from "effect/rpc/RpcClientError";
+import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
@@ -713,7 +713,7 @@ const Loose = RpcGroup.make(
 );
 const loose = <A, E>(
 	path: string,
-	f: (client: RpcClient.FromGroup<typeof Loose, RpcClientError>) => Effect.Effect<A, E>,
+	f: (client: RpcClient.FromGroup<typeof Loose, RpcClientError.RpcClientError>) => Effect.Effect<A, E>,
 ) =>
 	Effect.runPromise(
 		Effect.flatMap(RpcClient.make(Loose), f).pipe(

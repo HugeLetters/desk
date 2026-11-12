@@ -7,6 +7,7 @@
 		"./tui": "./src/tui.tsx"
 	},
 	"scripts": {
+		"prepare": "effect-language-service patch",
 		"postinstall": "vite build page",
 		"page": "vite build --watch page",
 		"pretest": "vite build page",
@@ -27,6 +28,7 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.6.6",
+		"@effect/language-service": "0.87.5",
 		"@opencode/theme": "2.2.6",
 		"@opentui/core": "0.8.2",
 		"@opentui/solid": "0.8.2",
