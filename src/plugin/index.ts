@@ -41,8 +41,10 @@ const isRefusal = Schema.is(Refusal);
 
 /** Whether `error` is OpenCode saying it doesn't know the session. */
 const notFound = (error: unknown) =>
+	// TODO main | just define a schema - or use one if opencode exports it already | by Evgenii Perminov at Thu, 12 Nov 2026 18:52:06 GMT
 	typeof error === "object" && error !== null && "_tag" in error && error._tag === "SessionNotFoundError";
 
+// TODO main | a lot of stuff is bundled in plugin which makes it hard to follow | by Evgenii Perminov at Thu, 12 Nov 2026 18:51:50 GMT
 export default Plugin.define({
 	id: "desk",
 	effect: (ctx) =>
@@ -52,14 +54,8 @@ export default Plugin.define({
 				homedir(),
 			);
 			const port = String(ctx.options.port ?? process.env.DESK_PORT ?? 47400);
-			const timeout = yield* Schema.decodeUnknownEffect(
-				Schema.Union([Schema.DurationFromString, Schema.DurationFromMillis]),
-			)(ctx.options.timeout ?? "30 seconds").pipe(
-				Effect.tapError(() =>
-					Effect.logWarning(`desk: the timeout option isn't a duration (${ctx.options.timeout}); using 30 seconds`),
-				),
-				Effect.orElseSucceed(() => Duration.seconds(30)),
-			);
+			const timeout = yield* parseTimeout(ctx.options.timeout);
+
 			/** The sessions in desk mode in this plugin instance's directory (`on/<id>` in the plugin's storage), forgetting deleted ones. */
 			const modes = Effect.gen(function* () {
 				const sessions = yield* Stream.paginate(undefined as string | undefined, (after) =>
@@ -195,13 +191,15 @@ export default Plugin.define({
 			];
 			/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 			const tool =
-				<I>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, unknown>) =>
+				<I, E>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, E>) =>
 				(input: I, context: Tool.Context) =>
 					Effect.gen(function* () {
-						if (!(yield* on(context.sessionID)))
-							return yield* Effect.fail(
-								new Error("The desk is off for this session; the user turns it on with /desk-mode."),
-							);
+						if (!(yield* on(context.sessionID))) {
+							return yield* new Tool.Error({
+								message: "The desk is off for this session; the user turns it on with /desk-mode.",
+							});
+						}
+
 						return { content: yield* run(input, context.sessionID) };
 					}).pipe(
 						within,
@@ -349,6 +347,7 @@ export default Plugin.define({
 			});
 
 			// Sessions with the desk off don't see the tools at all.
+			// TODO main | there must be a cleaner way to do this - just register/unregister tools depending on whether its on | by Evgenii Perminov at Thu, 12 Nov 2026 18:53:11 GMT
 			yield* ctx.session.hook("context", (event) =>
 				Effect.map(
 					Effect.orElseSucceed(on(event.sessionID), () => false),
@@ -360,3 +359,16 @@ export default Plugin.define({
 			);
 		}),
 });
+
+function parseTimeout(timeout: unknown) {
+	const fallbackTimeout = Duration.seconds(30);
+
+	return Schema.decodeUnknownEffect(Schema.Union([Schema.DurationFromString, Schema.DurationFromMillis]))(timeout).pipe(
+		Effect.tapError(() =>
+			Effect.logWarning(
+				`desk: the timeout option isn't a duration (${timeout}); using ${Duration.format(fallbackTimeout)}`,
+			),
+		),
+		Effect.orElseSucceed(() => fallbackTimeout),
+	);
+}

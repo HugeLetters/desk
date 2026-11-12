@@ -33,6 +33,7 @@ class NoService extends Data.TaggedError("NoService")<{ readonly reason: "unregi
 
 /** The running service's page, from its registration. */
 const registered = (home: string) =>
+	// TODO main | this is adhoc logic - why does badge know where registrations are stored? | by Evgenii Perminov at Thu, 12 Nov 2026 18:41:54 GMT
 	Effect.flatMap(FileSystem.FileSystem, (fs) => fs.readFileString(`${home}/service.json`)).pipe(
 		Effect.flatMap(decode),
 		Effect.flatMap((info) => (info.url === undefined ? Effect.fail("no page yet") : Effect.succeed(info.url))),
@@ -45,6 +46,7 @@ const from = (url: string): Stream.Stream<Status, unknown> =>
 		Stream.map((view) => ({ url, desks: view.desks, deskMode: view.deskMode })),
 		Stream.provide(
 			RpcClient.layerProtocolHttp({ url: `${url}rpc` }).pipe(
+				// TODO main | layer provision should happen at the boundary, not inside functions unless strictly necessary | by Evgenii Perminov at Thu, 12 Nov 2026 18:47:35 GMT
 				Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
 			),
 		),
@@ -73,9 +75,10 @@ export const watch = (
 		Stream.retry(every),
 		Stream.orDie,
 		Stream.changesWith(sameStatus),
+		// TODO main | inline service/layer provision | by Evgenii Perminov at Thu, 12 Nov 2026 18:48:03 GMT
 		Stream.provide(BunFileSystem.layer),
 	);
 
 /** The footer's count for a desk: none when nothing waits on the user, else how many do and how many of those are critical. */
-export const count = (summary: DeskSummary | undefined) =>
-	summary === undefined || summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };
+export const count = (summary: DeskSummary) =>
+	summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };
