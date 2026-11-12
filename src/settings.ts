@@ -29,6 +29,7 @@ export const port = Config.Int("DESK_PORT").pipe(Config.withDefault(47400));
  * A path from `opencode.json`: a leading `~` is the user's home, as in a shell (the README's example says
  * `"home": "~/.local/share/desk"`). Nothing expands it on the way: JSON isn't a shell.
  */
+// TODO main | why have that just to expand ~ to home? | by Evgenii Perminov at Thu, 12 Nov 2026 21:48:31 GMT
 const expandHome = (configured: string) =>
 	configured !== "~" && !configured.startsWith("~/")
 		? Effect.succeed(configured)
@@ -59,7 +60,9 @@ const option = <A, E, R>(
 	fallback: Effect.Effect<A, E, R>,
 	show: (value: A) => string = String,
 ) =>
+	// TODO main | just turn options into a config provider w/ fallback env config provider, thats it. and just read from config then - and no need to split different ways to read config(w/ or w/o options) - everyone just reads Config and you just provide whichever provider necessary | by Evgenii Perminov at Thu, 12 Nov 2026 21:52:49 GMT
 	Effect.matchEffect(Config.option(config).parse(ConfigProvider.fromUnknown(options)), {
+		// TODO main | why not just log the error here w/ name provided value? then you dont need what | by Evgenii Perminov at Thu, 12 Nov 2026 21:48:57 GMT
 		onFailure: () =>
 			Effect.tap(fallback, (value) =>
 				Effect.logWarning(`desk: the ${name} option isn't ${what} (${options[name]}); using ${show(value)}`),
@@ -68,11 +71,12 @@ const option = <A, E, R>(
 	});
 
 /** The store, for the plugin and its TUI part: the `home` option, else as the service reads it. */
-export const home = (options: Options): Effect.Effect<string, Config.ConfigError, Path.Path> =>
+export const home = (options: Options) =>
+	// TODO main | why is store a fallback to home? | by Evgenii Perminov at Thu, 12 Nov 2026 21:52:17 GMT
 	Effect.flatMap(option(options, "home", Config.String("home"), "a path", store), expandHome);
 
 /** The plugin's settings from its options. */
-export const plugin = (options: Options): Effect.Effect<Plugin, Config.ConfigError, Path.Path> =>
+export const plugin = (options: Options) =>
 	Effect.all({
 		home: home(options),
 		port: option(options, "port", Config.Int("port"), "a port", port),

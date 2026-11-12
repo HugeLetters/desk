@@ -5,7 +5,6 @@
  */
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
-import type * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
@@ -20,6 +19,7 @@ export type Info = typeof Info.Type;
 
 /** A registration's text, parsed: fails on anything that isn't one (an empty or half-written file, say). */
 export const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info));
+// TODO main | wht not as effect? | by Evgenii Perminov at Thu, 12 Nov 2026 22:09:45 GMT
 export const encode = Schema.encodeSync(Schema.fromJsonString(Info));
 
 /** Where the service's files are in `store`. */
@@ -34,9 +34,8 @@ export const files = (store: string) =>
 	}));
 
 /** The registration in `store` now; none when there's no file or it isn't one. */
-export const read = (store: string): Effect.Effect<Option.Option<Info>, never, FileSystem.FileSystem | Path.Path> =>
-	Effect.gen(function* () {
-		const fs = yield* FileSystem.FileSystem;
-		const { registration } = yield* files(store);
-		return yield* fs.readFileString(registration).pipe(Effect.flatMap(decode), Effect.option);
-	});
+export const read = Effect.fnUntraced(function* (store: string) {
+	const fs = yield* FileSystem.FileSystem;
+	const { registration } = yield* files(store);
+	return yield* fs.readFileString(registration).pipe(Effect.flatMap(decode), Effect.option);
+});

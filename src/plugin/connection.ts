@@ -18,6 +18,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Predicate from "effect/Predicate";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -115,7 +116,7 @@ const off = "Desk mode is off in this directory; the user turns it on with /desk
 export const errorMessage = (error: unknown) =>
 	error instanceof Error
 		? error.message
-		: typeof error === "object" && error !== null && "message" in error
+		: Predicate.isObject(error) && Predicate.hasProperty(error, "message")
 			? String(error.message)
 			: String(error);
 

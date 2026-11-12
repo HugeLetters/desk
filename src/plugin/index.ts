@@ -17,6 +17,7 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/effect";
 import * as Effect from "effect/Effect";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ServiceInfo from "../service-info";
 import * as Settings from "../settings";
@@ -27,7 +28,7 @@ import * as Modes from "./modes";
 import * as Sessions from "./sessions";
 import * as Tools from "./tools";
 
-export default Plugin.define({
+export default Plugin.define<Scope.Scope>({
 	id: "desk",
 	effect: (ctx) =>
 		Effect.gen(function* () {
@@ -61,9 +62,5 @@ export default Plugin.define({
 
 			yield* Command.register(ctx, { ...calls, modes, sync });
 			yield* Tools.register(ctx, { ...calls, modes, root });
-		}).pipe(
-			// Without a home directory or with a broken environment, the plugin can't work at all.
-			Effect.orDie,
-			Effect.provide(BunServices.layer),
-		),
+		}).pipe(Effect.provide(BunServices.layer), Effect.orDie),
 });
