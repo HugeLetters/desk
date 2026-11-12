@@ -7,8 +7,6 @@
  * must come from the page itself (no Origin, or this origin), so other sites open in the browser can't post into a
  * session. Each open page is a client of the service (its `view` stream) while it stays open.
  */
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
 import * as Effect from "effect/Effect";
 import * as HttpRouter from "effect/http/HttpRouter";
@@ -78,17 +76,23 @@ const Files = HttpRouter.add("GET", "/files/:id/*", () =>
 
 /** Serves the page; needs the `HttpServer` (`server`). */
 export const layer = (store: string) =>
-	HttpRouter.serve(
-		Layer.mergeAll(
-			Guard,
-			Rpcs,
-			Files,
-			HttpStaticServer.layer({ root: join(store, "attachments"), prefix: "/attachments" }),
-			// The page as built by Vite (`bun install`, or `bun run page` while editing it); unbuilt, it's a 404.
-			// Any other path is one of the page's own routes (`/sessions/<id>/…`): it gets index.html.
-			HttpStaticServer.layer({ root: fileURLToPath(new URL("../../page/dist", import.meta.url)), spa: true }),
-		),
-		{ disableLogger: true, disableListenLog: true },
+	Layer.unwrap(
+		Effect.gen(function* () {
+			const path = yield* Path.Path;
+			const page = yield* path.fromFileUrl(new URL("../../page/dist", import.meta.url));
+			return HttpRouter.serve(
+				Layer.mergeAll(
+					Guard,
+					Rpcs,
+					Files,
+					HttpStaticServer.layer({ root: path.join(store, "attachments"), prefix: "/attachments" }),
+					// The page as built by Vite (`bun install`, or `bun run page` while editing it); unbuilt, it's a 404.
+					// Any other path is one of the page's own routes (`/sessions/<id>/…`): it gets index.html.
+					HttpStaticServer.layer({ root: page, spa: true }),
+				),
+				{ disableLogger: true, disableListenLog: true },
+			);
+		}),
 	);
 
 /**

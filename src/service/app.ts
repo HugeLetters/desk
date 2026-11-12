@@ -2,7 +2,6 @@
  * The desk service, assembled: the store and the desk on it, the projects, delivery, the page and the socket.
  * OpenCode is reached only through the plugin instances connected to the socket; tests connect fake ones.
  */
-import * as BunServices from "@effect/platform-bun/BunServices";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
@@ -32,12 +31,12 @@ export interface Config {
 	readonly outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem> | undefined;
 }
 
+/** Needs the platform (`BunServices.layer`): provided where the service is run, `main.ts` or the tests. */
 export const layer = (config: Config) => {
 	const core = Layer.mergeAll(Desk.layer, Sessions.layer, Delivery.Failures.layer).pipe(
 		Layer.provideMerge(Store.layer(config.store)),
 		Layer.provideMerge(OpenCode.layer),
 		Layer.provideMerge(Clients.layer(config.idle)),
-		Layer.provideMerge(BunServices.layer),
 	);
 	const server =
 		config.port === 0 ? Http.server(0) : Http.server(config.port).pipe(Layer.catchCause(() => Http.server(0)));
@@ -58,6 +57,6 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(server),
 		Layer.provideMerge(core),
 		// The lock first: nothing else starts while another service has the store.
-		Layer.provideMerge(Registration.layer(config.store).pipe(Layer.provide(BunServices.layer))),
+		Layer.provideMerge(Registration.layer(config.store)),
 	);
 };

@@ -5,6 +5,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -52,7 +53,7 @@ export async function startService(
 				idle: options.idle ?? 60_000,
 				retry: "50 millis",
 				outdated: options.outdated ?? Effect.succeed(false),
-			}),
+			}).pipe(Layer.provideMerge(BunServices.layer)),
 			scope,
 		),
 	)) as Context.Context<Api | Clients | OpenCode>;

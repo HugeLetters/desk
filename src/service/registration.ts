@@ -19,10 +19,10 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
+import type * as Path from "effect/Path";
 import * as Machine from "../machine";
 import { protocol } from "../protocol";
-import { decode, encode, type Info } from "../service-info";
+import * as ServiceInfo from "../service-info";
 
 export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
 	readonly path: string;
@@ -120,23 +120,19 @@ export class Registration extends Context.Service<
 >()("desk/Registration") {
 	/** Takes the store's lock for the layer's lifetime, or fails with `AlreadyRunning`. */
 	static layer(store: string) {
-		const own: Info = { pid: process.pid, protocol };
+		const own: ServiceInfo.Info = { pid: process.pid, protocol };
 		return Layer.effect(
 			Registration,
 			Effect.gen(function* () {
 				const fs = yield* FileSystem.FileSystem;
-				const path = (yield* Path.Path).join(store, "service.json");
+				const path = (yield* ServiceInfo.files(store)).registration;
 				/** The registration there now; undefined when there's none or it isn't one. */
-				const read = fs.readFileString(path).pipe(
-					Effect.flatMap(decode),
-					Effect.option,
-					Effect.map((info) => (info._tag === "Some" ? info.value : undefined)),
-				);
+				const read = Effect.map(ServiceInfo.read(store), Option.getOrUndefined);
 				// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
 				// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
 				const create = Effect.gen(function* () {
 					const temp = `${path}.${process.pid}.new`;
-					yield* fs.writeFileString(temp, encode(own));
+					yield* fs.writeFileString(temp, ServiceInfo.encode(own));
 					yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 				});
 				const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
@@ -168,7 +164,7 @@ export class Registration extends Context.Service<
 				}).pipe(Effect.scoped);
 
 				/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
-				const step = (state: State): Effect.Effect<Event, unknown> => {
+				const step = (state: State): Effect.Effect<Event, unknown, FileSystem.FileSystem | Path.Path> => {
 					switch (state._tag) {
 						case "Creating":
 							return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
@@ -188,7 +184,7 @@ export class Registration extends Context.Service<
 							return Effect.never;
 					}
 				};
-				const machine: Machine.Machine<State, Event> = {
+				const machine: Machine.Machine<State, Event, FileSystem.FileSystem | Path.Path> = {
 					initial: State.Creating({ attempt: 0 }),
 					reconcile,
 					run: (state, emit) => Effect.flatMap(Effect.orElseSucceed(step(state), Event.Failed), emit),
@@ -211,7 +207,7 @@ export class Registration extends Context.Service<
 					publish: (where) =>
 						Effect.gen(function* () {
 							const temp = `${path}.${process.pid}`;
-							yield* fs.writeFileString(temp, encode({ ...own, ...where }));
+							yield* fs.writeFileString(temp, ServiceInfo.encode({ ...own, ...where }));
 							yield* fs.rename(temp, path);
 						}).pipe(Effect.orDie),
 				});

@@ -600,7 +600,12 @@ describe("the service's life", () => {
 	const another = async (store: string, port: number) => {
 		const scope = Effect.runSync(Scope.make());
 		const exit = await Effect.runPromiseExit(
-			Layer.buildWithScope(App.layer({ store, socket: join(store, "desk.sock"), port, idle: 60_000 }), scope),
+			Layer.buildWithScope(
+				App.layer({ store, socket: join(store, "desk.sock"), port, idle: 60_000 }).pipe(
+					Layer.provideMerge(BunServices.layer),
+				),
+				scope,
+			),
 		);
 		return { exit, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
 	};
