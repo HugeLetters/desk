@@ -1,5 +1,5 @@
 /**
- * The running service's files in a store: its registration, `<store>/service.json` (`service/registration.ts`), which
+ * The running service's files in a store: its registration, `<store>/service.json` (`service/storage/registration.ts`), which
  * says what it is and where its page and socket are, and the socket and the log beside it. Read by the service itself,
  * the plugin and the TUI badge, with this one schema and these paths.
  */

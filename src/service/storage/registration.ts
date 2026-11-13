@@ -1,6 +1,7 @@
 /**
  * The service's registration, `<store>/service.json`: the lock that keeps the store to one service, and what the
- * running service is (`Info`, `service-info.ts`), as OpenCode's own `service.json` is.
+ * running service is (`Info`, `service-info.ts`), as OpenCode's own `service.json` is. Part of the store on disk: the
+ * file storage (`files.ts`) takes it before anything else, and `Storage.publish` writes where the page is.
  *
  * A service creates the file exclusively when it starts. If it exists and names a live process, another service has
  * the store and this one leaves (`AlreadyRunning`); if that process is gone, the file is stale and replaced, by one
@@ -13,12 +14,10 @@
  * and, for good, `Registered` or `Taken`.
  */
 import * as Clock from "effect/Clock";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import { flow } from "effect/Function";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Unify from "effect/Unify";
@@ -107,115 +106,111 @@ export const reconcile = (state: State, event: Event): State => {
 	}
 };
 
-export class Registration extends Context.Service<
-	Registration,
-	{
-		/** Records where the page and the socket are, once they are. */
-		readonly publish: (where: { readonly url: string; readonly socket: string }) => Effect.Effect<void>;
-	}
->()("desk/Registration") {
-	/** Takes the store's lock for the layer's lifetime, or fails with `AlreadyRunning`. */
-	static layer(store: string) {
-		const own: ServiceInfo.Info = { pid: process.pid, protocol };
-		return Layer.effect(
-			Registration,
-			Effect.gen(function* () {
-				const fs = yield* FileSystem.FileSystem;
-				const path = (yield* ServiceInfo.files(store)).registration;
-				/** The registration there now; undefined when there's none or it isn't one. */
-				const read = Effect.map(ServiceInfo.read(store), Option.getOrUndefined);
-				// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
-				// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
-				const create = Effect.gen(function* () {
-					const temp = `${path}.${process.pid}.new`;
-					yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
-					yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
-				});
-				const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
-					error._tag === "PlatformError" && error.reason?._tag === "AlreadyExists";
-				/**
-				 * Replacing a dead service's file, one service at a time: whoever makes this directory. Only a service holding
-				 * it removes the file, after reading it again: two removing at once, one could remove the other's fresh one,
-				 * and both would hold the store. One left by a service that crashed while replacing goes after 10 seconds.
-				 */
-				const takeover = `${path}.takeover`;
-				const replace = Effect.gen(function* () {
-					const made = yield* fs.makeDirectory(takeover).pipe(
-						Effect.as(true),
-						Effect.catchIf(exists, () => Effect.succeed(false)),
-					);
-					if (!made) {
-						const left = yield* fs.stat(takeover).pipe(Effect.option);
-						const age = Option.flatMap(left, (info) => info.mtime);
-						if (Option.isSome(age) && (yield* Clock.currentTimeMillis) - age.value.getTime() > 10_000)
-							yield* fs.remove(takeover, { recursive: true });
-						return Event.Contended();
-					}
-					yield* Effect.addFinalizer(() => Effect.ignore(fs.remove(takeover, { recursive: true })));
-					const holder = yield* read;
-					if (holder && alive(holder.pid)) return Event.Held({ pid: holder.pid });
-					yield* fs.remove(path, { force: true });
-					yield* create;
-					return Event.Created();
-				}).pipe(Effect.scoped);
-
-				/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
-				const step = flow(
-					(state: State) => {
-						switch (state._tag) {
-							case "Creating":
-								return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
-									Effect.as(Event.Created()),
-									Effect.catchIf(exists, () => Effect.succeed(Event.Exists())),
-								);
-							case "Checking":
-								return Effect.map(read, (holder) =>
-									holder && alive(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
-								);
-							case "Replacing":
-								return replace;
-							case "Waiting":
-								return Effect.as(Effect.sleep("100 millis"), Event.Retry());
-							case "Registered":
-							case "Taken":
-								return Effect.never;
-						}
-					},
-					(v) => Unify.unify(v),
-				);
-
-				const machine: Machine.Machine<State, Event, FileSystem.FileSystem | Path.Path> = {
-					initial: State.Creating({ attempt: 0 }),
-					reconcile,
-					run: (state, emit) =>
-						Effect.flatMap(
-							Effect.orElseSucceed(step(state), () => Event.Failed()),
-							emit,
-						),
-				};
-				const actor = yield* Machine.start(machine);
-				const taken = yield* actor.when((state) =>
-					state._tag === "Registered"
-						? Option.some(Option.none<number>())
-						: state._tag === "Taken"
-							? Option.some(Option.some(state.pid))
-							: Option.none(),
-				);
-				if (Option.isSome(taken)) return yield* new AlreadyRunning({ path, pid: taken.value });
-				yield* Effect.addFinalizer(() =>
-					Effect.flatMap(read, (holder) =>
-						holder?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void,
-					),
-				);
-				return Registration.of({
-					publish: (where) =>
-						Effect.gen(function* () {
-							const temp = `${path}.${process.pid}`;
-							yield* fs.writeFileString(temp, yield* ServiceInfo.encode({ ...own, ...where }));
-							yield* fs.rename(temp, path);
-						}).pipe(Effect.orDie),
-				});
-			}),
-		);
-	}
+/** Where the page and the socket are, once they are: what `publish` records. */
+export interface Where {
+	readonly url: string;
+	readonly socket: string;
 }
+
+/**
+ * Takes the store's lock for the scope's lifetime, or fails with `AlreadyRunning`; returns `publish`, which records
+ * where the page and the socket are.
+ */
+export const register = (store: string) => {
+	const own: ServiceInfo.Info = { pid: process.pid, protocol };
+	return Effect.gen(function* () {
+		const fs = yield* FileSystem.FileSystem;
+		const path = (yield* ServiceInfo.files(store)).registration;
+		/** The registration there now; undefined when there's none or it isn't one. */
+		const read = Effect.map(ServiceInfo.read(store), Option.getOrUndefined);
+		// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
+		// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
+		const create = Effect.gen(function* () {
+			const temp = `${path}.${process.pid}.new`;
+			yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
+			yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
+		});
+		const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
+			error._tag === "PlatformError" && error.reason?._tag === "AlreadyExists";
+		/**
+		 * Replacing a dead service's file, one service at a time: whoever makes this directory. Only a service holding
+		 * it removes the file, after reading it again: two removing at once, one could remove the other's fresh one,
+		 * and both would hold the store. One left by a service that crashed while replacing goes after 10 seconds.
+		 */
+		const takeover = `${path}.takeover`;
+		const replace = Effect.gen(function* () {
+			const made = yield* fs.makeDirectory(takeover).pipe(
+				Effect.as(true),
+				Effect.catchIf(exists, () => Effect.succeed(false)),
+			);
+			if (!made) {
+				const left = yield* fs.stat(takeover).pipe(Effect.option);
+				const age = Option.flatMap(left, (info) => info.mtime);
+				if (Option.isSome(age) && (yield* Clock.currentTimeMillis) - age.value.getTime() > 10_000)
+					yield* fs.remove(takeover, { recursive: true });
+				return Event.Contended();
+			}
+			yield* Effect.addFinalizer(() => Effect.ignore(fs.remove(takeover, { recursive: true })));
+			const holder = yield* read;
+			if (holder && alive(holder.pid)) return Event.Held({ pid: holder.pid });
+			yield* fs.remove(path, { force: true });
+			yield* create;
+			return Event.Created();
+		}).pipe(Effect.scoped);
+
+		/** What being in `state` comes to: what happened (nothing, for good, once it's settled). */
+		const step = flow(
+			(state: State) => {
+				switch (state._tag) {
+					case "Creating":
+						return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
+							Effect.as(Event.Created()),
+							Effect.catchIf(exists, () => Effect.succeed(Event.Exists())),
+						);
+					case "Checking":
+						return Effect.map(read, (holder) =>
+							holder && alive(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
+						);
+					case "Replacing":
+						return replace;
+					case "Waiting":
+						return Effect.as(Effect.sleep("100 millis"), Event.Retry());
+					case "Registered":
+					case "Taken":
+						return Effect.never;
+				}
+			},
+			(v) => Unify.unify(v),
+		);
+
+		const machine: Machine.Machine<State, Event, FileSystem.FileSystem | Path.Path> = {
+			initial: State.Creating({ attempt: 0 }),
+			reconcile,
+			run: (state, emit) =>
+				Effect.flatMap(
+					Effect.orElseSucceed(step(state), () => Event.Failed()),
+					emit,
+				),
+		};
+		const actor = yield* Machine.start(machine);
+		const taken = yield* actor.when((state) =>
+			state._tag === "Registered"
+				? Option.some(Option.none<number>())
+				: state._tag === "Taken"
+					? Option.some(Option.some(state.pid))
+					: Option.none(),
+		);
+		if (Option.isSome(taken)) return yield* new AlreadyRunning({ path, pid: taken.value });
+		yield* Effect.addFinalizer(() =>
+			Effect.flatMap(read, (holder) => (holder?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void)),
+		);
+		return {
+			publish: (where: Where) =>
+				Effect.gen(function* () {
+					const temp = `${path}.${process.pid}`;
+					yield* fs.writeFileString(temp, yield* ServiceInfo.encode({ ...own, ...where }));
+					yield* fs.rename(temp, path);
+				}).pipe(Effect.orDie),
+		};
+	});
+};

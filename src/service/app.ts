@@ -1,5 +1,5 @@
 /**
- * The desk service, assembled: the store and the desk on it, the projects, delivery, the page and the socket.
+ * The desk service, assembled: the store (`Storage`, on disk) and the desk on it, the projects, delivery, the page and the socket.
  * OpenCode is reached only through the plugin instances connected to the socket; tests connect fake ones.
  */
 import type * as Duration from "effect/Duration";
@@ -11,8 +11,7 @@ import * as Delivery from "./delivery/delivery";
 import { Desk } from "./desk";
 import { OpenCode } from "./opencode/opencode";
 import { Sessions } from "./opencode/sessions";
-import { Registration } from "./storage/registration";
-import { Store } from "./storage/store";
+import { Storage } from "./storage/storage";
 import { Api } from "./transport/api";
 import * as Http from "./transport/http";
 import * as Socket from "./transport/socket";
@@ -34,7 +33,6 @@ export interface Config {
 /** Needs the platform (`BunServices.layer`): provided where the service is run, `main.ts` or the tests. */
 export const layer = (config: Config) => {
 	const core = Layer.mergeAll(Desk.layer, Sessions.layer, Delivery.Failures.layer).pipe(
-		Layer.provideMerge(Store.layer(config.store)),
 		Layer.provideMerge(OpenCode.layer),
 		Layer.provideMerge(Clients.layer(config.idle)),
 	);
@@ -44,7 +42,7 @@ export const layer = (config: Config) => {
 	const publish = Layer.effectDiscard(
 		Effect.gen(function* () {
 			const api = yield* Api;
-			yield* (yield* Registration).publish({ url: api.url, socket: config.socket });
+			yield* (yield* Storage).publish({ url: api.url, socket: config.socket });
 		}),
 	);
 	return Layer.mergeAll(
@@ -56,7 +54,7 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(Api.layer),
 		Layer.provideMerge(server),
 		Layer.provideMerge(core),
-		// The lock first: nothing else starts while another service has the store.
-		Layer.provideMerge(Registration.layer(config.store)),
+		// The store first, and with it its lock: nothing else starts while another service has the store.
+		Layer.provideMerge(Storage.layer(config.store)),
 	);
 };

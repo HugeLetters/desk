@@ -23,7 +23,6 @@ import * as Effect from "effect/Effect";
 import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { MessageID } from "../../model/entry";
@@ -33,7 +32,7 @@ import type { Empty } from "../../shared/empty";
 import * as Machine from "../../shared/machine";
 import { Desk } from "../desk";
 import { OpenCode } from "../opencode/opencode";
-import { Store } from "../storage/store";
+import { Storage } from "../storage/storage";
 import { due as dueMessages, messages } from "./outbox";
 
 export class Failures extends Context.Service<
@@ -116,8 +115,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 		Effect.gen(function* () {
 			const desk = yield* Desk;
 			const opencode = yield* OpenCode;
-			const store = yield* Store;
-			const path = yield* Path.Path;
+			const storage = yield* Storage;
 			const failures = yield* Failures;
 
 			/** Sends the message with id `id` as the files have it now: what came of it. */
@@ -125,12 +123,8 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 				Effect.gen(function* () {
 					const message = messages(yield* desk.entries).find((one) => one.id === id);
 					if (message === undefined) return Event.Delivered();
-					// A path below the store always makes a file URL.
 					const files = yield* Effect.forEach(message.files, ({ file, name }) =>
-						Effect.map(Effect.orDie(path.toFileUrl(path.join(store.root, file))), (url) => ({
-							uri: url.href,
-							name,
-						})),
+						Effect.map(storage.attachmentUrl(file), (uri) => ({ uri, name })),
 					);
 					const sent = yield* opencode.prompt({
 						sessionID: message.session,

@@ -1,24 +1,18 @@
 /**
  * The desk's rules as properties, over generated desks and generated sequences of changes, against small reference
  * models: what `entry.ts` derives (order, whose turn, Next) and what `Desk` keeps true whatever happens (no orphans,
- * no cycles, a refused change leaves the files as they were).
+ * no cycles, a refused change leaves the store as it was), on memory storage.
  */
-import { afterAll, beforeAll, test } from "bun:test";
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import * as BunServices from "@effect/platform-bun/BunServices";
+import { test } from "bun:test";
 import * as Arbitrary from "effect/Arbitrary";
-import type * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import { answerer, type Entry, next, ordered, Party, Priority, Status, waitingOn } from "../src/model/entry";
 import { due } from "../src/service/delivery/outbox";
 import { Desk } from "../src/service/desk";
-import { Store } from "../src/service/storage/store";
+import { Storage } from "../src/service/storage/storage";
 import { E, M, S } from "./support/ids";
 import { present } from "./support/present";
 import { check } from "./support/property";
@@ -101,23 +95,6 @@ test("Next: the first entry after this one in the order, wrapping round, that wa
 	}));
 
 // The desk keeps its shape whatever the agents and the user do.
-let root: string;
-let scope: Scope.Closeable;
-let services: Context.Context<Desk>;
-beforeAll(async () => {
-	root = await mkdtemp(join(tmpdir(), "desk-properties-"));
-	scope = Effect.runSync(Scope.make());
-	services = (await Effect.runPromise(
-		Layer.buildWithScope(
-			Desk.layer.pipe(Layer.provideMerge(Store.layer(root)), Layer.provideMerge(BunServices.layer)),
-			scope,
-		),
-	)) as typeof services;
-});
-afterAll(async () => {
-	await Effect.runPromise(Scope.close(scope, Exit.void));
-	await rm(root, { recursive: true, force: true });
-});
 
 const Change = Schema.Union([
 	Schema.Struct({ do: Schema.Literal("ask"), parent: Schema.NullOr(Schema.Int) }),
@@ -138,11 +115,11 @@ const changes = Arbitrary.array(
 	{ minLength: 10, maxLength: 40 },
 );
 
-/** The store's files, as text: what a refused change must leave as it was. */
-const snapshot = async () => {
-	const names = (await readdir(root)).filter((name) => name.endsWith(".md")).sort();
-	return Promise.all(names.map(async (name) => `${name}\n${await readFile(join(root, name), "utf8")}`));
-};
+/** The store's entries, as text: what a refused change must leave as it was. */
+const snapshot = Effect.map(
+	Storage.use((storage) => storage.entries),
+	(entries) => JSON.stringify(entries),
+);
 
 /** Desks with pending text across three sessions, and which of them are in desk mode. */
 const outboxes = Arbitrary.all({
@@ -185,12 +162,10 @@ test(
 		check(changes, (sequence) =>
 			Effect.gen(function* () {
 				const desk = yield* Desk;
-				// A fresh desk for each sequence.
-				for (const entry of yield* desk.entries) yield* Effect.promise(() => rm(join(root, `${entry.id}.md`)));
 				for (const change of sequence) {
 					const all = yield* desk.entries;
 					const nth = (n: number) => all[n % Math.max(all.length, 1)];
-					const before = yield* Effect.promise(snapshot);
+					const before = yield* snapshot;
 					const result = yield* Effect.exit(
 						Effect.gen(function* () {
 							switch (change.do) {
@@ -224,8 +199,7 @@ test(
 							}
 						}),
 					);
-					if (Exit.isFailure(result) && (yield* Effect.promise(snapshot)).join("\0") !== before.join("\0"))
-						return false;
+					if (Exit.isFailure(result) && (yield* snapshot) !== before) return false;
 					const now = yield* desk.entries;
 					const ids = new Set(now.map((entry) => entry.id));
 					if (now.some((entry) => entry.parent !== null && !ids.has(entry.parent))) return false;
@@ -238,7 +212,8 @@ test(
 					}
 				}
 				return true;
-			}).pipe(Effect.provideContext(services)),
+				// A fresh desk, in memory, for each sequence.
+			}).pipe(Effect.provide(Desk.layer.pipe(Layer.provideMerge(Storage.layerMemory())))),
 		),
 	60_000,
 );
