@@ -11,11 +11,11 @@ import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Runtime from "effect/Runtime";
-import * as ServiceInfo from "../service-info";
-import * as Settings from "../settings";
-import { Api } from "./api";
+import * as ServiceInfo from "../shared/service-info";
+import * as Settings from "../shared/settings";
 import * as App from "./app";
 import { Clients } from "./clients";
+import { Api } from "./transport/api";
 
 /** The service's configuration, from the settings. */
 export const configuration = Effect.gen(function* () {

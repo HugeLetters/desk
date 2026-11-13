@@ -8,7 +8,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { SessionID } from "../entry";
+import { SessionID } from "../model/entry";
 import type { Connection } from "./connection";
 import { notFound } from "./sessions";
 

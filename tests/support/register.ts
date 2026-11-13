@@ -2,7 +2,7 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { Registration } from "../../src/service/registration";
+import { Registration } from "../../src/service/storage/registration";
 import { present } from "./present";
 
 await Effect.runPromise(

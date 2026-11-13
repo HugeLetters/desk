@@ -2,8 +2,8 @@
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
-import { Entry, EntryId } from "./entry";
-import { DeliveryFailed, Refusal } from "./errors";
+import { Entry, EntryId } from "../model/entry";
+import { DeliveryFailed, Refusal } from "../model/errors";
 
 /** An attachment the page sends: its bytes, base64 on the wire. */
 export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.Uint8ArrayFromBase64 });

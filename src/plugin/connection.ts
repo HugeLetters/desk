@@ -25,10 +25,10 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { Empty } from "../empty";
-import type { SessionID } from "../entry";
-import * as Machine from "../machine";
-import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type SessionInfo } from "../protocol";
+import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type SessionInfo } from "../api/protocol";
+import type { SessionID } from "../model/entry";
+import type { Empty } from "../shared/empty";
+import * as Machine from "../shared/machine";
 
 /** The service can't be reached, or won't take this plugin (the message says why). */
 export class DeskError extends Data.TaggedError("DeskError")<{ readonly message: string }> {}

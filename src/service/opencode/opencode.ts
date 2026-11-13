@@ -15,10 +15,10 @@ import * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { Empty } from "./empty";
-import type { SessionID } from "./entry";
-import { DeliveryFailed } from "./errors";
-import type { Prompt, SessionInfo } from "./protocol";
+import type { Prompt, SessionInfo } from "../../api/protocol";
+import type { SessionID } from "../../model/entry";
+import { DeliveryFailed } from "../../model/errors";
+import type { Empty } from "../../shared/empty";
 
 export type { Prompt, SessionInfo };
 

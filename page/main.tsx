@@ -21,6 +21,8 @@ import * as Stream from "effect/Stream";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, type ParentProps, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { render } from "solid-js/web";
+import { DeskApi, type Draft, type View } from "../src/api/page-api";
+import { deskPath, entryPath, patterns, rpcPath, sessionIn } from "../src/api/routes";
 import {
 	type Entry,
 	type EntryId,
@@ -32,11 +34,9 @@ import {
 	shortId,
 	waitingFor,
 	waitingOn,
-} from "../src/entry";
-import { Refusal } from "../src/errors";
-import { DeskApi, type Draft, type View } from "../src/page-api";
-import { deskPath, entryPath, patterns, rpcPath, sessionIn } from "../src/routes";
-import { deliveryFailed, refusal } from "../src/wording";
+} from "../src/model/entry";
+import { Refusal } from "../src/model/errors";
+import { deliveryFailed, refusal } from "../src/model/wording";
 import * as Attachments from "./attachments";
 import { type Local, render as markdown, renderDiagrams } from "./markdown";
 

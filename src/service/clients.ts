@@ -12,8 +12,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
-import type { Empty } from "../empty";
-import * as Machine from "../machine";
+import type { Empty } from "../shared/empty";
+import * as Machine from "../shared/machine";
 
 export type State = Data.TaggedEnum<{
 	Busy: { readonly clients: number };

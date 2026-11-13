@@ -20,12 +20,12 @@ import * as Ref from "effect/Ref";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
-import type { SessionID } from "../entry";
-import { type Client, OpenCode, Unanswered } from "../opencode";
-import { build, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../protocol";
-import { Sessions } from "../sessions";
+import { build, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../../api/protocol";
+import type { SessionID } from "../../model/entry";
+import { Clients } from "../clients";
+import { type Client, OpenCode, Unanswered } from "../opencode/opencode";
+import { Sessions } from "../opencode/sessions";
 import { Api } from "./api";
-import { Clients } from "./clients";
 
 /** How long a call may wait for the plugin's answer. */
 const callTimeout = "30 seconds";

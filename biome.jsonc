@@ -18,7 +18,7 @@
 	"overrides": [
 		{
 			// OpenTUI's elements, not the DOM's: the browser's a11y rules don't apply.
-			"includes": ["src/tui.tsx"],
+			"includes": ["src/tui/**"],
 			"linter": { "rules": { "a11y": "off" } }
 		}
 	],

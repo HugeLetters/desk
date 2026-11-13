@@ -11,7 +11,7 @@ import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { EntryId } from "../src/entry";
+import type { EntryId } from "../src/model/entry";
 import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { P, S } from "./support/ids";

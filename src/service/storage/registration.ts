@@ -22,10 +22,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as Unify from "effect/Unify";
-import type { Empty } from "../empty";
-import * as Machine from "../machine";
-import { protocol } from "../protocol";
-import * as ServiceInfo from "../service-info";
+import { protocol } from "../../api/protocol";
+import type { Empty } from "../../shared/empty";
+import * as Machine from "../../shared/machine";
+import * as ServiceInfo from "../../shared/service-info";
 
 export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
 	readonly path: string;

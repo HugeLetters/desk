@@ -18,9 +18,9 @@ import type * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { DeskApi, DeskSummary } from "./page-api";
-import { deskPath, link, rpcPath } from "./routes";
-import * as ServiceInfo from "./service-info";
+import { DeskApi, DeskSummary } from "../api/page-api";
+import { deskPath, link, rpcPath } from "../api/routes";
+import * as ServiceInfo from "../shared/service-info";
 
 export const Status = Schema.Struct({
 	/** The page, e.g. `http://127.0.0.1:47400/`. */

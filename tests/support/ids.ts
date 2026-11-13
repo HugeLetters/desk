@@ -3,7 +3,7 @@
  * "parent", and mark them with these, as the parsing would.
  */
 import type { ProjectID } from "@opencode/schema/project-id";
-import type { EntryId, MessageID, SessionID } from "../../src/entry";
+import type { EntryId, MessageID, SessionID } from "../../src/model/entry";
 
 export const E = (id: string) => id as EntryId;
 export const S = (id: string) => id as SessionID;

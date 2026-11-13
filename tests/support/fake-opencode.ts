@@ -7,9 +7,9 @@
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import type { SessionID } from "../../src/entry";
+import type { Prompt, SessionInfo } from "../../src/api/protocol";
+import type { SessionID } from "../../src/model/entry";
 import type { Options } from "../../src/plugin/connection";
-import type { Prompt, SessionInfo } from "../../src/protocol";
 import { present } from "./present";
 
 /** What the fake OpenCode fails with: down, refusing, or losing a reply; `message` is what the plugin passes on. */

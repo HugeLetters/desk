@@ -18,11 +18,11 @@ import * as Path from "effect/Path";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
+import { DeskApi } from "../../api/page-api";
+import { rpcPath } from "../../api/routes";
+import { Clients } from "../clients";
 import { Desk } from "../desk";
-import { DeskApi } from "../page-api";
-import { rpcPath } from "../routes";
 import { Api } from "./api";
-import { Clients } from "./clients";
 
 const Guard = HttpRouter.middleware(
 	(app) =>
@@ -80,7 +80,7 @@ export const layer = (store: string) =>
 	Layer.unwrap(
 		Effect.gen(function* () {
 			const path = yield* Path.Path;
-			const page = yield* path.fromFileUrl(new URL("../../page/dist", import.meta.url));
+			const page = yield* path.fromFileUrl(new URL("../../../page/dist", import.meta.url));
 			return HttpRouter.serve(
 				Layer.mergeAll(
 					Guard,

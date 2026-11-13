@@ -1,4 +1,4 @@
-/** The TUI badge's data (`src/badge.ts`): read from whichever service is registered, through restarts. */
+/** The TUI badge's data (`src/tui/badge.ts`): read from whichever service is registered, through restarts. */
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { count, report, type Status, watch } from "../src/badge";
+import { count, report, type Status, watch } from "../src/tui/badge";
 import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, type Service, startService } from "./support/service";

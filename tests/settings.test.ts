@@ -1,11 +1,11 @@
-/** The settings (`src/settings.ts`): the plugin's options over the environment, over the defaults. */
+/** The settings (`src/shared/settings.ts`): the plugin's options over the environment, over the defaults. */
 import { expect, test } from "bun:test";
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Settings from "../src/settings";
+import * as Settings from "../src/shared/settings";
 
 /** The plugin's settings for `options`, with `env` as the whole environment. */
 const read = (options: Record<string, unknown>, env: Record<string, string>) =>

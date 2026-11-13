@@ -18,8 +18,8 @@ import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Stream from "effect/Stream";
 import { createSignal, Show } from "solid-js";
+import * as Settings from "../shared/settings";
 import { type Report, report, type Status, watch } from "./badge";
-import * as Settings from "./settings";
 
 /** Opens `url` in the browser with `opener` (`open`, which exits at once, once it has handed over). */
 const open = (opener: string, url: string) =>

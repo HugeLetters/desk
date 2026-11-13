@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { SessionID } from "./entry";
+import type { SessionID } from "../../model/entry";
 import { OpenCode, type SessionInfo } from "./opencode";
 
 /** A desk's name. */

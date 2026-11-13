@@ -6,16 +6,16 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Delivery from "../delivery";
-import { Desk } from "../desk";
-import { OpenCode } from "../opencode";
-import { Sessions } from "../sessions";
-import { Store } from "../store";
-import { Api } from "./api";
 import { Clients } from "./clients";
-import * as Http from "./http";
-import { Registration } from "./registration";
-import * as Socket from "./socket";
+import * as Delivery from "./delivery/delivery";
+import { Desk } from "./desk";
+import { OpenCode } from "./opencode/opencode";
+import { Sessions } from "./opencode/sessions";
+import { Registration } from "./storage/registration";
+import { Store } from "./storage/store";
+import { Api } from "./transport/api";
+import * as Http from "./transport/http";
+import * as Socket from "./transport/socket";
 
 export interface Config {
 	/** The store: entries, attachments and the socket. */

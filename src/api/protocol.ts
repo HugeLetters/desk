@@ -15,8 +15,8 @@ import * as FileSystem from "effect/FileSystem";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
-import { Delivery, EntryId, MessageID, Priority, SessionID } from "./entry";
-import { Refusal } from "./errors";
+import { Delivery, EntryId, MessageID, Priority, SessionID } from "../model/entry";
+import { Refusal } from "../model/errors";
 
 export const SessionInfo = Schema.Struct({
 	id: SessionID,
@@ -110,8 +110,8 @@ export const PluginApi = RpcGroup.make(
  * OpenCode schemas). Only these: a change to either side's own code doesn't make the other side outdated, so the
  * service can be restarted on its own, and the plugin reloaded on its own.
  */
-const contract = ["src/protocol.ts", "src/entry.ts", "src/errors.ts", "bun.lock"].map(
-	(file) => new URL(`../${file}`, import.meta.url).pathname,
+const contract = ["src/api/protocol.ts", "src/model/entry.ts", "src/model/errors.ts", "bun.lock"].map(
+	(file) => new URL(`../../${file}`, import.meta.url).pathname,
 );
 
 const hash = (texts: ReadonlyArray<string>) =>

@@ -13,7 +13,7 @@
  */
 import * as Data from "effect/Data";
 import * as Result from "effect/Result";
-import type { Empty } from "./empty";
+import type { Empty } from "../shared/empty";
 import type { Entry, EntryId, Party, Pending, Priority, SessionID } from "./entry";
 import {
 	AlreadyResolved,

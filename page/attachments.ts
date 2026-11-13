@@ -2,8 +2,9 @@
  * Files attached to drafts, kept in the browser (IndexedDB, so they survive reloads) until their draft is sent. The
  * draft's Markdown names one `attachment:<id>`; sending uploads only those the text still references.
  */
-import { referencedAttachments } from "../src/entry";
-import type { Attachment } from "../src/page-api";
+
+import type { Attachment } from "../src/api/page-api";
+import { referencedAttachments } from "../src/model/entry";
 
 export interface Local {
 	readonly id: string;

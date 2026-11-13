@@ -26,15 +26,15 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Desk } from "./desk";
-import type { Empty } from "./empty";
-import type { MessageID } from "./entry";
-import type { DeliveryFailed } from "./errors";
-import * as Machine from "./machine";
-import { OpenCode } from "./opencode";
+import type { MessageID } from "../../model/entry";
+import type { DeliveryFailed } from "../../model/errors";
+import { deliveryFailed } from "../../model/wording";
+import type { Empty } from "../../shared/empty";
+import * as Machine from "../../shared/machine";
+import { Desk } from "../desk";
+import { OpenCode } from "../opencode/opencode";
+import { Store } from "../storage/store";
 import { due as dueMessages, messages } from "./outbox";
-import { Store } from "./store";
-import { deliveryFailed } from "./wording";
 
 export class Failures extends Context.Service<
 	Failures,

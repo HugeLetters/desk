@@ -14,7 +14,7 @@ import {
 	shortId,
 	waitingFor,
 	waitingOn,
-} from "../src/entry";
+} from "../src/model/entry";
 import { E, M, S } from "./support/ids";
 import { present } from "./support/present";
 

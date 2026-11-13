@@ -3,7 +3,7 @@
  * entries each time, so a retry sends the same text under the same message id.
  */
 import * as Arr from "effect/Array";
-import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "./entry";
+import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "../../model/entry";
 
 export interface Message {
 	/** The OpenCode message id: OpenCode admits a message id once, however often it's sent. */

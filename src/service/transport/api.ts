@@ -11,15 +11,15 @@ import type * as Rpc from "effect/rpc/Rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { Failures } from "../delivery";
+import { type Draft, View } from "../../api/page-api";
+import type { PluginApi } from "../../api/protocol";
+import { deskPath, entryPath, link } from "../../api/routes";
+import { type Entry, type EntryId, SessionID, waitingFor } from "../../model/entry";
+import { DeskInUse, type Refusal } from "../../model/errors";
+import { Failures } from "../delivery/delivery";
 import { Desk } from "../desk";
-import { type Entry, type EntryId, SessionID, waitingFor } from "../entry";
-import { DeskInUse, type Refusal } from "../errors";
-import { OpenCode } from "../opencode";
-import { type Draft, View } from "../page-api";
-import type { PluginApi } from "../protocol";
-import { deskPath, entryPath, link } from "../routes";
-import { Sessions } from "../sessions";
+import { OpenCode } from "../opencode/opencode";
+import { Sessions } from "../opencode/sessions";
 
 const sameView = Schema.toEquivalence(View);
 

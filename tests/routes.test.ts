@@ -1,6 +1,6 @@
-/** The page's routes (`src/routes.ts`), which the page matches and the service, the TUI and the demo link to. */
+/** The page's routes (`src/api/routes.ts`), which the page matches and the service, the TUI and the demo link to. */
 import { expect, test } from "bun:test";
-import { deskPath, entryPath, link, sessionIn } from "../src/routes";
+import { deskPath, entryPath, link, sessionIn } from "../src/api/routes";
 
 test("a desk is /sessions/<id>, an entry /sessions/<id>/questions/<entry id>, and the path gives its desk back", () => {
 	expect(deskPath("ses_a")).toBe("/sessions/ses_a");

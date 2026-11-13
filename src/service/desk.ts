@@ -18,6 +18,7 @@ import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
+import type { Attachment, Draft } from "../api/page-api";
 import {
 	ancestors,
 	answerer,
@@ -38,7 +39,7 @@ import {
 	referencedAttachments,
 	type SessionID,
 	waitingOn,
-} from "./entry";
+} from "../model/entry";
 import {
 	AlreadyResolved,
 	EmptyText,
@@ -49,10 +50,9 @@ import {
 	OtherDesk,
 	type Refusal,
 	WouldCycle,
-} from "./errors";
-import { Event, reconcile } from "./lifecycle";
-import type { Attachment, Draft } from "./page-api";
-import { Store } from "./store";
+} from "../model/errors";
+import { Event, reconcile } from "../model/lifecycle";
+import { Store } from "./storage/store";
 
 type Entries = ReadonlyArray<Entry>;
 
