@@ -559,6 +559,7 @@ function App() {
 													type="button"
 													class="secondary"
 													title="Urgent: deliver now, steering the session's current turn"
+													disabled={!drafts[entry().id]?.trim()}
 													onClick={() => {
 														const draft = { entry: entry().id, text: drafts[entry().id] ?? "" };
 														void attempt(async () => {

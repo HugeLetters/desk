@@ -88,6 +88,22 @@ describe("the rules, on memory storage", () => {
 	beforeEach(() => open());
 	afterEach(() => close());
 
+	test("an empty answer is refused, the user's and the agent's alike", async () => {
+		const asked = await ask("Q");
+		const empty = (id: string) => `Entry ${id}: the text is empty.`;
+		for (const text of ["", "  \n\t"])
+			expect(await failure((d) => d.reply([{ entry: asked.id, text }], "queue"))).toBe(empty(asked.id));
+		await desk((d) => d.reply([{ entry: asked.id, text: "yes" }], "queue"));
+		// Answered: the user's next text there is a question of their own, which the agent answers.
+		await desk((d) => d.reply([{ entry: asked.id, text: "and then?" }], "queue"));
+		const theirs = present((await entries()).find((entry) => entry.parent === asked.id));
+		for (const body of ["", "   "]) expect(await failure((d) => d.answer(theirs.id, body))).toBe(empty(theirs.id));
+		expect((await entries()).map((entry) => [entry.id, entry.answer])).toEqual([
+			[asked.id, "yes"],
+			[theirs.id, null],
+		]);
+	});
+
 	test("pruning walks up the parent chain", async () => {
 		const root_ = await ask("Root");
 		const child = await ask("Child", { parent: root_.id });

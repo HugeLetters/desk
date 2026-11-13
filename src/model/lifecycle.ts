@@ -17,6 +17,7 @@ import type { Empty } from "../shared/empty";
 import type { Entry, EntryId, Party, Pending, Priority, SessionID } from "./entry";
 import {
 	AlreadyResolved,
+	EmptyText,
 	HasParent,
 	NothingUndelivered,
 	NotTheAnswerer,
@@ -51,6 +52,8 @@ export const reconcile = (entry: Entry, event: Event): Result.Result<Entry, Refu
 		case "Answer":
 			if (entry.asker === event.by) return Result.fail(new NotTheAnswerer({ id, by: event.by }));
 			if (entry.status === "resolved") return Result.fail(new AlreadyResolved({ id }));
+			// An answer says something, whoever gives it: blank text is no answer.
+			if (!event.text.trim()) return Result.fail(new EmptyText({ id }));
 			return ok({ ...entry, answer: event.text, status: "answered", pending: event.pending ?? entry.pending });
 		case "Resolve":
 			if (entry.asker !== event.by) return Result.fail(new NotTheAsker({ id, asker: entry.asker }));
