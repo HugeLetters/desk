@@ -1,20 +1,15 @@
 /**
  * What the TUI's footer badge shows (`tui.tsx`): per desk, how many entries wait on the user and how many
- * of those are critical, and where the page is. Read from the running service's API (`view` without a session:
- * just the list of desks), over its WebSocket, found through its registration (`service-info.ts`). The badge doesn't
- * start the service (the server part does); while there's none, or after it goes, it looks again every couple of
- * seconds.
+ * of those are critical, and where the page is. Read from the service's API (`view` without a session: just the list
+ * of desks), over a WebSocket to the port setting's `/rpc`, where the page is too. The badge doesn't start the
+ * service (the server part does); while none answers there, or after it goes, it tries again every couple of seconds.
  *
- * `watch` needs the platform's `FileSystem` and `Path`, and the RPC serialization: whoever runs it provides them (the
- * TUI's entry point, the tests).
+ * `watch` needs the RPC serialization: whoever runs it provides it (the TUI's entry point, the tests).
  */
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import type * as Path from "effect/Path";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
@@ -22,7 +17,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { DeskApi, DeskSummary } from "../api/api";
 import { deskPath, link, rpcPath } from "../api/routes";
-import * as ServiceInfo from "../shared/service-info";
 
 export const Status = Schema.Struct({
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
@@ -34,22 +28,13 @@ export const Status = Schema.Struct({
 export type Status = typeof Status.Type;
 const sameStatus = Schema.toEquivalence(Schema.UndefinedOr(Status));
 
-/** Why there's no status to show: no service is registered (or its page isn't up), another one replaced it, or it went. */
-class NoService extends Data.TaggedError("NoService")<{ readonly reason: "unregistered" | "replaced" | "gone" }> {}
+/** The service's stream ended: it went. */
+class Gone extends Data.TaggedError("Gone") {}
 
-/** The running service's page, from its registration. */
-const registered = (home: string) =>
-	ServiceInfo.read(home).pipe(
-		Effect.map(Option.flatMap((info) => Option.fromUndefinedOr(info.url))),
-		Effect.flatMap(
-			Option.match({
-				onNone: () => Effect.fail(new NoService({ reason: "unregistered" })),
-				onSome: Effect.succeed,
-			}),
-		),
-	);
+/** The page of the service on `port`. */
+export const page = (port: number) => `http://127.0.0.1:${port}/`;
 
-/** One service's statuses, until it goes. Its RPC protocol is the one layer provided here: it's that service's URL. */
+/** The service's statuses, until it goes. Its RPC protocol is the one layer provided here: it's that service's. */
 const from = (url: string) =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
 		Stream.map((view): Status => ({ url, desks: view.desks, deskMode: view.deskMode })),
@@ -60,24 +45,14 @@ const from = (url: string) =>
 		),
 	);
 
-/** Fails once the service at `url` is no longer the registered one (a stream from one that hangs might never end). */
-const replaced = (home: string, url: string, every: Schedule.Schedule<unknown>) =>
-	registered(home).pipe(
-		Effect.orElseSucceed(() => undefined),
-		Effect.repeat({ schedule: every, until: (now) => now !== url }),
-		Effect.andThen(Effect.fail(new NoService({ reason: "replaced" }))),
-	);
-
-/** The desk's status, again after every change; `undefined` while no service answers. */
+/** The desk's status on `port`, again after every change; `undefined` while no service answers there. */
 export const watch = (
-	home: string,
+	port: number,
 	every: Schedule.Schedule<unknown> = Schedule.spaced("2 seconds"),
-): Stream.Stream<Status | undefined, never, FileSystem.FileSystem | Path.Path | RpcSerialization.RpcSerialization> =>
-	Stream.unwrap(
-		Effect.map(registered(home), (url) => Stream.merge(from(url), Stream.fromEffect(replaced(home, url, every)))),
-	).pipe(
+): Stream.Stream<Status | undefined, never, RpcSerialization.RpcSerialization> =>
+	from(page(port)).pipe(
 		// A stream that ends means the service went too: look for the next one.
-		Stream.concat(Stream.fail(new NoService({ reason: "gone" }))),
+		Stream.concat(Stream.fail(new Gone())),
 		// Whatever the reason, nothing to show until the next one answers.
 		Stream.catch((error) => Stream.concat(Stream.make(undefined), Stream.fail(error))),
 		Stream.retry(every),

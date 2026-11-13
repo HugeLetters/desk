@@ -1,54 +1,53 @@
-/** The TUI badge's data (`src/tui/badge.ts`): read from whichever service is registered, through restarts. */
+/** The TUI badge's data (`src/tui/badge.ts`): read from the service on the port setting, through restarts. */
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
-import * as Layer from "effect/Layer";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { count, report, type Status, watch } from "../src/tui/badge";
+import { count, page, report, type Status, watch } from "../src/tui/badge";
 import { S } from "./support/ids";
 import { present } from "./support/present";
-import { eventually, type Service, startService } from "./support/service";
+import { eventually, startService } from "./support/service";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => {
 	for (const step of cleanup.splice(0).reverse()) await step();
 });
 
-/** Every status `watch` gives for `home`, as they come. */
-const watching = (home: string) => {
+/** Every status `watch` gives for `port`, as they come. */
+const watching = (port: number) => {
 	const seen: Array<Status | undefined> = [];
 	const fiber = Effect.runFork(
-		Stream.runForEach(watch(home, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))).pipe(
-			Effect.provide(Layer.mergeAll(BunServices.layer, FetchHttpClient.layer, RpcSerialization.layerNdjson)),
+		Stream.runForEach(watch(port, Schedule.spaced("20 millis")), (status) => Effect.sync(() => seen.push(status))).pipe(
+			Effect.provide(RpcSerialization.layerNdjson),
 		),
 	);
 	cleanup.push(() => Effect.runPromise(Fiber.interrupt(fiber)));
 	return { seen, latest: () => seen.at(-1) };
 };
 
-const register = (service: Service) =>
-	writeFile(
-		join(service.store, "service.json"),
-		JSON.stringify({ pid: process.pid, protocol: "test", url: service.url }),
-	);
+/** A port nothing listens on now. */
+const freePort = async () => {
+	const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+	const port = present(probe.port);
+	await probe.stop(true);
+	return port;
+};
 
-test("the badge counts a project's entries waiting on the user, knows the sessions in desk mode, and follows the service through a restart", async () => {
+test("the badge finds the service by the port setting: it counts a desk's entries waiting on the user, knows the sessions in desk mode, and follows the service through a restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "desk-badge-"));
 	cleanup.push(() => rm(home, { recursive: true, force: true }));
-	const { seen, latest } = watching(home);
+	const port = await freePort();
+	const { seen, latest } = watching(port);
 	// No service yet: nothing to show.
 	await eventually(() => seen.length > 0);
 	expect(latest()).toBeUndefined();
 
-	const first = await startService({ store: home });
-	await register(first);
+	const first = await startService({ store: home, port });
 	// An OpenCode whose session ses_a is in desk mode (the test plugin reports every session its OpenCode knows).
 	const opencode = first.fake.server("http://opencode");
 	opencode.session({ id: S("ses_a") });
@@ -59,18 +58,31 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	const counted = await eventually(() =>
 		latest()?.desks.find((desk) => desk.session === "ses_a" && desk.waiting === 2),
 	);
-	expect(present(latest())).toMatchObject({ url: first.url, deskMode: ["ses_a"] });
+	expect(present(latest())).toMatchObject({ url: page(port), deskMode: ["ses_a"] });
+	expect(first.url).toBe(page(port));
 	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
+	// Not through the registration: that names the page too, but the badge doesn't read it.
+	expect(JSON.parse(await readFile(join(home, "service.json"), "utf8")).url).toBe(page(port));
 
-	// The service goes (its registration first, as `registration.ts` does); the badge hides, then finds the next one.
-	await rm(join(home, "service.json"));
+	// The service goes; the badge hides, then finds the next one on the same port.
 	await first.close(false);
 	await eventually(() => latest() === undefined);
-	const second = await startService({ store: home });
-	cleanup.push(() => rm(join(home, "service.json"), { force: true }).then(() => second.close(false)));
-	await register(second);
-	await eventually(() => latest()?.url === second.url);
-	expect(present(latest()).desks).toHaveLength(1);
+	const second = await startService({ store: home, port });
+	cleanup.push(() => second.close(false));
+	const back = await eventually(() => latest());
+	expect(back).toMatchObject({ url: page(port), deskMode: [] });
+	expect(back.desks).toHaveLength(1);
+});
+
+test("a service on another port isn't the badge's", async () => {
+	const elsewhere = await startService();
+	cleanup.push(() => elsewhere.close());
+	const port = await freePort();
+	const { seen, latest } = watching(port);
+	await eventually(() => seen.length > 0);
+	await Bun.sleep(100);
+	expect(latest()).toBeUndefined();
+	expect(elsewhere.port).not.toBe(port);
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {

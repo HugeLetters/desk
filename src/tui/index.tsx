@@ -3,7 +3,7 @@
  * The desk in OpenCode's TUI: a footer badge in sessions with desk mode on, `desk`, or `desk [N]` when N entries of
  * the session's desk wait on the user (`desk [N !M]`, M in red, when M of them are critical). Clicking it opens that
  * desk's page. Hidden in sessions without desk mode, and while no desk service runs. It's the `./tui` part
- * beside the plugin, so it loads wherever the plugin does. Options as the plugin's (`home`).
+ * beside the plugin, so it loads wherever the plugin does. Options as the plugin's (`port`).
  */
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/tui";
@@ -67,12 +67,12 @@ function Badge(props: { theme: Context["theme"]; report: Report | undefined; ope
 }
 
 /**
- * The badge in the footer, for as long as it runs: the settings, the slot, and the registered service's status into
- * it.
+ * The badge in the footer, for as long as it runs: the settings, the slot, and the status of the service on the port
+ * setting into it.
  */
 const badge = (context: Context) =>
 	Effect.gen(function* () {
-		const store = yield* Settings.store;
+		const port = yield* Settings.port;
 		const opener = yield* Settings.opener;
 		const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 		const [status, setStatus] = createSignal<Status>();
@@ -94,7 +94,7 @@ const badge = (context: Context) =>
 			),
 			(unslot) => Effect.sync(unslot),
 		);
-		yield* Stream.runForEach(watch(store), (next) => Effect.sync(() => setStatus(next)));
+		yield* Stream.runForEach(watch(port), (next) => Effect.sync(() => setStatus(next)));
 	}).pipe(Effect.scoped);
 
 /** What the badge needs, on Bun: provided here, at the TUI's entry, and nowhere below. */
