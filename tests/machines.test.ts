@@ -127,20 +127,24 @@ test("states with the same key share one run, started in the first of them; anot
 // The plugin's connection.
 
 const client = {} as Connection.Client;
-const connectionEvents = events(["On", "Off", "Hello", "Dropped", "Outdated", "Retry"], (tag, n): Connection.Event => {
-	switch (tag) {
-		case "On":
-		case "Off":
-			return Connection.Event.Want({ on: tag === "On" });
-		case "Hello":
-			return Connection.Event.Hello({ client, url: `http://127.0.0.1:${n}/` });
-		case "Dropped":
-		case "Outdated":
-			return { _tag: tag, message: `why ${n}` };
-		default:
-			return Connection.Event.Retry();
-	}
-});
+const connectionEvents = events(
+	["On", "Off", "Hello", "Dropped", "Outdated", "Taken", "Retry"],
+	(tag, n): Connection.Event => {
+		switch (tag) {
+			case "On":
+			case "Off":
+				return Connection.Event.Want({ on: tag === "On" });
+			case "Hello":
+				return Connection.Event.Hello({ client, url: `http://127.0.0.1:${n}/` });
+			case "Dropped":
+			case "Outdated":
+			case "Taken":
+				return { _tag: tag, message: `why ${n}` };
+			default:
+				return Connection.Event.Retry();
+		}
+	},
+);
 const connectionSteps = (sequence: ReadonlyArray<Connection.Event>) =>
 	steps(Connection.reconcile, Connection.State.Off(), sequence);
 
@@ -156,11 +160,16 @@ test("connection: off only when not wanted, and always then; live only by hello 
 	);
 });
 
-test("connection: refused only by an outdated plugin, and for good until turned off; a dropped link backs off, then retries", async () => {
+test("connection: refused only by an outdated plugin or a port another program has, while connecting, and for good until turned off, saying why; a dropped link backs off, then retries", async () => {
 	await check(connectionEvents, (sequence) =>
 		connectionSteps(sequence).every(({ before, event, after }) => {
 			if (before._tag === "Refused") return after === before || after._tag === "Off";
-			if (after._tag === "Refused") return before._tag === "Connecting" && event._tag === "Outdated";
+			if (after._tag === "Refused")
+				return (
+					before._tag === "Connecting" &&
+					(event._tag === "Outdated" || event._tag === "Taken") &&
+					after.message === event.message
+				);
 			if (after._tag === "Backoff" && before._tag !== "Backoff")
 				return (before._tag === "Connecting" || before._tag === "Live") && event._tag === "Dropped";
 			if (before._tag === "Backoff" && after._tag !== "Backoff")

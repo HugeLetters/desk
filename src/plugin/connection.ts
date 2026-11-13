@@ -5,8 +5,12 @@
  * holds `attach` open, answering the service's calls into this OpenCode (`serve`) as they come on it. When the service
  * goes, it does it all again, starting a new one; requests wait for that.
  *
+ * Something else may have the port: then the WebSocket's upgrade fails while the port still takes connections, and the
+ * agents are told so (`taken`), rather than waiting for a service that can't start there.
+ *
  * A machine (`machine.ts`): `Off`; `Connecting` and then `Live`, on one WebSocket (one `run`, the `link`); `Backoff` a
- * moment after the link drops; `Refused` while this plugin is older than the service, until it's turned off.
+ * moment after the link drops; `Refused` while this plugin is older than the service or another program has the port,
+ * until it's turned off.
  */
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
@@ -25,6 +29,7 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Socket from "effect/socket/Socket";
 import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
 import { protocol } from "../api/protocol";
 import { rpcPath } from "../api/routes";
@@ -88,6 +93,8 @@ export type Event = Data.TaggedEnum<{
 	Dropped: { readonly message: string };
 	/** The service won't take this plugin: it's older. */
 	Outdated: { readonly message: string };
+	/** Another program has the port. */
+	Taken: { readonly message: string };
 	/** `Backoff` is over. */
 	Retry: Empty;
 }>;
@@ -102,6 +109,7 @@ export const reconcile = (state: State, event: Event): State => {
 		case "Dropped":
 			return state._tag === "Connecting" || state._tag === "Live" ? State.Backoff({ message: event.message }) : state;
 		case "Outdated":
+		case "Taken":
 			return state._tag === "Connecting" ? State.Refused({ message: event.message }) : state;
 		case "Retry":
 			return state._tag === "Backoff" ? State.Connecting() : state;
@@ -121,6 +129,28 @@ export const errorMessage = (error: unknown) =>
 			? String(error.message)
 			: String(error);
 
+/** What the agents are told while another program has `port`. */
+export const taken = (port: number) =>
+	`Port ${port} is taken by another program, so the desk service can't run there. The user sets the desk plugin's port option (or DESK_PORT) to a free port and runs /reload; if it's an older desk service, they stop it instead.`;
+
+/**
+ * Whether the WebSocket couldn't even open (not for lack of time): an upgrade refused, as by a server that isn't the
+ * desk's. Nothing listening fails the same way, and so does a desk service that's only starting (it listens a moment
+ * before it serves `/rpc`), so it counts only while the port takes connections and keeps refusing (`upgrades`).
+ */
+const refused = (error: RpcClientError.RpcClientError) =>
+	error.reason._tag === "SocketOpenError" && error.reason.kind !== "Timeout";
+
+/** Whether a WebSocket to `url` opens: it connects, and hangs up at once. */
+const upgrades = (url: string): Effect.Effect<boolean> =>
+	Socket.makeWebSocket(url, { openTimeout: "1 second" }).pipe(
+		Effect.flatMap((socket) => socket.reader),
+		Effect.scoped,
+		Effect.as(true),
+		Effect.orElseSucceed(() => false),
+		Effect.provide(BunSocket.layerWebSocketConstructor),
+	);
+
 /** Whether something listens on `port` (on 127.0.0.1): connects, and hangs up at once. */
 export const answering = (port: number): Effect.Effect<boolean> =>
 	BunSocket.makeNet({ host: "127.0.0.1", port }).pipe(
@@ -133,8 +163,9 @@ export const answering = (port: number): Effect.Effect<boolean> =>
 /** The connection, off until wanted; hangs up when the scope closes. */
 export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, never, Scope.Scope | R> =>
 	Effect.gen(function* () {
+		const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
 		const transport = RpcClient.layerProtocolSocket().pipe(
-			Layer.provide(BunSocket.layerWebSocket(`ws://127.0.0.1:${options.port}${rpcPath}`)),
+			Layer.provide(BunSocket.layerWebSocket(url)),
 			Layer.provide(RpcSerialization.layerNdjson),
 		);
 
@@ -192,6 +223,20 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 										message: "The desk service is older than this plugin; it's making way for a new one.",
 									}),
 								),
+					),
+					// Something listens, but the upgrade was refused. Still refusing two seconds on (not a desk service on its
+					// way up), and still listening (not one on its way out), it isn't the desk's. Otherwise: next time round.
+					Effect.catchTag("RpcClientError", (error) =>
+						refused(error)
+							? Effect.gen(function* () {
+									const opened = yield* Effect.andThen(Effect.sleep("250 millis"), upgrades(url)).pipe(
+										Effect.repeat({ until: (opened) => opened, times: 7 }),
+									);
+									if (opened || !(yield* answering(options.port))) return yield* error;
+									yield* emit(Event.Taken({ message: taken(options.port) }));
+									return Option.none<string>();
+								})
+							: Effect.fail(error),
 					),
 				);
 				if (Option.isNone(greeted)) return;

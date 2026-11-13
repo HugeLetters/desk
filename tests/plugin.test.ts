@@ -261,3 +261,25 @@ test("a stuck service: /desk-mode and the tools fail after the timeout instead o
 		await rm(stuck, { recursive: true, force: true });
 	}
 });
+
+test("another program on the port: nothing is started, and /desk-mode and the tools say why", async () => {
+	const elsewhere = await mkdtemp(join(tmpdir(), "desk-taken-"));
+	const other = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("someone else") });
+	const context = fakeContext(elsewhere, sessions, { port: other.port });
+	const unload = await load(context);
+	try {
+		const why = `Port ${other.port} is taken by another program, so the desk service can't run there`;
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow(why);
+		context.storage.set("on/ses_main", true);
+		await expect(context.tool("desk_list", "ses_main", {})).rejects.toThrow(why);
+		// The tools' error tells the agent what the user can do about it.
+		await expect(context.tool("desk_ask", "ses_main", { title: "Q?", body: "" })).rejects.toThrow(
+			"The user sets the desk plugin's port option (or DESK_PORT) to a free port and runs /reload",
+		);
+		expect(await readdir(elsewhere)).not.toContain("service.log");
+	} finally {
+		await unload();
+		other.stop(true);
+		await rm(elsewhere, { recursive: true, force: true });
+	}
+});

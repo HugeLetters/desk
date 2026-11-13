@@ -80,7 +80,10 @@ flowchart LR
   sessions (later changes as `modes`); it hangs up when the last one turns desk mode off. Connected, it reconnects
   (restarting the service) if the connection drops. It is also the service's only way into OpenCode: the service's
   calls (look a session up, prompt one) come on the `attach` stream and the plugin answers each with `reply`; the
-  attachment lasts exactly as long as the stream. It reports `session.moved`. So the service needs no OpenCode endpoint or password.
+  attachment lasts exactly as long as the stream. It reports `session.moved`. So the service needs no OpenCode endpoint or password. If
+  something else listens on the port and keeps refusing the WebSocket, the plugin doesn't wait for a service that can't
+  start there: `/desk-mode` and the tools say the port is taken, until OpenCode reloads its plugins (or no session in
+  that directory is in desk mode any more).
 - **Delivery**: the user's text is written to its entries as an outbox (an OpenCode message id, fixed up front), then
   sent with `session.prompt({ id })` through a connected plugin instance whose OpenCode knows the session. OpenCode admits a message id
   once, so retries can't duplicate. With no such OpenCode connected, the entry stays "answered, not delivered" (a
