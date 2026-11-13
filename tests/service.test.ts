@@ -12,6 +12,7 @@ import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
@@ -25,7 +26,7 @@ import { build, Outdated, protocol } from "../src/api/protocol";
 import { type EntryId, parse } from "../src/model/entry";
 import { Refusal } from "../src/model/errors";
 import * as App from "../src/service/app";
-import { changedOnDisk } from "../src/service/transport/socket";
+import { changedOnDisk, outdatedBy } from "../src/service/transport/socket";
 import { E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
@@ -647,6 +648,15 @@ describe("the service's life", () => {
 		expect(protocol).toMatch(/^[0-9a-z]+$/);
 		expect(await Effect.runPromise(Effect.provide(build, BunServices.layer))).toBe(protocol);
 		expect(await Effect.runPromise(Effect.provide(changedOnDisk, BunServices.layer))).toBe(false);
+	});
+
+	test("the service is outdated when the contract on disk differs or is gone (moved), not when it can't be read", async () => {
+		const failing = (tag: "NotFound" | "PermissionDenied") =>
+			Effect.fail(PlatformError.systemError({ _tag: tag, module: "FileSystem", method: "readFileString" }));
+		expect(await Effect.runPromise(outdatedBy(Effect.succeed(protocol)))).toBe(false);
+		expect(await Effect.runPromise(outdatedBy(Effect.succeed(`${protocol}x`)))).toBe(true);
+		expect(await Effect.runPromise(outdatedBy(failing("NotFound")))).toBe(true);
+		expect(await Effect.runPromise(outdatedBy(failing("PermissionDenied")))).toBe(false);
 	});
 
 	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {

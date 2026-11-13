@@ -15,6 +15,7 @@ import * as FiberSet from "effect/FiberSet";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -30,15 +31,22 @@ import { Api } from "./api";
 /** How long a call may wait for the plugin's answer. */
 const callTimeout = "30 seconds";
 
+/** Whether this service is outdated, given the contract's version on disk now (`build`). */
+export const outdatedBy = <R>(onDisk: Effect.Effect<string, PlatformError.PlatformError, R>) =>
+	onDisk.pipe(
+		Effect.map((now) => now !== protocol),
+		Effect.catch((error) =>
+			// Gone: the code it loaded moved or was deleted, so whatever's on disk now is newer. Unreadable otherwise (a
+			// checkout halfway through, say): no reason to make way.
+			Effect.succeed(error.reason._tag === "NotFound"),
+		),
+	);
+
 /**
  * Whether this service is the outdated side: the contract on disk is no longer the one it loaded. The plugin always
  * starts the service from the code on disk, so then the service makes way; otherwise the plugin is behind.
  */
-export const changedOnDisk = build.pipe(
-	Effect.map((now) => now !== protocol),
-	// Unreadable (a checkout halfway through, say): no reason to make way.
-	Effect.orElseSucceed(() => false),
-);
+export const changedOnDisk = outdatedBy(build);
 
 /** One attached plugin instance: its OpenCode as a `Client`, and its calls waiting for a reply. */
 interface Attached {
