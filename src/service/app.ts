@@ -45,11 +45,7 @@ export const layer = (config: Config) => {
 			yield* (yield* Storage).publish({ url: api.url, socket: config.socket });
 		}),
 	);
-	return Layer.mergeAll(
-		Http.layer(config.store),
-		Socket.layer(config.socket, config.outdated),
-		Delivery.layer(config.retry),
-	).pipe(
+	return Layer.mergeAll(Http.layer, Socket.layer(config.socket, config.outdated), Delivery.layer(config.retry)).pipe(
 		Layer.provideMerge(publish),
 		Layer.provideMerge(Api.layer),
 		Layer.provideMerge(server),

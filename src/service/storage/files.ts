@@ -88,6 +88,7 @@ export const files = (root: string, rescan: Duration.Input) =>
 			attachment: (relative) => content(path.join(root, relative)),
 			// A path below the store always makes a file URL.
 			attachmentUrl: (relative) => Effect.map(io(path.toFileUrl(path.join(root, relative))), (url) => url.href),
+			file: content,
 			changed: Stream.merge(
 				fs.watch(root).pipe(
 					Stream.orDie,

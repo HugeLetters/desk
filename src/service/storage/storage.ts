@@ -6,12 +6,13 @@
  * What it keeps out of the rest of the service: changes run one at a time (`transact`, a lock), so the desk decides on
  * the entries as they are and nothing writes in between; `changes` says when to read again, whoever changed what;
  * attachments a failed change stored go with it; and nothing is read outside where it may be (an attachment outside
- * `attachments/`).
+ * `attachments/`, a file outside an entry's directory).
  *
  * The store holds no state in memory beyond what its implementation is: the files implementation reads the files
  * every time, so edits made to them by anyone else are simply what the next read finds.
  */
 import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -33,6 +34,9 @@ export interface Content {
 	readonly data: Blob;
 	readonly modified: number;
 }
+
+/** A file asked for outside the directory it must be in. */
+export class Outside extends Data.TaggedError("Outside")<{ readonly path: string }> {}
 
 /** What a change may do to the store, within `transact`. */
 export interface Transaction {
@@ -64,6 +68,8 @@ export interface Backend {
 	readonly attachment: (file: string) => Effect.Effect<Option.Option<Content>>;
 	/** Where the session reads an attachment from. */
 	readonly attachmentUrl: (file: string) => Effect.Effect<string>;
+	/** A file by its absolute path (already checked to be in its entry's directory); none when it's missing. */
+	readonly file: (path: string) => Effect.Effect<Option.Option<Content>>;
 	/** Something may have changed without a transaction (someone else's edit): read again. */
 	readonly changed: Stream.Stream<void>;
 	readonly publish: (where: Where) => Effect.Effect<void>;
@@ -87,6 +93,8 @@ export class Storage extends Context.Service<
 		readonly attachment: (file: string) => Effect.Effect<Option.Option<Content>>;
 		/** Where the session reads an attachment from: a URL it can open (a `file:` URL, on disk). */
 		readonly attachmentUrl: (file: string) => Effect.Effect<string>;
+		/** A file below `directory` (an entry's), never outside it; none when it's missing. */
+		readonly file: (directory: string, below: string) => Effect.Effect<Option.Option<Content>, Outside>;
 		/** Records where the page and the socket are, once they are (in the registration, on disk). */
 		readonly publish: (where: Where) => Effect.Effect<void>;
 	}
@@ -99,13 +107,13 @@ export class Storage extends Context.Service<
 		return Layer.effect(Storage, Effect.flatMap(files(root, rescan), make));
 	}
 
-	/** An empty store in memory. */
-	static layerMemory() {
-		return Layer.effect(Storage, Effect.flatMap(memory, make)).pipe(Layer.provide(Path.layer));
+	/** A store in memory, empty but for `files` (by absolute path) to read as if they were in entries' directories. */
+	static layerMemory(options: { readonly files?: Readonly<Record<string, string | Uint8Array>> } = {}) {
+		return Layer.effect(Storage, Effect.flatMap(memory(options.files ?? {}), make)).pipe(Layer.provide(Path.layer));
 	}
 }
 
-/** Storage over `backend`: the lock, the change signal and the check on where a read may go. */
+/** Storage over `backend`: the lock, the change signal and the checks on where a read may go. */
 export const make = (backend: Backend) =>
 	Effect.gen(function* () {
 		const path = yield* Path.Path;
@@ -155,6 +163,13 @@ export const make = (backend: Backend) =>
 			),
 			attachment,
 			attachmentUrl: backend.attachmentUrl,
+			file: (directory, below) => {
+				const file = path.resolve(directory, below);
+				const inside = path.relative(directory, file);
+				return inside.startsWith("..") || path.isAbsolute(inside)
+					? Effect.fail(new Outside({ path: file }))
+					: backend.file(file);
+			},
 			publish: backend.publish,
 		});
 	});
