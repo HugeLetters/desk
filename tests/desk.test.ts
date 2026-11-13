@@ -98,10 +98,10 @@ describe("the rules, on memory storage", () => {
 		await desk((d) => d.reply([{ entry: asked.id, text: "and then?" }], "queue"));
 		const theirs = present((await entries()).find((entry) => entry.parent === asked.id));
 		for (const body of ["", "   "]) expect(await failure((d) => d.answer(theirs.id, body))).toBe(empty(theirs.id));
-		expect((await entries()).map((entry) => [entry.id, entry.answer])).toEqual([
-			[asked.id, "yes"],
-			[theirs.id, null],
-		]);
+		// Both made within the same millisecond, maybe: their order is then by random id, so they're looked up by id.
+		const after = await entries();
+		expect(after.find((entry) => entry.id === asked.id)?.answer).toBe("yes");
+		expect(after.find((entry) => entry.id === theirs.id)?.answer).toBe(null);
 	});
 
 	test("pruning walks up the parent chain", async () => {

@@ -46,7 +46,7 @@ export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 			text: [
 				// Where the reply goes, said where the agent decides it: elsewhere, it would answer in chat. The rest is in the
 				// desk_* tools' descriptions.
-				"Desk: the user replied on the desk. Reply there too: a follow-up under the entry (desk_ask with its id as parent), or desk_answer for a question of theirs. In chat, name it by its title at most.",
+				"Desk: the user replied on the desk. Reply there too: a follow-up under the entry (desk_ask with its id as parent), or desk_answer for a question of theirs. Raising several things, it gets a follow-up for each, one entry per thing. In chat, name it by its title at most.",
 				...sections.map((section) => section.text),
 			].join("\n\n"),
 			files: sections.flatMap((section) => attachmentsIn(section.body)),

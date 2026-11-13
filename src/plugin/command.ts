@@ -24,7 +24,7 @@ export const register = (ctx: Context, desk: Calls & { readonly modes: Modes; re
 						? (yield* desk.service((client) => client.page({ session: on.value }))).url
 						: undefined;
 					const text = url
-						? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
+						? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. One entry per question or decision: several go in several entries, and a reply that raises several things gets a follow-up for each. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
 						: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
 					// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
 					const description = url ? `Desk mode on: ${url}` : "Desk mode off";
