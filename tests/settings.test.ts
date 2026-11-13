@@ -30,8 +30,8 @@ test("options first, then DESK_HOME, DESK_PORT and DESK_TIMEOUT, then ~/.local/s
 		await read({}, { HOME: "/home/me", DESK_HOME: "/store", DESK_PORT: "47401", DESK_TIMEOUT: "2 seconds" }),
 	).toEqual({ store: "/store", port: 47401, timeout: Duration.seconds(2) });
 	expect(
-		await read({ home: "/mine", port: 0, timeout: "5 seconds" }, { HOME: "/home/me", DESK_HOME: "/store" }),
-	).toEqual({ store: "/mine", port: 0, timeout: Duration.seconds(5) });
+		await read({ home: "/mine", port: 47402, timeout: "5 seconds" }, { HOME: "/home/me", DESK_HOME: "/store" }),
+	).toEqual({ store: "/mine", port: 47402, timeout: Duration.seconds(5) });
 	expect((await read({ timeout: 1500 }, { HOME: "/home/me" })).timeout).toEqual(Duration.millis(1500));
 });
 
@@ -40,7 +40,7 @@ test("a leading ~ in the store is the user's home; a setting that isn't valid gi
 	expect((await read({ home: "~" }, { HOME: "/home/me" })).store).toBe("/home/me");
 	expect((await read({ home: "a/~b" }, { HOME: "/home/me" })).store).toBe("a/~b");
 	expect((await read({}, { HOME: "/home/me", DESK_HOME: "~/env" })).store).toBe("/home/me/env");
-	for (const port of [-1, 65536, 1.5]) expect((await read({ port }, { HOME: "/home/me" })).port).toBe(47400);
+	for (const port of [0, -1, 65536, 1.5]) expect((await read({ port }, { HOME: "/home/me" })).port).toBe(47400);
 	expect(await read({ port: "nope", timeout: "soon" }, { HOME: "/home/me" })).toMatchObject({
 		port: 47400,
 		timeout: Duration.seconds(30),

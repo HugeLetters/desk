@@ -45,7 +45,7 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 	const prompts: Array<{ sessionID: string; id: string; text: string }> = [];
 	const events = Effect.runSync(Queue.unbounded<Event>());
 	const ctx = {
-		options: { home, port: 0, ...options },
+		options: { home, port, ...options },
 		location: { directory: "/work/phantom", project: { id: P("prj_phantom"), directory: "/work/phantom" } },
 		storage: {
 			get: (key: string) => Effect.sync(() => storage.get(key)),
@@ -116,12 +116,17 @@ const sessions: Array<Session> = [
 const desk = ["desk_adopt", "desk_answer", "desk_ask", "desk_claim", "desk_list", "desk_prioritize", "desk_resolve"];
 
 let home: string;
+/** A free port for the service the plugin starts: the port setting is never 0. */
+let port: number;
 let first: ReturnType<typeof fakeContext>;
 let cleanups: Array<() => unknown> = [];
 const previousIdle = process.env.DESK_IDLE;
 
 beforeAll(async () => {
 	home = await mkdtemp(join(tmpdir(), "desk-plugin-"));
+	const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+	port = present(probe.port);
+	await probe.stop(true);
 	// The service the plugin starts exits 1 s after its last client, or after starting with none: a plugin that loaded
 	// it under load (the whole suite running) may take a few hundred ms to attach.
 	process.env.DESK_IDLE = "1000";
