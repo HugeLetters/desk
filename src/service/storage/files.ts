@@ -1,6 +1,6 @@
 /**
  * The store on disk: one flat directory (`~/.local/share/desk/`, or `$DESK_HOME`) of `<entry id>.md` files, and the
- * attachments the user sent, in `attachments/`. Other files there (the service's socket, log and registration) aren't
+ * attachments the user sent, in `attachments/`. Other files there (the service's log and registration) aren't
  * entries.
  *
  * The files are the desk's only state: nothing here remembers entries between reads. `load` reads them all each time.

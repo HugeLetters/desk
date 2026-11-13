@@ -7,7 +7,7 @@
 
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
-import type { Prompt, SessionInfo } from "../../src/api/protocol";
+import type { Prompt, SessionInfo } from "../../src/api/api";
 import type { SessionID } from "../../src/model/entry";
 import type { Options } from "../../src/plugin/connection";
 import { present } from "./present";

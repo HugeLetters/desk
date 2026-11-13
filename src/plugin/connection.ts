@@ -1,11 +1,11 @@
 /**
- * A plugin instance's connection to the desk service: an RPC client of `PluginApi` (`protocol.ts`) over the service's
- * socket. While it's wanted (a session here is in desk mode), it starts the service (detached, so it outlives this
- * OpenCode) when nobody answers, says `hello`, and holds `attach` open, answering the service's calls into this
- * OpenCode (`serve`) as they come on it. When the service goes, it does it all again, starting a new one; requests
- * wait for that.
+ * A plugin instance's connection to the desk service: an RPC client of `DeskApi` (`api.ts`) over a WebSocket to the
+ * service's port (`ws://127.0.0.1:<port>/rpc`), the port setting's. While it's wanted (a session here is in desk
+ * mode), it starts the service (detached, so it outlives this OpenCode) when nothing listens there, says `hello`, and
+ * holds `attach` open, answering the service's calls into this OpenCode (`serve`) as they come on it. When the service
+ * goes, it does it all again, starting a new one; requests wait for that.
  *
- * A machine (`machine.ts`): `Off`; `Connecting` and then `Live`, on one socket (one `run`, the `link`); `Backoff` a
+ * A machine (`machine.ts`): `Off`; `Connecting` and then `Live`, on one WebSocket (one `run`, the `link`); `Backoff` a
  * moment after the link drops; `Refused` while this plugin is older than the service, until it's turned off.
  */
 import { spawn } from "node:child_process";
@@ -25,7 +25,9 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { type Outcome, PluginApi, type Prompt, protocol, type ServiceCall, type SessionInfo } from "../api/protocol";
+import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
+import { protocol } from "../api/protocol";
+import { rpcPath } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
@@ -33,12 +35,13 @@ import * as Machine from "../shared/machine";
 /** The service can't be reached, or won't take this plugin (the message says why). */
 export class DeskError extends Data.TaggedError("DeskError")<{ readonly message: string }> {}
 
-export type Client = RpcClient.FromGroup<typeof PluginApi, RpcClientError.RpcClientError>;
+export type Client = RpcClient.FromGroup<typeof DeskApi, RpcClientError.RpcClientError>;
 
 /** `R`: what starting the service needs. */
 export interface Options<R = never> {
-	readonly socket: string;
-	/** Starts the service; run when nothing answers on the socket. */
+	/** The service's port, on 127.0.0.1. */
+	readonly port: number;
+	/** Starts the service; run when nothing listens on the port. */
 	readonly start: Effect.Effect<void, unknown, R>;
 	/** This plugin instance's directory. */
 	readonly directory: string;
@@ -105,7 +108,7 @@ export const reconcile = (state: State, event: Event): State => {
 	}
 };
 
-/** `Connecting` and `Live` are one link: one socket, one `run`. */
+/** `Connecting` and `Live` are one link: one WebSocket, one `run`. */
 export const key = (state: State) => (state._tag === "Live" ? "Connecting" : state._tag);
 
 const off = "Desk mode is off in this directory; the user turns it on with /desk-mode.";
@@ -118,9 +121,9 @@ export const errorMessage = (error: unknown) =>
 			? String(error.message)
 			: String(error);
 
-/** Whether a service answers on `path`: connects, and hangs up at once. */
-export const answering = (path: string): Effect.Effect<boolean> =>
-	BunSocket.makeNet({ path }).pipe(
+/** Whether something listens on `port` (on 127.0.0.1): connects, and hangs up at once. */
+export const answering = (port: number): Effect.Effect<boolean> =>
+	BunSocket.makeNet({ host: "127.0.0.1", port }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
 		Effect.as(true),
@@ -131,7 +134,7 @@ export const answering = (path: string): Effect.Effect<boolean> =>
 export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, never, Scope.Scope | R> =>
 	Effect.gen(function* () {
 		const transport = RpcClient.layerProtocolSocket().pipe(
-			Layer.provide(BunSocket.layerNet({ path: options.socket })),
+			Layer.provide(BunSocket.layerWebSocket(`ws://127.0.0.1:${options.port}${rpcPath}`)),
 			Layer.provide(RpcSerialization.layerNdjson),
 		);
 
@@ -146,16 +149,16 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 				Effect.ignore,
 			);
 
-		/** Nobody answers: start the service and wait until it does. */
+		/** Nothing listens: start the service and wait until it does. */
 		const ensure = Effect.gen(function* () {
-			if (yield* answering(options.socket)) return;
+			if (yield* answering(options.port)) return;
 			yield* options.start;
-			yield* answering(options.socket).pipe(
+			yield* answering(options.port).pipe(
 				Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: (up) => up }),
 				Effect.timeoutOrElse({
 					duration: options.timeout ?? "10 seconds",
 					orElse: () =>
-						Effect.fail(new DeskError({ message: `The desk service didn't start (socket ${options.socket}).` })),
+						Effect.fail(new DeskError({ message: `The desk service didn't start (port ${options.port}).` })),
 				}),
 			);
 		});
@@ -164,13 +167,13 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 		const link = (emit: (event: Event) => Effect.Effect<void>) =>
 			Effect.gen(function* () {
 				yield* ensure;
-				const client = yield* RpcClient.make(PluginApi);
+				const client = yield* RpcClient.make(DeskApi);
 				const greeted = yield* client.hello({ protocol }).pipe(
 					// Something that doesn't speak this protocol at all answers nothing: try again later rather than wait for good.
 					Effect.timeoutOrElse({
 						duration: "5 seconds",
 						orElse: () =>
-							Effect.fail(new DeskError({ message: `The desk service on ${options.socket} doesn't answer hello.` })),
+							Effect.fail(new DeskError({ message: `The desk service on port ${options.port} doesn't answer hello.` })),
 					}),
 					Effect.map(({ url }) => Option.some(url)),
 					Effect.catchTag("Outdated", ({ side }) =>
@@ -239,7 +242,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 	});
 
 /**
- * Starts `bun src/service/main.ts` detached, on `store` with `port` as the page's preferred port, logging to `log`,
+ * Starts `bun src/service/main.ts` detached, on `store` and `port`, logging to `log`,
  * which it gets as its own stdout and stderr. With `node:child_process`, not Effect's `ChildProcess`: that one can
  * detach and unref a child, but its output goes to a pipe (or a sink) in this process, which breaks when this OpenCode
  * exits, and the service outlives it. Nor does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The

@@ -1,6 +1,6 @@
 /**
- * What the service does for its clients: the plugin's requests (`protocol.ts`) and the page's views, in terms of
- * the desk and the sessions its desks belong to. The socket and the HTTP server only carry these.
+ * What the service does for its clients' requests (`api.ts`), the page's and the plugins' alike, in terms of the desk
+ * and the sessions its desks belong to. The RPC server (`rpc.ts`) only carries these, and the bridge into OpenCode.
  */
 import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
@@ -11,11 +11,10 @@ import type * as Rpc from "effect/rpc/Rpc";
 import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { type Draft, View } from "../../api/page-api";
-import type { PluginApi } from "../../api/protocol";
+import { type DeskApi, party, View } from "../../api/api";
 import { deskPath, entryPath, link } from "../../api/routes";
-import { type Entry, type EntryId, SessionID, waitingFor } from "../../model/entry";
-import { DeskInUse, type Refusal } from "../../model/errors";
+import { type Entry, SessionID, waitingFor } from "../../model/entry";
+import { DeskInUse } from "../../model/errors";
 import { Failures } from "../delivery/delivery";
 import { Desk } from "../desk";
 import { OpenCode } from "../opencode/opencode";
@@ -23,8 +22,8 @@ import { Sessions } from "../opencode/sessions";
 
 const sameView = Schema.toEquivalence(View);
 
-/** The plugin's request `Tag`, as `PluginApi` defines it. */
-type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof PluginApi>, Tag>> = (
+/** The request `Tag`, as `DeskApi` defines it. */
+type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof DeskApi>, Tag>> = (
 	payload: Rpc.Payload<R>,
 ) => Effect.Effect<Rpc.Success<R>, Rpc.Error<R>>;
 
@@ -41,10 +40,9 @@ export class Api extends Context.Service<
 		readonly page: Handler<"page">;
 		readonly claim: Handler<"claim">;
 		readonly view: (session: string | undefined) => Stream.Stream<View>;
-		readonly submit: (drafts: ReadonlyArray<Draft>) => Effect.Effect<number, Refusal>;
-		readonly send: (draft: Draft) => Effect.Effect<void, Refusal>;
-		readonly resolveByUser: (id: EntryId) => Effect.Effect<void, Refusal>;
-		readonly discard: (entry: EntryId) => Effect.Effect<void, Refusal>;
+		readonly submit: Handler<"submit">;
+		readonly send: Handler<"send">;
+		readonly discard: Handler<"discard">;
 	}
 >()("desk/Api") {
 	/** Needs the page's `HttpServer`, for its URL (`http://127.0.0.1:<port>/`). */
@@ -98,22 +96,22 @@ export class Api extends Context.Service<
 
 				return Api.of({
 					url,
-					ask: ({ asker, question }) =>
-						Effect.map(desk.ask(asker, question), (entry) => ({
+					ask: ({ by, question }) =>
+						Effect.map(desk.ask(by, question), (entry) => ({
 							id: entry.id,
 							parent: entry.parent,
-							url: link(url, entryPath(asker.session, entry.id)),
+							url: link(url, entryPath(by.session, entry.id)),
 						})),
 					adopt: ({ id, parent }) => Effect.asVoid(desk.adopt(id, parent)),
 					answer: ({ id, body }) => Effect.asVoid(desk.answer(id, body)),
-					resolve: ({ id }) => Effect.asVoid(desk.resolve(id, "agent")),
+					resolve: ({ by, id }) => desk.resolve(id, party(by)),
 					prioritize: ({ id, priority, subtree }) => Effect.asVoid(desk.prioritize(id, priority, subtree)),
 					list: ({ session, id }) => desk.describe(id, session),
 					page: ({ session }) => Effect.succeed({ url: link(url, deskPath(session)) }),
-					claim: ({ session, from }) =>
+					claim: ({ by, from }) =>
 						Effect.gen(function* () {
 							if ((yield* opencode.inDeskMode).includes(from)) return yield* new DeskInUse({ session: from });
-							return yield* desk.claim(session, from);
+							return yield* desk.claim(by.session, from);
 						}),
 					view: (session) =>
 						Stream.mergeAll(
@@ -130,10 +128,9 @@ export class Api extends Context.Service<
 							// The desk is read again every few seconds anyway: send a view only when it differs.
 							Stream.changesWith(sameView),
 						),
-					submit: (drafts) => desk.reply(drafts, "queue"),
+					submit: ({ drafts }) => desk.reply(drafts, "queue"),
 					send: (draft) => Effect.asVoid(desk.reply([draft], "steer")),
-					resolveByUser: (id) => desk.resolve(id, "user"),
-					discard: (id) => desk.discard(id),
+					discard: ({ entry }) => desk.discard(entry),
 				});
 			}),
 		);

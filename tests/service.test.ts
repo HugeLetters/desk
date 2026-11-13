@@ -1,5 +1,5 @@
 /**
- * The service through its public seams: plugin instances on the socket, the page's RPC and HTTP, the store's files,
+ * The service through its public seams: plugin instances and pages on its API (the WebSocket at `/rpc`), its HTTP, the store's files,
  * and fake OpenCode servers on the other side.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -21,16 +21,16 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { View } from "../src/api/page-api";
-import { build, Outdated, protocol } from "../src/api/protocol";
+import { Outdated, type View } from "../src/api/api";
+import { build, protocol } from "../src/api/protocol";
 import { type EntryId, parse } from "../src/model/entry";
 import { Refusal } from "../src/model/errors";
 import * as App from "../src/service/app";
-import { changedOnDisk, outdatedBy } from "../src/service/transport/socket";
+import { changedOnDisk, outdatedBy } from "../src/service/transport/rpc";
 import { E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
-import { eventually, type Service, startService } from "./support/service";
+import { eventually, rpc, type Service, startService, wsUrl } from "./support/service";
 
 let service: Service;
 beforeEach(async () => {
@@ -45,6 +45,9 @@ const read = async (id: string) =>
 			option._tag === "Some" ? option.value : undefined,
 		),
 	);
+/** An agent in `session`, as the plugin names its caller. */
+const agent = (session: string, directory = "/w") => ({ _tag: "Agent" as const, session: S(session), directory });
+const user = { _tag: "User" as const };
 const question = (title: string, extra: { parent?: EntryId; labels?: Array<string> } = {}) => ({
 	title,
 	body: `About ${title}.`,
@@ -60,7 +63,7 @@ describe("entries", () => {
 	test("an agent's question is a file in the flat store, with its root session and directory", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: "/work/phantom" },
 			question: question("Which icon?"),
 		});
 		expect(await entryFiles()).toEqual([`${asked.id}.md`]);
@@ -78,7 +81,7 @@ describe("entries", () => {
 	test("the service reads the store again on restart, and takes in edits made by others", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Kept?"),
 		});
 		await service.close(false);
@@ -94,23 +97,53 @@ describe("entries", () => {
 	test("the rules: answerer answers, asker resolves, nothing resolves over open follow-ups, resolved leaves leave", async () => {
 		const plugin = service.plugin();
 		const asker = { session: S("ses_a"), directory: "/w" };
-		const root = await plugin.request("ask", { asker, question: question("Root") });
-		const child = await plugin.request("ask", { asker, question: question("Child", { parent: root.id }) });
+		const root = await plugin.request("ask", { by: asker, question: question("Root") });
+		const child = await plugin.request("ask", { by: asker, question: question("Child", { parent: root.id }) });
 		expect(child.parent).toBe(root.id);
-		await expect(plugin.request("answer", { id: root.id, body: "x" })).rejects.toThrow("the user answers it");
-		await expect(plugin.request("resolve", { id: root.id })).rejects.toThrow(
+		await expect(plugin.request("answer", { by: asker, id: root.id, body: "x" })).rejects.toThrow(
+			"the user answers it",
+		);
+		await expect(plugin.request("resolve", { by: agent("ses_a"), id: root.id })).rejects.toThrow(
 			`1 open below it, so it can't be resolved yet: ${child.id}`,
 		);
 		// An id that isn't one doesn't even leave (the contract is checked on both sides); a well-formed one the desk doesn't have is refused by the desk.
 		await expect(
-			plugin.request("ask", { asker, question: question("Orphan", { parent: E("missing") }) }),
+			plugin.request("ask", { by: asker, question: question("Orphan", { parent: E("missing") }) }),
 		).rejects.toThrow("Schema validation failed");
 		const missing = E(crypto.randomUUID());
-		await expect(plugin.request("ask", { asker, question: question("Orphan", { parent: missing }) })).rejects.toThrow(
-			`No desk entry ${missing}`,
+		await expect(
+			plugin.request("ask", { by: asker, question: question("Orphan", { parent: missing }) }),
+		).rejects.toThrow(`No desk entry ${missing}`);
+		await plugin.request("resolve", { by: agent("ses_a"), id: child.id });
+		await plugin.request("resolve", { by: agent("ses_a"), id: root.id });
+		expect(await entryFiles()).toEqual([]);
+	});
+
+	test("the caller is named in each request, whichever connection it comes on: an agent can't answer its own question; each side resolves only its own", async () => {
+		const server = service.fake.server("http://opencode-1");
+		server.session({ id: S("ses_a") });
+		const plugin = service.plugin(server);
+		const asked = await plugin.request("ask", { by: agent("ses_a"), question: question("Ours?") });
+		await expect(plugin.request("answer", { by: agent("ses_a"), id: asked.id, body: "x" })).rejects.toThrow(
+			"the agents' own question; the user answers it",
 		);
-		await plugin.request("resolve", { id: child.id });
-		await plugin.request("resolve", { id: root.id });
+		await expect(service.rpc((client) => client.resolve({ by: user, id: asked.id }))).rejects.toMatchObject({
+			_tag: "NotTheAsker",
+			asker: "agent",
+		});
+		// The user answers, then asks back: a question of the user's, below it.
+		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "Answer." }] }));
+		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "And yours?" }] }));
+		await eventually(() => server.admitted.length === 2);
+		const theirs = present((await view("ses_a")).entries.find((entry) => entry.asker === "user"));
+		await eventually(async () => (await read(theirs.id)).pending === null);
+		await expect(plugin.request("resolve", { by: agent("ses_a"), id: theirs.id })).rejects.toThrow(
+			"was asked by the user; only the asker marks it done",
+		);
+		await plugin.request("answer", { by: agent("ses_a"), id: theirs.id, body: "Mine." });
+		await service.rpc((client) => client.resolve({ by: user, id: theirs.id }));
+		// Who's calling is what the request says, not the connection: here, the agent, on a connection like the page's.
+		await service.rpc((client) => client.resolve({ by: agent("ses_a"), id: asked.id }));
 		expect(await entryFiles()).toEqual([]);
 	});
 
@@ -118,10 +151,10 @@ describe("entries", () => {
 		const plugin = service.plugin();
 		const asker = { session: S("ses_a"), directory: "/w" };
 		const review = await plugin.request("ask", {
-			asker,
+			by: asker,
 			question: question("Review PR #7", { labels: ["pr:7", "review"] }),
 		});
-		const q = await plugin.request("ask", { asker, question: question("Q", { labels: ["pr:7"] }) });
+		const q = await plugin.request("ask", { by: asker, question: question("Q", { labels: ["pr:7"] }) });
 		expect(q.parent).toBe(review.id);
 		expect(review.parent).toBeNull();
 	});
@@ -137,11 +170,11 @@ describe("delivery", () => {
 		const plugin = service.plugin(refusing);
 		service.plugin(fine);
 		const a = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("A?"),
 		});
 		const b = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: "/w" },
 			question: question("B?"),
 		});
 		await service.rpc((client) =>
@@ -166,15 +199,15 @@ describe("delivery", () => {
 		server.session({ id: S("ses_b"), directory: "/work/phantom" });
 		const plugin = service.plugin(server);
 		const a = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: "/work/phantom" },
 			question: question("A?"),
 		});
 		const a2 = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: "/work/phantom" },
 			question: question("A2?"),
 		});
 		const b = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/work/phantom" },
+			by: { session: S("ses_b"), directory: "/work/phantom" },
 			question: question("B?"),
 		});
 		const sent = await service.rpc((client) =>
@@ -208,11 +241,13 @@ describe("delivery", () => {
 	test("the user can discard a delivery that can't happen (its session is gone): the text stays, the entry can be resolved, nothing goes out later", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_gone"), directory: "/w" },
+			by: { session: S("ses_gone"), directory: "/w" },
 			question: question("Gone?"),
 		});
 		await service.rpc((client) => client.send({ entry: asked.id, text: "Too late" }));
-		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
+		await expect(plugin.request("resolve", { by: agent("ses_gone"), id: asked.id })).rejects.toThrow(
+			"hasn't reached the session yet",
+		);
 		await service.rpc((client) => client.discard({ entry: asked.id }));
 		expect(await read(asked.id)).toMatchObject({ status: "answered", answer: "Too late", pending: null });
 		await expect(service.rpc((client) => client.discard({ entry: asked.id }))).rejects.toMatchObject({
@@ -224,13 +259,13 @@ describe("delivery", () => {
 		service.plugin(server);
 		await Bun.sleep(300);
 		expect(server.calls).toHaveLength(0);
-		await plugin.request("resolve", { id: asked.id });
+		await plugin.request("resolve", { by: agent("ses_gone"), id: asked.id });
 	});
 
 	test("with no OpenCode that knows the session, it stays answered, not delivered, and goes out once one connects", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Later?"),
 		});
 		await service.rpc((client) => client.send({ entry: asked.id, text: "now" }));
@@ -239,7 +274,9 @@ describe("delivery", () => {
 		expect(pending).toMatchObject({ status: "answered", pending: { delivery: "steer" } });
 		expect(pending?.pending?.message).toStartWith("msg_");
 		expect(present((await view("ses_a")).entries[0]).pending).toEqual(present(pending).pending);
-		await expect(plugin.request("resolve", { id: asked.id })).rejects.toThrow("hasn't reached the session yet");
+		await expect(plugin.request("resolve", { by: agent("ses_a"), id: asked.id })).rejects.toThrow(
+			"hasn't reached the session yet",
+		);
 
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a") });
@@ -258,7 +295,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Off?"),
 		});
 		await plugin.request("modes", { sessions: [] });
@@ -280,7 +317,7 @@ describe("delivery", () => {
 		server.loseNextReply = true;
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Once?"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "once" }] }));
@@ -293,7 +330,7 @@ describe("delivery", () => {
 	test("an undelivered message survives a restart of the service", async () => {
 		const asked = await service
 			.plugin()
-			.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Restart?") });
+			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Restart?") });
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "kept" }] }));
 		const message = await eventually(async () => (await read(asked.id))?.pending?.message);
 		await service.close(false);
@@ -310,7 +347,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Agents'"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "Answer." }] }));
@@ -325,12 +362,13 @@ describe("delivery", () => {
 			directory: "/w",
 			title: "A question back?",
 		});
-		expect(present(server.admitted[1]).text).toContain(
+		// Two messages, one per Submit; in whichever order they went out.
+		expect(server.admitted.map((prompt) => prompt.text).join("\n")).toContain(
 			`## ${followUp.id} New question from the user (follow-up to ${asked.id})`,
 		);
-		await plugin.request("answer", { id: followUp.id, body: "Here." });
+		await plugin.request("answer", { by: agent("ses_a"), id: followUp.id, body: "Here." });
 		await eventually(async () => (await read(followUp.id))?.pending === null);
-		await service.rpc((client) => client.resolve({ id: followUp.id }));
+		await service.rpc((client) => client.resolve({ by: user, id: followUp.id }));
 		expect(await entryFiles()).toEqual([`${asked.id}.md`]);
 	});
 
@@ -339,7 +377,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const asked = await service
 			.plugin(server)
-			.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Picture?") });
+			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Picture?") });
 		const local = crypto.randomUUID();
 		const data = new TextEncoder().encode("PNGDATA");
 		await service.rpc((client) =>
@@ -368,11 +406,11 @@ describe("desks", () => {
 		server.session({ id: S("ses_q"), title: "Persona", directory: "/work/phantom-p5" });
 		const plugin = service.plugin(server, "/work/phantom");
 		const p = await plugin.request("ask", {
-			asker: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("P?"),
 		});
 		await plugin.request("ask", {
-			asker: { session: S("ses_q"), directory: "/work/phantom-p5" },
+			by: { session: S("ses_q"), directory: "/work/phantom-p5" },
 			question: question("Q?"),
 		});
 		expect(p.url).toBe(`${service.url}sessions/ses_p/questions/${p.id}`);
@@ -393,7 +431,7 @@ describe("desks", () => {
 	test("a desk whose session no connected OpenCode knows is unknown, named after its entries' folder, until one does", async () => {
 		await service
 			.plugin()
-			.request("ask", { asker: { session: S("ses_p"), directory: "/work/phantom/app" }, question: question("Where?") });
+			.request("ask", { by: { session: S("ses_p"), directory: "/work/phantom/app" }, question: question("Where?") });
 		expect((await view()).desks.map((desk) => [desk.session, desk.title, desk.known])).toEqual([
 			["ses_p", "app", false],
 		]);
@@ -410,7 +448,7 @@ describe("desks", () => {
 		await plugin.url();
 		server.down = true;
 		await plugin.request("ask", {
-			asker: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("Where?"),
 		});
 		expect((await view()).desks.map((desk) => desk.known)).toEqual([false]);
@@ -423,7 +461,7 @@ describe("desks", () => {
 		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
 		const first = service.plugin(server);
 		await first.request("ask", {
-			asker: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: "/work/phantom" },
 			question: question("Where?"),
 		});
 		await eventually(async () => (await view()).desks[0]?.title === "Phantom");
@@ -448,17 +486,17 @@ describe("desks", () => {
 	test("a parent on another session's desk is refused, asking and adopting: a thread stays on one desk", async () => {
 		const plugin = service.plugin();
 		const theirs = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Theirs?"),
 		});
 		await expect(
 			plugin.request("ask", {
-				asker: { session: S("ses_b"), directory: "/w" },
+				by: { session: S("ses_b"), directory: "/w" },
 				question: question("Mine?", { parent: theirs.id }),
 			}),
 		).rejects.toThrow("another session's desk");
 		const mine = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: "/w" },
 			question: question("Mine?"),
 		});
 		await expect(plugin.request("adopt", { id: mine.id, parent: theirs.id })).rejects.toThrow("another session's desk");
@@ -467,20 +505,20 @@ describe("desks", () => {
 	test("a PR's question is filed under its review entry on the asker's desk only", async () => {
 		const plugin = service.plugin();
 		const elsewhere = await plugin.request("ask", {
-			asker: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: "/w" },
 			question: question("Review PR #7", { labels: ["review", "pr:7"] }),
 		});
 		const asked = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: "/w" },
 			question: question("About #7?", { labels: ["pr:7"] }),
 		});
 		expect(asked.parent).toBeNull();
 		const own = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: "/w" },
 			question: question("Review PR #7 here", { labels: ["review", "pr:7"] }),
 		});
 		const filed = await plugin.request("ask", {
-			asker: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: "/w" },
 			question: question("And now?", { labels: ["pr:7"] }),
 		});
 		expect(filed.parent).toBe(own.id);
@@ -492,19 +530,19 @@ describe("desks", () => {
 		server.session({ id: S("ses_new"), title: "New", directory: "/w" });
 		const plugin = service.plugin(server);
 		const old = await plugin.request("ask", {
-			asker: { session: S("ses_old"), directory: "/w" },
+			by: { session: S("ses_old"), directory: "/w" },
 			question: question("Old?"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: old.id, text: "The answer" }] }));
-		expect(await plugin.request("claim", { session: S("ses_new"), from: S("ses_old") })).toBe(1);
+		expect(await plugin.request("claim", { by: agent("ses_new"), from: S("ses_old") })).toBe(1);
 		expect((await read(old.id)).session).toBe(S("ses_new"));
 		// Delivered to the claimer now: it's in desk mode in this OpenCode.
 		await eventually(() => server.admitted.length === 1);
 		expect(present(server.admitted[0]).sessionID).toBe(S("ses_new"));
-		await expect(plugin.request("claim", { session: S("ses_other"), from: S("ses_new") })).rejects.toThrow(
+		await expect(plugin.request("claim", { by: agent("ses_other"), from: S("ses_new") })).rejects.toThrow(
 			"is in desk mode",
 		);
-		await expect(plugin.request("claim", { session: S("ses_new"), from: S("ses_none") })).rejects.toThrow(
+		await expect(plugin.request("claim", { by: agent("ses_new"), from: S("ses_none") })).rejects.toThrow(
 			"nothing on the desk",
 		);
 	});
@@ -512,7 +550,7 @@ describe("desks", () => {
 	test("without a session, the page lists the desks only", async () => {
 		await service
 			.plugin()
-			.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Somewhere?") });
+			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Somewhere?") });
 		const all = await view();
 		expect(all.desk).toBeNull();
 		expect(all.entries).toEqual([]);
@@ -521,10 +559,10 @@ describe("desks", () => {
 
 	test("a live view follows changes", async () => {
 		const plugin = service.plugin();
-		await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("First") });
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("First") });
 		const views = service.rpc((client) => client.view({ session: "ses_a" }).pipe(Stream.take(2), Stream.runCollect));
 		await Bun.sleep(200);
-		await plugin.request("ask", { asker: { session: S("ses_a"), directory: "/w" }, question: question("Second") });
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Second") });
 		expect(Array.from(await views).map((one: View) => one.entries.length)).toEqual([1, 2]);
 	});
 });
@@ -551,7 +589,7 @@ describe("the page server", () => {
 		await writeFile(join(tmpdir(), "desk-outside.txt"), "secret");
 		const asked = await service
 			.plugin()
-			.request("ask", { asker: { session: S("ses_a"), directory: work }, question: question("Media?") });
+			.request("ask", { by: { session: S("ses_a"), directory: work }, question: question("Media?") });
 		const get = (path: string) => fetch(`${service.url}files/${asked.id}/${path}`);
 		const found = await get("shots/a%20b.png");
 		expect(found.status).toBe(200);
@@ -581,39 +619,41 @@ describe("the page server", () => {
 		await writeFile(join(directory, "media", "a.txt"), "inside");
 		const asked = await service
 			.plugin()
-			.request("ask", { asker: { session: S("ses_a"), directory }, question: question("Media") });
+			.request("ask", { by: { session: S("ses_a"), directory }, question: question("Media") });
 		expect(await (await fetch(`${service.url}files/${asked.id}/media/a.txt`)).text()).toBe("inside");
 		expect((await fetch(`${service.url}files/${asked.id}/..%2F..%2Fetc%2Fhosts`)).status).toBe(403);
 		expect((await fetch(`${service.url}files/nope/media/a.txt`)).status).toBe(404);
 	});
 
-	test("refuses foreign hosts and cross-site writes", async () => {
+	test("refuses foreign hosts, cross-site writes and another site's page calling the API", async () => {
 		expect((await fetch(service.url, { headers: { host: "evil.example" } })).status).toBe(421);
 		expect(
 			(await fetch(`${service.url}rpc`, { method: "POST", headers: { origin: "https://evil.example" }, body: "{}" }))
 				.status,
 		).toBe(403);
+		// A browser sends its page's Origin with a WebSocket upgrade: another site's is refused, the page's own is not, and
+		// a client that isn't a browser (the plugin) sends none.
+		const views = (headers?: Record<string, string>) =>
+			rpc(service.url, (client) => client.view({}).pipe(Stream.take(1), Stream.runCollect), headers);
+		await expect(views({ origin: "https://evil.example" })).rejects.toThrow();
+		expect(Array.from(await views({ origin: service.url.replace(/\/$/, "") }))).toHaveLength(1);
+		expect(Array.from(await views())).toHaveLength(1);
 	});
 });
 
 describe("the service's life", () => {
-	/** Builds another service on `store` (the socket in it), on `port`; closes it again unless kept. */
+	/** Builds another service on `store`, on `port`; closes it again unless kept. */
 	const another = async (store: string, port: number) => {
 		const scope = Effect.runSync(Scope.make());
 		const exit = await Effect.runPromiseExit(
-			Layer.buildWithScope(
-				App.layer({ store, socket: join(store, "desk.sock"), port, idle: 60_000 }).pipe(
-					Layer.provideMerge(BunServices.layer),
-				),
-				scope,
-			),
+			Layer.buildWithScope(App.layer({ store, port, idle: 60_000 }).pipe(Layer.provideMerge(BunServices.layer)), scope),
 		);
 		return { exit, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
 	};
 
 	test("one per store: the running service is registered in service.json, and a second one, on any port, refuses to start", async () => {
 		const registered = JSON.parse(await readFile(join(service.store, "service.json"), "utf8"));
-		expect(registered).toEqual({ pid: process.pid, protocol, url: service.url, socket: service.socket });
+		expect(registered).toEqual({ pid: process.pid, protocol, url: service.url });
 		const second = await another(service.store, 0);
 		await second.close();
 		expect(Exit.isFailure(second.exit) && String(second.exit.cause)).toContain("AlreadyRunning");
@@ -632,14 +672,24 @@ describe("the service's life", () => {
 		await rm(store, { recursive: true, force: true });
 	});
 
-	test("the page takes its port when it's free, and any free port when it isn't", async () => {
+	test("the service listens on its port and no other: taken by another program, it doesn't start, and leaves the store free", async () => {
 		const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("someone else") });
 		const store = await mkdtemp(join(tmpdir(), "desk-"));
 		const started = await another(store, present(taken.port));
-		const url = JSON.parse(await readFile(join(store, "service.json"), "utf8")).url as string;
-		expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-		expect(url).not.toContain(`:${taken.port}/`);
 		await started.close();
+		expect(Exit.isFailure(started.exit) && String(started.exit.cause)).toContain("PortTaken");
+		// The registration went with it: the next service on this store takes it.
+		expect(existsSync(join(store, "service.json"))).toBe(false);
+		// Run as the plugin runs it, it says why, and exits with an error.
+		const main = Bun.spawn(["bun", join(import.meta.dir, "../src/service/main.ts")], {
+			env: { ...process.env, DESK_HOME: store, DESK_PORT: String(taken.port) },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const said = (await new Response(main.stdout).text()) + (await new Response(main.stderr).text());
+		expect(await main.exited).toBe(1);
+		expect(said).toContain(`desk: port ${taken.port} is taken by another program`);
+		expect(said).not.toContain("EADDRINUSE");
 		taken.stop(true);
 		await rm(store, { recursive: true, force: true });
 	});
@@ -661,10 +711,10 @@ describe("the service's life", () => {
 
 	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {
 		await expect(
-			loose(service.socket, (client) => client.ask({ asker: { session: S("ses_a") }, question: { title: "No body" } })),
+			loose(service.url, (client) => client.ask({ by: { session: S("ses_a") }, question: { title: "No body" } })),
 		).rejects.toThrow();
 		await expect(
-			loose(service.socket, (client) => client.prioritize({ id: E("x"), priority: "urgent", subtree: false })),
+			loose(service.url, (client) => client.prioritize({ id: E("x"), priority: "urgent", subtree: false })),
 		).rejects.toThrow();
 		expect(await entryFiles()).toEqual([]);
 	});
@@ -673,13 +723,13 @@ describe("the service's life", () => {
 		await service.close();
 		let changed = false;
 		service = await startService({ outdated: Effect.sync(() => changed) });
-		expect(await loose(service.socket, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
-		await expect(loose(service.socket, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({
+		expect(await loose(service.url, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
+		await expect(loose(service.url, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({
 			_tag: "Outdated",
 			side: "plugin",
 		});
 		changed = true;
-		await expect(loose(service.socket, (client) => client.hello({ protocol: "5.new" }))).rejects.toMatchObject({
+		await expect(loose(service.url, (client) => client.hello({ protocol: "5.new" }))).rejects.toMatchObject({
 			_tag: "Outdated",
 			side: "service",
 		});
@@ -722,7 +772,7 @@ const Loose = RpcGroup.make(
 	Rpc.make("prioritize", { payload: Schema.Unknown, error: Refusal }),
 );
 const loose = <A, E>(
-	path: string,
+	url: string,
 	f: (client: RpcClient.FromGroup<typeof Loose, RpcClientError.RpcClientError>) => Effect.Effect<A, E>,
 ) =>
 	Effect.runPromise(
@@ -730,7 +780,7 @@ const loose = <A, E>(
 			Effect.scoped,
 			Effect.provide(
 				RpcClient.layerProtocolSocket().pipe(
-					Layer.provide(BunSocket.layerNet({ path })),
+					Layer.provide(BunSocket.layerWebSocket(wsUrl(url))),
 					Layer.provide(RpcSerialization.layerNdjson),
 				),
 			),

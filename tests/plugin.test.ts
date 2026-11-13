@@ -16,7 +16,7 @@ import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { P, S } from "./support/ids";
 import { present } from "./support/present";
-import { eventually, registeredPage, rpc } from "./support/service";
+import { eventually, rpc } from "./support/service";
 
 interface Session {
 	id: string;
@@ -148,7 +148,7 @@ afterAll(async () => {
 test("off by default: a session sees no desk tools until /desk-mode turns it on, for its subagents too", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service.
-	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(false);
+	expect(await Effect.runPromise(answering(port))).toBe(false);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(present(first.synthetic.at(-1)).text).toMatch(
@@ -175,7 +175,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 });
 
 test("the plugin started the service, detached, in its store; a subagent's question belongs to its root session", async () => {
-	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(true);
+	expect(await Effect.runPromise(answering(port))).toBe(true);
 	const result = await first.tool("desk_ask", "ses_sub", { title: "From a subagent?", body: "Details." });
 	const id = present(present(/Asked ([0-9a-f-]{36}), top-level\./.exec(result.content))[1]);
 	const text = await readFile(join(home, `${id}.md`), "utf8");
@@ -188,7 +188,7 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 test("the plugin is the service's way into its OpenCode: the user's reply goes out through it, and so do moves", async () => {
 	const asked = (await first.tool("desk_ask", "ses_main", { title: "Deliver me?", body: "Details." })).content;
 	const id = present(present(/Asked ([0-9a-f-]{36})/.exec(asked))[1]) as EntryId;
-	const page = await registeredPage(home);
+	const page = `http://127.0.0.1:${port}/`;
 	await rpc(page, (desk) => desk.send({ entry: id, text: "Yes, deliver.", files: [] }));
 	const prompt = await eventually(() => first.prompts.find((candidate) => candidate.text.includes("Yes, deliver.")));
 	expect(prompt.sessionID).toBe("ses_main");
@@ -215,7 +215,7 @@ test("a second plugin instance (another OpenCode) shares the one service and the
 	const log = await readFile(join(home, "service.log"), "utf8");
 	expect(log.match(/desk: serving/g)).toHaveLength(1);
 	// The page counts sessions in desk mode, not plugin instances: both report ses_main, which counts once.
-	const page = await registeredPage(home);
+	const page = `http://127.0.0.1:${port}/`;
 	const view = await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect));
 	// One service for both (its log says it started once, above), and the switch is shared.
 	expect(present(Array.from(view)[0])).toMatchObject({ deskMode: ["ses_main"] });
@@ -228,7 +228,7 @@ test("/desk-mode again turns it off", async () => {
 	expect(present(first.synthetic.at(-1)).description).toBe("Desk mode off");
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// Its last session in desk mode gone, the first instance hangs up; the second still has ses_main on.
-	const page = await registeredPage(home);
+	const page = `http://127.0.0.1:${port}/`;
 	const view = async () =>
 		present(Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]);
 	await eventually(async () => (await view()).deskMode.length === 1);
@@ -238,18 +238,18 @@ test("/desk-mode again turns it off", async () => {
 test("the service exits once every plugin instance has gone", async () => {
 	for (const cleanup of cleanups) await cleanup();
 	cleanups = [];
-	// Watch the log: probing the socket would make a client and keep the service up.
+	// Watch the log: it says when the service is gone.
 	await eventually(async () => (await readFile(join(home, "service.log"), "utf8")).includes("desk: exiting"), 5000);
 	await Bun.sleep(100);
-	expect(await Effect.runPromise(answering(join(home, "desk.sock")))).toBe(false);
+	expect(await Effect.runPromise(answering(port))).toBe(false);
 	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(2);
 });
 
 test("a stuck service: /desk-mode and the tools fail after the timeout instead of waiting for good", async () => {
 	const stuck = await mkdtemp(join(tmpdir(), "desk-stuck-"));
-	// Takes connections, never answers.
-	const listener = Bun.listen({ unix: join(stuck, "desk.sock"), socket: { data() {} } });
-	const context = fakeContext(stuck, sessions, { timeout: "300 millis" });
+	// Takes connections on the port, never answers.
+	const listener = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const context = fakeContext(stuck, sessions, { timeout: "300 millis", port: listener.port });
 	const unload = await load(context);
 	try {
 		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow("didn't answer within");

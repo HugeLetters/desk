@@ -1,27 +1,26 @@
 /**
- * The service's Unix socket, where plugin instances connect: the `PluginApi` RPC group (`protocol.ts`) served there.
- * The registration (`registration.ts`) keeps the store to one service; the socket file it finds is a stale one (a
- * crashed service's), and goes.
+ * The desk's API (`api.ts`) served over a WebSocket at `/rpc`, on the page's server (`http.ts`): the page and the
+ * plugin instances connect there alike, one connection each. What each request does is `Api`'s; here is what's about
+ * the connection: the version check on `hello`, and the bridge into a plugin's OpenCode.
  *
  * A plugin instance is attached for as long as its `attach` stream runs: a client (`Clients`) of the service, its
  * OpenCode reachable (`OpenCode`). The service's calls into that OpenCode go out on the stream; the plugin's `reply`
- * settles each, within `callTimeout`.
+ * settles each, within `callTimeout`. An open page is a client for as long as its `view` stream runs.
  */
-import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FiberSet from "effect/FiberSet";
-import * as FileSystem from "effect/FileSystem";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Logger from "effect/Logger";
 import type * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as RpcServer from "effect/rpc/RpcServer";
 import * as Stream from "effect/Stream";
-import { build, type Outcome, Outdated, PluginApi, protocol, type ServiceCall } from "../../api/protocol";
+import { DeskApi, type Outcome, Outdated, type ServiceCall } from "../../api/api";
+import { build, protocol } from "../../api/protocol";
+import { rpcPath } from "../../api/routes";
 import type { SessionID } from "../../model/entry";
 import { Clients } from "../clients";
 import { type Client, OpenCode, Unanswered } from "../opencode/opencode";
@@ -59,7 +58,7 @@ const without = <K, V>(map: ReadonlyMap<K, V>, key: K): ReadonlyMap<K, V> =>
 	new Map([...map].filter(([other]) => other !== key));
 
 const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>) =>
-	PluginApi.toLayer(
+	DeskApi.toLayer(
 		Effect.gen(function* () {
 			const api = yield* Api;
 			const opencode = yield* OpenCode;
@@ -134,7 +133,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 					return Stream.fromQueue(calls);
 				});
 
-			return PluginApi.of({
+			return DeskApi.of({
 				hello: ({ protocol: theirs }) =>
 					Effect.gen(function* () {
 						if (theirs === protocol) return { url: api.url };
@@ -144,7 +143,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 						);
 						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
 						if (outdatedHere) {
-							// The sleep: so the `Outdated` reply is written to the socket before it closes.
+							// The sleep: so the `Outdated` reply is written to the connection before it closes.
 							yield* FiberSet.run(background, Effect.andThen(Effect.sleep("100 millis"), clients.retire));
 							return yield* new Outdated({ side: "service" });
 						}
@@ -167,43 +166,24 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 					}),
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,
-				adopt: api.adopt,
 				answer: api.answer,
 				resolve: api.resolve,
+				adopt: api.adopt,
 				prioritize: api.prioritize,
+				claim: api.claim,
 				list: api.list,
 				page: api.page,
-				claim: api.claim,
+				view: ({ session }) => Stream.unwrap(Effect.as(clients.hold, api.view(session))),
+				submit: api.submit,
+				send: api.send,
+				discard: api.discard,
 			});
 		}),
 	);
 
-/**
- * Under Bun, a plugin hanging up cleanly reaches the socket server as a read error (ECONNRESET, EPIPE), which it logs as an
- * error. It isn't one: the attachment ends either way. Everything else is logged as usual.
- */
-const hungUp = (cause: Cause.Cause<unknown>) => {
-	const error = Cause.squash(cause) as
-		| { _tag?: string; reason?: { _tag?: string; cause?: { code?: string } } }
-		| undefined;
-	return (
-		error?._tag === "SocketError" &&
-		error.reason?._tag === "SocketReadError" &&
-		["ECONNRESET", "EPIPE"].includes(error.reason.cause?.code ?? "")
-	);
-};
-const logger = Logger.layer(
-	[Logger.make((options) => (hungUp(options.cause) ? undefined : Logger.defaultLogger.log(options)))],
-	{ mergeWithExisting: false },
-);
-
-export const layer = (path: string, outdated: Effect.Effect<boolean, never, FileSystem.FileSystem> = changedOnDisk) =>
-	RpcServer.layer(PluginApi).pipe(
+/** Registers `/rpc` on the page's `HttpRouter`; a WebSocket upgrade there is one client's connection. */
+export const layer = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem> = changedOnDisk) =>
+	RpcServer.layerHttp({ group: DeskApi, path: rpcPath, protocol: "websocket" }).pipe(
 		Layer.provide(handlers(outdated)),
-		Layer.provide(RpcServer.layerProtocolSocketServer),
-		Layer.provide(BunSocketServer.layer({ path })),
-		// The registration is ours, so a socket file here is a dead service's: it would keep us from listening.
-		Layer.provide(Layer.effectDiscard(Effect.flatMap(FileSystem.FileSystem, (fs) => Effect.ignore(fs.remove(path))))),
 		Layer.provide(RpcSerialization.layerNdjson),
-		Layer.provide(logger),
 	);

@@ -10,7 +10,6 @@ import { MetaProvider, Title } from "@solidjs/meta";
 import { A, Route, Router, useLocation, useNavigate, useParams } from "@solidjs/router";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -18,10 +17,11 @@ import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as Socket from "effect/socket/Socket";
 import { createEffect, createMemo, createSignal, For, on, onCleanup, type ParentProps, Show } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 import { render } from "solid-js/web";
-import { DeskApi, type Draft, type View } from "../src/api/page-api";
+import { DeskApi, type Draft, type View } from "../src/api/api";
 import { deskPath, entryPath, patterns, rpcPath, sessionIn } from "../src/api/routes";
 import {
 	type Entry,
@@ -42,9 +42,13 @@ import { type Local, render as markdown, renderDiagrams } from "./markdown";
 
 const isRefusal = Schema.is(Refusal);
 
+/** The desk's API over one WebSocket to this page's server, for as long as the page is open; it reconnects by itself. */
 const runtime = ManagedRuntime.make(
-	RpcClient.layerProtocolHttp({ url: rpcPath }).pipe(
-		Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+	RpcClient.layerProtocolSocket().pipe(
+		Layer.provide(
+			Socket.layerWebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${rpcPath}`),
+		),
+		Layer.provide([Socket.layerWebSocketConstructorGlobal, RpcSerialization.layerNdjson]),
 	),
 );
 const client = RpcClient.make(DeskApi);
@@ -575,7 +579,9 @@ function App() {
 														onClick={() => {
 															const id = entry().id;
 															void attempt(() =>
-																call((client) => client.resolve({ id })).then(() => `#${shortId(id)} marked done`),
+																call((client) => client.resolve({ by: { _tag: "User" }, id })).then(
+																	() => `#${shortId(id)} marked done`,
+																),
 															);
 														}}
 													>

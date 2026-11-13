@@ -6,11 +6,11 @@
  * A service creates the file exclusively when it starts. If it exists and names a live process, another service has
  * the store and this one leaves (`AlreadyRunning`); if that process is gone, the file is stale and replaced, by one
  * service at a time (`<store>/service.json.takeover`, a directory made exclusively). The file goes when the service
- * stops. A port, configured or not, doesn't decide anything: the page takes whichever port it can and writes it here.
+ * stops. The port doesn't decide anything here: a service on another store may have it (then this one can't listen).
  *
  * Taking it is a machine (`machine.ts`): `Creating` the file; `Checking` who has it when it exists; `Replacing` a dead
  * service's file while holding the takeover directory (for exactly as long as the state lasts); `Waiting` a moment
- * before trying again, since a service that's shutting down still holds the file for a moment after its socket closes;
+ * before trying again, since a service that's shutting down still holds the file for a moment after its server closes;
  * and, for good, `Registered` or `Taken`.
  */
 import * as Clock from "effect/Clock";
@@ -106,15 +106,14 @@ export const reconcile = (state: State, event: Event): State => {
 	}
 };
 
-/** Where the page and the socket are, once they are: what `publish` records. */
+/** Where the page is, once it's up: what `publish` records. */
 export interface Where {
 	readonly url: string;
-	readonly socket: string;
 }
 
 /**
  * Takes the store's lock for the scope's lifetime, or fails with `AlreadyRunning`; returns `publish`, which records
- * where the page and the socket are.
+ * where the page is.
  */
 export const register = (store: string) => {
 	const own: ServiceInfo.Info = { pid: process.pid, protocol };

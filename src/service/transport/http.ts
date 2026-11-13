@@ -1,14 +1,17 @@
 /**
- * The page on 127.0.0.1, one port for every desk (`/sessions/<id>` picks one): the built page
- * (`page/dist/`), its RPC API, the user's attachments (`/attachments/`), and files relative to an entry's directory
- * for its Markdown media (`/files/<entry id>/<path>`).
+ * The service's one server, on 127.0.0.1 at the configured port, one for every desk (`/sessions/<id>` picks one): the
+ * built page (`page/dist/`), the desk's API for the page and the plugins alike (`/rpc`, a WebSocket: `rpc.ts`), the
+ * user's attachments (`/attachments/`), and files relative to an entry's directory for its Markdown media
+ * (`/files/<entry id>/<path>`).
  *
- * One guard covers every request: the Host must be a loopback name (a DNS-rebound name gets nothing), and writes
- * must come from the page itself (no Origin, or this origin), so other sites open in the browser can't post into a
- * session. Each open page is a client of the service (its `view` stream) while it stays open.
+ * One guard covers every request: the Host must be a loopback name (a DNS-rebound name gets nothing), and writes and
+ * WebSocket upgrades must come from the page itself or from outside a browser (no Origin, or this origin), so other
+ * sites open in the browser can't post into a session or call the API.
  */
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as HttpRouter from "effect/http/HttpRouter";
 import * as HttpServerRequest from "effect/http/HttpServerRequest";
 import * as HttpServerResponse from "effect/http/HttpServerResponse";
@@ -16,15 +19,11 @@ import * as HttpStaticServer from "effect/http/HttpStaticServer";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
-import * as RpcSerialization from "effect/rpc/RpcSerialization";
-import * as RpcServer from "effect/rpc/RpcServer";
-import * as Stream from "effect/Stream";
-import { DeskApi } from "../../api/page-api";
-import { rpcPath } from "../../api/routes";
-import { Clients } from "../clients";
+import * as Predicate from "effect/Predicate";
+import * as Runtime from "effect/Runtime";
 import { Desk } from "../desk";
 import { type Content, Storage } from "../storage/storage";
-import { Api } from "./api";
+import * as Rpc from "./rpc";
 
 const Guard = HttpRouter.middleware(
 	(app) =>
@@ -33,30 +32,13 @@ const Guard = HttpRouter.middleware(
 			const host = request.headers.host ?? "";
 			const origin = request.headers.origin;
 			if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) return HttpServerResponse.text("wrong host", { status: 421 });
-			if (request.method !== "GET" && origin !== undefined && origin !== `http://${host}`)
+			// Browsers send an Origin with every write and every WebSocket upgrade; a plugin, not being one, sends none.
+			const upgrade = request.headers.upgrade?.toLowerCase() === "websocket";
+			if ((request.method !== "GET" || upgrade) && origin !== undefined && origin !== `http://${host}`)
 				return HttpServerResponse.text("forbidden", { status: 403 });
 			return yield* app;
 		}),
 	{ global: true },
-);
-
-const Rpcs = RpcServer.layerHttp({ group: DeskApi, path: rpcPath, protocol: "http" }).pipe(
-	Layer.provide(
-		DeskApi.toLayer(
-			Effect.gen(function* () {
-				const api = yield* Api;
-				const clients = yield* Clients;
-				return {
-					view: ({ session }) => Stream.unwrap(Effect.as(clients.hold, api.view(session))),
-					submit: ({ drafts }) => api.submit(drafts),
-					send: (draft) => api.send(draft),
-					resolve: ({ id }) => api.resolveByUser(id),
-					discard: ({ entry }) => api.discard(entry),
-				};
-			}),
-		),
-	),
-	Layer.provide(RpcSerialization.layerNdjson),
 );
 
 /**
@@ -113,30 +95,51 @@ const Attachments = HttpRouter.add("GET", "/attachments/*", () =>
 	}),
 );
 
-/** Serves the page; needs the `HttpServer` (`server`). */
-export const layer = Layer.unwrap(
-	Effect.gen(function* () {
-		const path = yield* Path.Path;
-		const page = yield* path.fromFileUrl(new URL("../../../page/dist", import.meta.url));
-		return HttpRouter.serve(
-			Layer.mergeAll(
-				Guard,
-				Rpcs,
-				Files,
-				Attachments,
-				// The page as built by Vite (`bun install`, or `bun run page` while editing it); unbuilt, it's a 404.
-				// Any other path is one of the page's own routes (`/sessions/<id>/…`): it gets index.html.
-				HttpStaticServer.layer({ root: page, spa: true }),
-			),
-			{ disableLogger: true, disableListenLog: true },
-		);
-	}),
-);
+/**
+ * Serves the page and the API; needs the `HttpServer` (`server`). `outdated`: whether this service is the outdated side
+ * when a plugin's protocol differs (`rpc.ts`).
+ */
+export const layer = (outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem>) =>
+	Layer.unwrap(
+		Effect.gen(function* () {
+			const path = yield* Path.Path;
+			const page = yield* path.fromFileUrl(new URL("../../../page/dist", import.meta.url));
+			return HttpRouter.serve(
+				Layer.mergeAll(
+					Guard,
+					Rpc.layer(outdated),
+					Files,
+					Attachments,
+					// The page as built by Vite (`bun install`, or `bun run page` while editing it); unbuilt, it's a 404.
+					// Any other path is one of the page's own routes (`/sessions/<id>/…`): it gets index.html.
+					HttpStaticServer.layer({ root: page, spa: true }),
+				),
+				{ disableLogger: true, disableListenLog: true },
+			);
+		}),
+	);
 
 /**
- * The page's server on 127.0.0.1:`port` (0: any free port); a taken port fails the layer. Its shutdown waits at most a
- * second for open requests: an open page's view stream never ends, so otherwise the service couldn't stop while a page
- * is open (it would wait the server's default 20 seconds).
+ * The server on 127.0.0.1:`port` (0, for tests only: any free port); a taken port fails the layer. Its shutdown waits at
+ * most a second for open requests: an open page's view stream never ends, so otherwise the service couldn't stop while
+ * a page is open (it would wait the server's default 20 seconds).
  */
 export const server = (port: number) =>
-	BunHttpServer.layer({ port, hostname: "127.0.0.1", gracefulShutdownTimeout: "1 second" });
+	Layer.effectContext(
+		Layer.build(BunHttpServer.layer({ port, hostname: "127.0.0.1", gracefulShutdownTimeout: "1 second" })).pipe(
+			// Bun throws it as it starts to listen.
+			Effect.catchDefect((defect) =>
+				Predicate.hasProperty(defect, "code") && defect.code === "EADDRINUSE"
+					? Effect.fail(new PortTaken({ port }))
+					: Effect.die(defect),
+			),
+		),
+	);
+
+/**
+ * Another program listens on the port. The service doesn't take another: the page's address and the plugins' way
+ * to the service are the port. Reported by whoever runs the service (`main.ts`), so not by the runtime as well.
+ */
+export class PortTaken extends Data.TaggedError("PortTaken")<{ readonly port: number }> {
+	override readonly [Runtime.errorReported] = false;
+}

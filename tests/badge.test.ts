@@ -54,8 +54,8 @@ test("the badge counts a project's entries waiting on the user, knows the sessio
 	opencode.session({ id: S("ses_a") });
 	const plugin = first.plugin(opencode);
 	const asked = { session: S("ses_a"), directory: "/work/a" };
-	await plugin.request("ask", { asker: asked, question: { title: "One?", body: "" } });
-	await plugin.request("ask", { asker: asked, question: { title: "Two?", body: "", priority: "critical" } });
+	await plugin.request("ask", { by: asked, question: { title: "One?", body: "" } });
+	await plugin.request("ask", { by: asked, question: { title: "Two?", body: "", priority: "critical" } });
 	const counted = await eventually(() =>
 		latest()?.desks.find((desk) => desk.session === "ses_a" && desk.waiting === 2),
 	);

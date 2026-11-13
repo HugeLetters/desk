@@ -1,16 +1,18 @@
 /**
  * What the TUI's footer badge shows (`tui.tsx`): per desk, how many entries wait on the user and how many
- * of those are critical, and where the page is. Read from the running service's page API (`view` without a session:
- * just the list of desks), found through its registration (`service-info.ts`). The badge doesn't start the
- * service (the server part does); while there's none, or after it goes, it looks again every couple of seconds.
+ * of those are critical, and where the page is. Read from the running service's API (`view` without a session:
+ * just the list of desks), over its WebSocket, found through its registration (`service-info.ts`). The badge doesn't
+ * start the service (the server part does); while there's none, or after it goes, it looks again every couple of
+ * seconds.
  *
- * `watch` needs the platform's `FileSystem` and `Path`, an `HttpClient` and the RPC serialization: whoever runs it
- * provides them (the TUI's entry point, the tests).
+ * `watch` needs the platform's `FileSystem` and `Path`, and the RPC serialization: whoever runs it provides them (the
+ * TUI's entry point, the tests).
  */
+import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
-import type * as HttpClient from "effect/http/HttpClient";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as RpcClient from "effect/rpc/RpcClient";
@@ -18,7 +20,7 @@ import type * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { DeskApi, DeskSummary } from "../api/page-api";
+import { DeskApi, DeskSummary } from "../api/api";
 import { deskPath, link, rpcPath } from "../api/routes";
 import * as ServiceInfo from "../shared/service-info";
 
@@ -51,7 +53,11 @@ const registered = (home: string) =>
 const from = (url: string) =>
 	Stream.unwrap(Effect.map(RpcClient.make(DeskApi), (desk) => desk.view({}))).pipe(
 		Stream.map((view): Status => ({ url, desks: view.desks, deskMode: view.deskMode })),
-		Stream.provide(RpcClient.layerProtocolHttp({ url: link(url, rpcPath) })),
+		Stream.provide(
+			RpcClient.layerProtocolSocket().pipe(
+				Layer.provide(BunSocket.layerWebSocket(link(url, rpcPath).replace(/^http/, "ws"))),
+			),
+		),
 	);
 
 /** Fails once the service at `url` is no longer the registered one (a stream from one that hangs might never end). */
@@ -66,11 +72,7 @@ const replaced = (home: string, url: string, every: Schedule.Schedule<unknown>) 
 export const watch = (
 	home: string,
 	every: Schedule.Schedule<unknown> = Schedule.spaced("2 seconds"),
-): Stream.Stream<
-	Status | undefined,
-	never,
-	FileSystem.FileSystem | Path.Path | HttpClient.HttpClient | RpcSerialization.RpcSerialization
-> =>
+): Stream.Stream<Status | undefined, never, FileSystem.FileSystem | Path.Path | RpcSerialization.RpcSerialization> =>
 	Stream.unwrap(
 		Effect.map(registered(home), (url) => Stream.merge(from(url), Stream.fromEffect(replaced(home, url, every)))),
 	).pipe(

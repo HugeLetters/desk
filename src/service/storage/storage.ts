@@ -95,7 +95,7 @@ export class Storage extends Context.Service<
 		readonly attachmentUrl: (file: string) => Effect.Effect<string>;
 		/** A file below `directory` (an entry's), never outside it; none when it's missing. */
 		readonly file: (directory: string, below: string) => Effect.Effect<Option.Option<Content>, Outside>;
-		/** Records where the page and the socket are, once they are (in the registration, on disk). */
+		/** Records where the page is, once it's up (in the registration, on disk). */
 		readonly publish: (where: Where) => Effect.Effect<void>;
 	}
 >()("desk/Storage") {

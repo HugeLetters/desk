@@ -3,7 +3,7 @@
  * they know, a way to prompt one, and the sessions that move to another project.
  *
  * The service never calls OpenCode itself. Each connected plugin instance is a `Client`: it looks sessions up and
- * prompts them in its own OpenCode for the service (over the socket), and reports the sessions that move there. So
+ * prompts them in its own OpenCode for the service (over its `attach` stream), and reports the sessions that move there. So
  * the service needs no endpoint or password, and a session is reachable exactly while a plugin instance of an
  * OpenCode that knows it is connected. Tests attach fakes.
  */
@@ -15,7 +15,7 @@ import * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import type { Prompt, SessionInfo } from "../../api/protocol";
+import type { Prompt, SessionInfo } from "../../api/api";
 import type { SessionID } from "../../model/entry";
 import { DeliveryFailed } from "../../model/errors";
 import type { Empty } from "../../shared/empty";

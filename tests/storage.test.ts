@@ -266,7 +266,7 @@ describe("on files only", () => {
 		const result = await Effect.runPromise(
 			Storage.use((storage) =>
 				Effect.gen(function* () {
-					yield* storage.publish({ url: "http://127.0.0.1:1/", socket: join(root, "desk.sock") });
+					yield* storage.publish({ url: "http://127.0.0.1:1/" });
 					const second = yield* Effect.exit(Effect.scoped(Layer.build(onDisk(root))));
 					return {
 						second,

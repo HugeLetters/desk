@@ -11,7 +11,6 @@ import type { Context } from "@opencode/plugin/tui/context";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
 import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
@@ -99,7 +98,7 @@ const badge = (context: Context) =>
 	}).pipe(Effect.scoped);
 
 /** What the badge needs, on Bun: provided here, at the TUI's entry, and nowhere below. */
-const services = Layer.mergeAll(BunServices.layer, FetchHttpClient.layer, RpcSerialization.layerNdjson);
+const services = Layer.mergeAll(BunServices.layer, RpcSerialization.layerNdjson);
 
 export default Plugin.define({
 	id: "desk",

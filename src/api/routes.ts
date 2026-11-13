@@ -23,7 +23,7 @@ export const sessionIn = (pathname: string) => {
 	return id === undefined ? undefined : decodeURIComponent(id);
 };
 
-/** The page's RPC API (`page-api.ts`), served beside the routes. */
+/** The desk's API (`api.ts`), a WebSocket beside the routes, for the page and the plugins alike. */
 export const rpcPath = "/rpc";
 
 /** A path as a link on the page at `page` (the service's URL, e.g. `http://127.0.0.1:47400/`). */

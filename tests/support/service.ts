@@ -1,23 +1,23 @@
 /**
  * A desk service in this process, on a temporary store, a free port and fake OpenCode servers. Plugin instances
- * reach it the way the plugin does (`plugin/connection.ts`, over the socket); pages through the typed RPC client.
+ * reach it the way the plugin does (`plugin/connection.ts`); pages through the typed RPC client, as the page does.
+ * Both over the WebSocket at `/rpc`.
  */
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunServices from "@effect/platform-bun/BunServices";
+import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
-import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import { DeskApi } from "../../src/api/page-api";
+import { DeskApi } from "../../src/api/api";
 import { link, rpcPath } from "../../src/api/routes";
 import { Refusal } from "../../src/model/errors";
 import { refusal } from "../../src/model/wording";
@@ -26,9 +26,7 @@ import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
 import { OpenCode } from "../../src/service/opencode/opencode";
 import { Api } from "../../src/service/transport/api";
-import * as ServiceInfo from "../../src/shared/service-info";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
-import { present } from "./present";
 
 export type Service = Awaited<ReturnType<typeof startService>>;
 
@@ -40,20 +38,20 @@ export async function startService(
 	options: {
 		store?: string;
 		idle?: number;
+		/** Default: any free one. */
+		port?: number;
 		fake?: ReturnType<typeof fakeOpenCode>;
 		outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
 	} = {},
 ) {
 	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
 	const fake = options.fake ?? fakeOpenCode();
-	const { socket } = await Effect.runPromise(ServiceInfo.files(store).pipe(Effect.provide(BunServices.layer)));
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
 		Layer.buildWithScope(
 			App.layer({
 				store,
-				socket,
-				port: 0,
+				port: options.port ?? 0,
 				idle: options.idle ?? 60_000,
 				retry: "50 millis",
 				outdated: options.outdated ?? Effect.succeed(false),
@@ -62,14 +60,15 @@ export async function startService(
 		),
 	)) as Context.Context<Api | Clients | OpenCode>;
 	const url = Context.get(services, Api).url;
+	const port = Number(new URL(url).port);
 	const plugins: Array<Scope.Closeable> = [];
 	const unwatch: Array<() => void> = [];
 	let blank = 0;
 
 	return {
 		store,
-		socket,
 		url,
+		port,
 		fake,
 		services,
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `directory`. */
@@ -78,7 +77,7 @@ export async function startService(
 			const live = Effect.runSync(
 				Scope.provide(
 					Connection.make({
-						socket,
+						port,
 						start: Effect.void,
 						directory,
 						modes: Effect.sync(() => [...opencode.sessions.keys()]),
@@ -124,23 +123,27 @@ export async function startService(
 
 const client = RpcClient.make(DeskApi);
 
-/** Calls the page's RPC API of the service at `url` (`http://127.0.0.1:<port>/`), as the page does. */
-export const rpc = <A, E>(url: string, f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
+/** The desk's API of the service whose page is at `url` (`http://127.0.0.1:<port>/`): its WebSocket, `/rpc`. */
+export const wsUrl = (url: string) => link(url, rpcPath).replace(/^http/, "ws");
+
+/**
+ * Calls the API of the service at `url` (`http://127.0.0.1:<port>/`) over a WebSocket of its own, as the page does;
+ * `headers` go with the upgrade (an `origin`, say, as a browser sends it).
+ */
+export const rpc = <A, E>(
+	url: string,
+	f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>,
+	headers?: Record<string, string>,
+) =>
 	Effect.runPromise(
 		Effect.scoped(Effect.flatMap(client, f)).pipe(
 			Effect.provide(
-				RpcClient.layerProtocolHttp({ url: link(url, rpcPath) }).pipe(
-					Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+				RpcClient.layerProtocolSocket().pipe(
+					Layer.provide(BunSocket.layerWebSocket(wsUrl(url), headers ? { headers } : undefined)),
+					Layer.provide(RpcSerialization.layerNdjson),
 				),
 			),
 		),
-	);
-
-/** The page's URL in `store`'s registration, read as the badge reads it (`service-info.ts`). */
-export const registeredPage = async (store: string) =>
-	present(
-		Option.getOrUndefined(await Effect.runPromise(ServiceInfo.read(store).pipe(Effect.provide(BunServices.layer))))
-			?.url,
 	);
 
 /** Polls `check` until it returns something truthy (or throws after `timeout`). */

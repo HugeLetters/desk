@@ -37,8 +37,8 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
    question for the user on the desk, not in chat.
-4. The page is `http://127.0.0.1:47400/` (or the `url` in `<store>/service.json` if that port was taken);
-   `/desk-mode` links to the session's desk there. In a session with desk mode on, the TUI's footer shows `desk`, or
+4. The page is `http://127.0.0.1:47400/` (or the `port` option's); `/desk-mode` links to the session's desk there. If
+   another program has that port, the service doesn't start and the agents' desk tools say so: set the `port` option. In a session with desk mode on, the TUI's footer shows `desk`, or
    `desk [N]` when N entries of the session's desk wait on you (`[N !M]`, M in red, for critical ones); clicking it
    opens the page. The badge is the plugin's `./tui`
    part, so it loads wherever the plugin does.
@@ -50,28 +50,33 @@ flowchart LR
   subgraph OC[OpenCode, one or more]
     P1[plugin instance] --- P2[plugin instance]
   end
-  P1 <-- "Unix socket, RPC: hello, attach (calls back: session, prompt), desk_* requests, moved" --> S
+  P1 <-- "WebSocket :47400/rpc: hello, attach (calls back: session, prompt), desk_* requests, moved" --> S
   P2 <--> S
-  B[pages in the browser] -- "HTTP :47400, RPC" --> S
+  B[pages in the browser] <-- "the page over HTTP; WebSocket /rpc: view, the user's drafts" --> S
   S[desk service<br/>one per machine]
   S --- F[(~/.local/share/desk/<br/>&lt;id&gt;.md, attachments/)]
 ```
 
-- **The service** (`src/service/main.ts`, Effect on Bun) is the only thing that touches the store. It serves the
-  page (port 47400 when free, else any free port), answers the plugins on `<store>/desk.sock`, and delivers answers.
-  One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url, socket }`, `src/shared/service-info.ts`),
+- **The service** (`src/service/main.ts`, Effect on Bun) is the only thing that touches the store. It has one server,
+  on 127.0.0.1 at the `port` setting (47400), and no other port: taken by another program, the service doesn't start
+  (it logs why). There it serves the page, and the desk's API at `/rpc`, a WebSocket, for the page and the plugins
+  alike; and it delivers answers.
+  One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url }`, `src/shared/service-info.ts`),
   created exclusively, like OpenCode's own `service.json`. That's the only lock: a second service finds a live
-  registration and exits, a dead one's is replaced.
-  The socket carries an `effect/rpc` group, `PluginApi` (`src/api/protocol.ts`), checked on both sides; what the desk
-  refuses comes back typed and is worded by the plugin or the page (`src/model/wording.ts`). Its version is a hash of the
-  contract's code (`protocol.ts`, `entry.ts`, `errors.ts`, `bun.lock`), so nothing is bumped by hand. On `hello` with
+  registration and exits, a dead one's is replaced. Clients find the service by its port, not there.
+  The API is one `effect/rpc` group, `DeskApi` (`src/api/api.ts`), checked on both sides; what the desk refuses comes
+  back typed and is worded by the plugin or the page (`src/model/wording.ts`). Each request whose rules depend on who's
+  calling names its caller (`by`): an agent, in its session and directory, or the user (data, not a credential:
+  everything runs locally as the user). Its version is a hash of the contract's code (`api.ts`, `entry.ts`,
+  `errors.ts`, `bun.lock`; `src/api/protocol.ts`), so nothing is bumped by hand. On `hello` with
   another version, a service whose contract on disk changed since it loaded retires (the plugin starts the new one);
   otherwise the plugin is told to `/reload`. So a contract change restarts the service by itself (the plugin reloads
   and says `hello`); after a change to the service's own code, restart it (`kill` the pid in `service.json`). It exits 10 minutes after its last client
   (plugin connection or open page) goes, or on a signal, within about a second even with pages open.
 - **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client, one per
-  directory OpenCode works in. While a session in its directory is in desk mode, it connects to the socket, starting
-  the service detached if nobody answers (log: `<store>/service.log`), says `hello`, and holds `attach` open with those
+  directory OpenCode works in. While a session in its directory is in desk mode, it connects to
+  `ws://127.0.0.1:<port>/rpc`, starting the service detached if nothing listens on the port (log:
+  `<store>/service.log`), says `hello`, and holds `attach` open with those
   sessions (later changes as `modes`); it hangs up when the last one turns desk mode off. Connected, it reconnects
   (restarting the service) if the connection drops. It is also the service's only way into OpenCode: the service's
   calls (look a session up, prompt one) come on the `attach` stream and the plugin answers each with `reply`; the
@@ -93,15 +98,15 @@ flowchart LR
 | Directory                | What it is                                                                                                                                                                                                                                                                                                                                                                                                |
 | ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/model/`             | the entry and its rules, shared by every side: `entry.ts` (the entry, its file format, whose turn it is, the desk's order), `lifecycle.ts` (what can happen to one entry: a pure `reconcile(entry, event)`, the entry after or why it's refused), `errors.ts` (the refusals), `wording.ts` (how clients word them)                                                                                        |
-| `src/api/`               | the contracts: `protocol.ts` (the plugins' RPC group, versioned by a hash of the contract's code), `page-api.ts` (the page's), `routes.ts` (the page's paths: `/sessions/<id>`, its entries, `/rpc`)                                                                                                                                                                                                      |
+| `src/api/`               | the contract: `api.ts` (the one RPC group, `DeskApi`, for the page and the plugins; the caller named in each request), `protocol.ts` (its version: a hash of the contract's code), `routes.ts` (the page's paths: `/sessions/<id>`, its entries, `/rpc`)                                                                                                                                                  |
 | `src/service/`           | the service: `main.ts`, `app.ts` (its layers), `desk.ts` (the rules: ask, answer, adopt, prioritize, resolve, reply into the outbox; each change one transaction), `clients.ts` (idle exit; a machine)                                                                                                                                                                                                    |
 | `src/service/storage/`   | the store, the only part of the service that touches it: `storage.ts` (`Storage`: the entries, one transaction at a time, when to read again, attachments, files of an entry's directory), `files.ts` (on disk: the flat directory, the desk's only state, read fresh every time; writes land whole), `memory.ts` (in memory, for tests), `registration.ts` (`service.json`, the store's lock; a machine) |
 | `src/service/delivery/`  | `outbox.ts` (outbox entries → the messages to send), `delivery.ts` (sends them, one machine per due message, retrying on reconnect and every 30 s)                                                                                                                                                                                                                                                        |
 | `src/service/opencode/`  | OpenCode as the service reaches it: `opencode.ts` (the connected plugin instances), `sessions.ts` (a desk's name: its session's title and folder, cached)                                                                                                                                                                                                                                                 |
-| `src/service/transport/` | `api.ts` (what each request does), `socket.ts` (the plugins), `http.ts` (the page and its RPC)                                                                                                                                                                                                                                                                                                            |
-| `src/plugin/`            | `index.ts` (the assembly), `modes.ts` (desk mode in storage, the connection following it), `command.ts` (`/desk-mode`), `tools.ts` (the tools, hiding them), `sessions.ts` (OpenCode's sessions), `calls.ts` (the service, within the timeout), `connection.ts` (connect or start the service; a machine)                                                                                                 |
+| `src/service/transport/` | `api.ts` (what each request does), `rpc.ts` (the API over the WebSocket: the version check, the bridge into the plugins' OpenCode), `http.ts` (the one server: the page, `/rpc`, attachments and files; the port, and only that one)                                                                                                                                                                      |
+| `src/plugin/`            | `index.ts` (the assembly), `modes.ts` (desk mode in storage, the connection following it), `command.ts` (`/desk-mode`), `tools.ts` (the tools, hiding them), `sessions.ts` (OpenCode's sessions), `calls.ts` (the service, within the timeout), `connection.ts` (connect to the port or start the service; a machine)                                                                                     |
 | `src/tui/`               | `index.tsx` (the TUI's footer badge: which desk a session reports), `badge.ts` (its data: the registered service's list of desks, through restarts)                                                                                                                                                                                                                                                       |
-| `src/shared/`            | `machine.ts` (state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts), `settings.ts` (the settings as Effect `Config`: the plugin's options, then `DESK_<NAME>`, then the defaults), `service-info.ts` (a store's service files and the registration's reader), `empty.ts`                                                                           |
+| `src/shared/`            | `machine.ts` (state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts), `settings.ts` (the settings as Effect `Config`: the plugin's options, then `DESK_<NAME>`, then the defaults), `service-info.ts` (a store's service files: the registration and the log), `empty.ts`                                                                           |
 | `page/`                  | the page (Solid, built by Vite into `page/dist/`); Mermaid renders in the browser, loaded on first use                                                                                                                                                                                                                                                                                                    |
 
 ## Entries
@@ -157,6 +162,7 @@ bun run page        # rebuild the page on save
 bun run demo        # docs/demo/: stills and the GIF (needs Google Chrome and ffmpeg)
 ```
 
-Tests never touch the real store or port: the desk's rules run on memory storage (`Storage.layerMemory`); the service runs in-process on a temp store, port 0 and fake OpenCode
-instances behind fake plugin connections (`tests/support/`); the plugin test starts a real service process on a temp store. To run a service by hand,
-set `DESK_HOME` (store), `DESK_PORT` and optionally `DESK_IDLE` (a duration such as `"1 minute"`, or ms): `DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`.
+Tests never touch the real store or port: the desk's rules run on memory storage (`Storage.layerMemory`); the service runs in-process on a temp store, any free port (port 0, which only
+tests can ask for) and fake OpenCode instances behind fake plugin connections (`tests/support/`); the plugin test starts a real service process on a temp store and a free port. To run
+a service by hand, set `DESK_HOME` (store), `DESK_PORT` (not 47400, which your own desk uses) and optionally `DESK_IDLE` (a duration such as `"1 minute"`, or ms):
+`DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`; its page and API are on that port.

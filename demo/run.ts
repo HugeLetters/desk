@@ -4,7 +4,7 @@
  *   bun run demo [out-dir]        # default: docs/demo
  *
  * The service runs in this process with a fake OpenCode (`tests/support/fake-opencode.ts`); the sample questions
- * are asked over the socket the way the plugin asks them. Nothing touches the real store. Needs Google Chrome
+ * are asked over the API the way the plugin asks them. Nothing touches the real store. Needs Google Chrome
  * (driven headless through playwright-core) and ffmpeg.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -73,7 +73,7 @@ try {
 		},
 	) =>
 		agent.request("ask", {
-			asker: { session: S(session), directory: session === "ses_desk" ? deskDir : phantom },
+			by: { session: S(session), directory: session === "ses_desk" ? deskDir : phantom },
 			question,
 		});
 	const review = await ask("ses_main", {

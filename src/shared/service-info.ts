@@ -1,7 +1,7 @@
 /**
- * The running service's files in a store: its registration, `<store>/service.json` (`service/storage/registration.ts`), which
- * says what it is and where its page and socket are, and the socket and the log beside it. Read by the service itself,
- * the plugin and the TUI badge, with this one schema and these paths.
+ * The running service's files in a store: its registration, `<store>/service.json` (`service/storage/registration.ts`),
+ * which says what it is (its pid and protocol) and where its page is, and the log beside it. The registration is the
+ * store's lock, read by the service itself; clients find the service by its port, not here.
  */
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,7 +13,6 @@ export const Info = Schema.Struct({
 	protocol: Schema.String,
 	/** Once the page is up. */
 	url: Schema.optional(Schema.String),
-	socket: Schema.optional(Schema.String),
 });
 export type Info = typeof Info.Type;
 
@@ -27,8 +26,6 @@ export const files = (store: string) =>
 	Effect.map(Path.Path, (path) => ({
 		/** The registration. */
 		registration: path.join(store, "service.json"),
-		/** The plugins' socket. */
-		socket: path.join(store, "desk.sock"),
 		/** The service's stdout and stderr, when a plugin started it. */
 		log: path.join(store, "service.log"),
 	}));

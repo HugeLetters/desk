@@ -7,7 +7,7 @@ import type { Plugin } from "@opencode/plugin/effect";
 import { Tool } from "@opencode/schema/tool";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import type { Question } from "../api/protocol";
+import type { Agent, Question } from "../api/api";
 import { EntryId, Priority, SessionID } from "../model/entry";
 import { Refusal } from "../model/errors";
 import { refusal } from "../model/wording";
@@ -36,6 +36,12 @@ const define = <Input extends Tool.ValueSchema>(info: Tool.Info<Input, undefined
 /** The tools, for `ctx` and `desk`. */
 const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 	const { service, root } = desk;
+	/** The calling agent, as the service is told: its top-level session (whose desk it is), and where that works. */
+	const agent = (sessionID: SessionID) =>
+		Effect.gen(function* () {
+			const session = yield* ctx.session.get({ sessionID: yield* root(sessionID) });
+			return { _tag: "Agent", session: session.id, directory: session.location.directory } satisfies Agent;
+		});
 	/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 	const tool =
 		<I, E>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, E>) =>
@@ -78,13 +84,8 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 			options: { codemode: false },
 			execute: tool((question: Question, sessionID) =>
 				Effect.gen(function* () {
-					const session = yield* ctx.session.get({ sessionID: yield* root(sessionID) });
-					const asked = yield* service((client) =>
-						client.ask({
-							asker: { session: session.id, directory: session.location.directory },
-							question,
-						}),
-					);
+					const by = yield* agent(sessionID);
+					const asked = yield* service((client) => client.ask({ by, question }));
 					const where =
 						asked.parent === null
 							? "top-level"
@@ -112,8 +113,10 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 			description: "Answer a question the user asked on the desk. Markdown, as in desk_ask.",
 			input: Schema.Struct({ id: EntryId, body: described(Schema.String, "The answer, in Markdown.") }),
 			options: { codemode: false },
-			execute: tool((input: { id: EntryId; body: string }) =>
-				service((client) => client.answer(input)).pipe(Effect.as(`Answered ${input.id}.`)),
+			execute: tool((input: { id: EntryId; body: string }, sessionID) =>
+				Effect.flatMap(agent(sessionID), (by) => service((client) => client.answer({ by, ...input }))).pipe(
+					Effect.as(`Answered ${input.id}.`),
+				),
 			),
 		}),
 		define({
@@ -122,8 +125,10 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 				"Mark one of your own desk questions done, once its outcome is applied (glossary, ADR, issue, code). Refused while anything below it is unresolved (the error lists those ids): resolve or wait for them first. Resolved entries without open follow-ups leave the desk.",
 			input: Schema.Struct({ id: EntryId }),
 			options: { codemode: false },
-			execute: tool((input: { id: EntryId }) =>
-				service((client) => client.resolve(input)).pipe(Effect.as(`Resolved ${input.id}.`)),
+			execute: tool((input: { id: EntryId }, sessionID) =>
+				Effect.flatMap(agent(sessionID), (by) => service((client) => client.resolve({ by, id: input.id }))).pipe(
+					Effect.as(`Resolved ${input.id}.`),
+				),
 			),
 		}),
 		define({
@@ -157,8 +162,8 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 			// Rarely needed: in Code Mode, out of every request's tool list (`desk_ask` names it).
 			options: { codemode: true },
 			execute: tool((input: { from: SessionID }, sessionID) =>
-				Effect.flatMap(root(sessionID), (session) =>
-					service((client) => client.claim({ session, from: input.from })).pipe(
+				Effect.flatMap(agent(sessionID), (by) =>
+					service((client) => client.claim({ by, from: input.from })).pipe(
 						Effect.map((count) => `Claimed ${count} ${count === 1 ? "entry" : "entries"} from ${input.from}'s desk.`),
 					),
 				),

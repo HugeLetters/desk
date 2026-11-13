@@ -3,7 +3,7 @@
  * draft's Markdown names one `attachment:<id>`; sending uploads only those the text still references.
  */
 
-import type { Attachment } from "../src/api/page-api";
+import type { Attachment } from "../src/api/api";
 import { referencedAttachments } from "../src/model/entry";
 
 export interface Local {

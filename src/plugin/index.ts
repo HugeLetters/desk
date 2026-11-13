@@ -9,9 +9,9 @@
  * replies here when the service asks, and tells the service about sessions that move.
  *
  * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, default
- * `$DESK_HOME` or `~/.local/share/desk`), `port` (the page's preferred port, default `$DESK_PORT` or 47400; any free one
- * when it's taken) and `timeout` (how long a desk call may take before the agent is told the service seems stuck;
- * default 30 seconds).
+ * `$DESK_HOME` or `~/.local/share/desk`), `port` (the service's: the page's and the API's, default `$DESK_PORT` or
+ * 47400) and `timeout` (how long a desk call may take before the agent is told the service seems stuck; default 30
+ * seconds).
  */
 
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -33,12 +33,13 @@ export default Plugin.define<Scope.Scope>({
 	effect: (ctx) =>
 		Effect.gen(function* () {
 			const store = yield* Settings.store;
+			const port = yield* Settings.port;
 			const files = yield* ServiceInfo.files(store);
 			const root = yield* Sessions.roots(ctx);
 			const modes = Modes.make(ctx, root);
 			const connection = yield* Connection.make({
-				socket: files.socket,
-				start: Connection.startService({ store, port: yield* Settings.port, log: files.log }),
+				port,
+				start: Connection.startService({ store, port, log: files.log }),
 				directory: ctx.location.directory,
 				modes: modes.here,
 				serve: Sessions.serve(ctx),

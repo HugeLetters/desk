@@ -53,7 +53,7 @@ export const store = Effect.gen(function* () {
 	return yield* setting("home", home, path.join(userHome, ".local", "share", "desk"));
 });
 
-/** The page's port, else 47400. Never 0 (any free port): the page's address and the clients' way to it stay put. */
+/** The service's port (the page's and the API's), else 47400. Never 0 (any free port): clients find the service by it. */
 export const port = setting("port", Config.Port("port"), 47400);
 
 /** A duration, as text (`"5 seconds"`) or ms. */

@@ -13,7 +13,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type * as Stream from "effect/Stream";
-import type { Attachment, Draft } from "../api/page-api";
+import type { Attachment, Draft } from "../api/api";
 import {
 	ancestors,
 	answerer,
