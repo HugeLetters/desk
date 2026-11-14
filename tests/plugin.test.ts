@@ -12,6 +12,7 @@ import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { EntryId } from "../src/model/entry";
+import { off, type Status } from "../src/plugin/badge-rpc";
 import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { P, S } from "./support/ids";
@@ -44,6 +45,14 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 	const synthetic: Array<{ sessionID: string; text: string; description?: string }> = [];
 	const prompts: Array<{ sessionID: string; id: string; text: string }> = [];
 	const events = Effect.runSync(Queue.unbounded<Event>());
+	/** The plugin RPCs registered, by id: their handlers, and the events emitted on each. */
+	const rpcs = new Map<
+		string,
+		{
+			handlers: Record<string, (input: unknown, context: unknown) => Run>;
+			emitted: Array<{ name: string; data: unknown }>;
+		}
+	>();
 	const ctx = {
 		options: { home, port, ...options },
 		location: { directory: "/work/phantom", project: { id: P("prj_phantom"), directory: "/work/phantom" } },
@@ -80,6 +89,17 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 			) => Effect.sync(() => callback({ add: (command) => commands.set(command.name, command) })),
 		},
 		event: { subscribe: () => Stream.fromQueue(events) },
+		rpc: {
+			register: (definition: { id: string }, handlers: Record<string, (input: unknown, context: unknown) => Run>) =>
+				Effect.sync(() => {
+					const emitted: Array<{ name: string; data: unknown }> = [];
+					rpcs.set(definition.id, { handlers, emitted });
+					return {
+						dispose: Effect.sync(() => void rpcs.delete(definition.id)),
+						events: { emit: (name: string, data: unknown) => Effect.sync(() => void emitted.push({ name, data })) },
+					};
+				}),
+		},
 	};
 	return {
 		ctx,
@@ -98,6 +118,13 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 		command: (name: string, sessionID: string) => Effect.runPromise(present(commands.get(name)).execute({ sessionID })),
 		tool: (name: string, sessionID: string, input: unknown) =>
 			Effect.runPromise(present(tools.get(name)).execute(input, { sessionID })),
+		/** The badge's status, as the TUI asks this plugin instance for it. */
+		status: () => Effect.runPromise(present(present(rpcs.get("desk")).handlers.status)({}, {})) as Promise<Status>,
+		/** The badge's `changed` events so far. */
+		changed: () =>
+			present(rpcs.get("desk"))
+				.emitted.filter((event) => event.name === "changed")
+				.map((event) => event.data as Status),
 	};
 }
 
@@ -119,6 +146,8 @@ let home: string;
 /** A free port for the service the plugin starts: the port setting is never 0. */
 let port: number;
 let first: ReturnType<typeof fakeContext>;
+/** Another OpenCode's instance, from "a second plugin instance" on. */
+let second: ReturnType<typeof fakeContext>;
 let cleanups: Array<() => unknown> = [];
 const previousIdle = process.env.DESK_IDLE;
 
@@ -147,8 +176,9 @@ afterAll(async () => {
 
 test("off by default: a session sees no desk tools until /desk-mode turns it on, for its subagents too", async () => {
 	expect(await first.visible("ses_main")).toEqual(["read"]);
-	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service.
+	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service; nor is there a badge.
 	expect(await Effect.runPromise(answering(port))).toBe(false);
+	expect(await first.status()).toEqual(off);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(present(first.synthetic.at(-1)).text).toMatch(
@@ -185,6 +215,27 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 	expect(await readFile(join(home, "service.log"), "utf8")).toContain(`desk: serving ${home}`);
 });
 
+test("the TUI badge's data, over the plugin's RPC: while connected, the service's desks and the sessions in desk mode; each change emitted", async () => {
+	const ofMain = (status: Status) => status.live?.desks.find((desk) => desk.session === "ses_main");
+	const live = await eventually(async () => {
+		const status = await first.status();
+		return ofMain(status)?.waiting === 1 && status.live;
+	});
+	expect(live).toMatchObject({ url: `http://127.0.0.1:${port}/`, deskMode: ["ses_main"] });
+	// Desk mode on, then the first question: each a change, the TUI told of both.
+	expect(first.changed().some((status) => status.live?.deskMode.includes("ses_main"))).toBe(true);
+	const before = first.changed().length;
+	await first.tool("desk_ask", "ses_main", { title: "Counted?", body: "", priority: "critical" });
+	const changed = await eventually(() =>
+		first
+			.changed()
+			.slice(before)
+			.find((status) => ofMain(status)?.critical === 1),
+	);
+	expect(ofMain(changed)).toMatchObject({ waiting: 2, critical: 1 });
+	await eventually(async () => JSON.stringify(await first.status()) === JSON.stringify(first.changed().at(-1)));
+});
+
 test("the plugin is the service's way into its OpenCode: the user's reply goes out through it, and so do moves", async () => {
 	const asked = (await first.tool("desk_ask", "ses_main", { title: "Deliver me?", body: "Details." })).content;
 	const id = present(present(/Asked ([0-9a-f-]{36})/.exec(asked))[1]) as EntryId;
@@ -208,7 +259,7 @@ test("the plugin is the service's way into its OpenCode: the user's reply goes o
 });
 
 test("a second plugin instance (another OpenCode) shares the one service and the switch", async () => {
-	const second = fakeContext(home, sessions);
+	second = fakeContext(home, sessions);
 	second.storage.set("on/ses_main", true); // OpenCode's plugin storage is shared; here each fake has its own
 	cleanups.push(await load(second));
 	expect((await second.tool("desk_list", "ses_main", {})).content).toContain("From a subagent?");
@@ -233,6 +284,10 @@ test("/desk-mode again turns it off", async () => {
 		present(Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]);
 	await eventually(async () => (await view()).deskMode.length === 1);
 	expect(await view()).toMatchObject({ deskMode: ["ses_main"] });
+	// Hung up: no badge from the first instance, and the TUI is told; the second's still has the desk.
+	await eventually(async () => (await first.status()).live === null);
+	expect(first.changed().at(-1)).toEqual(off);
+	expect((await second.status()).live).toMatchObject({ deskMode: ["ses_main"] });
 });
 
 test("the service exits once every plugin instance has gone", async () => {
@@ -242,7 +297,7 @@ test("the service exits once every plugin instance has gone", async () => {
 	await eventually(async () => (await readFile(join(home, "service.log"), "utf8")).includes("desk: exiting"), 5000);
 	await Bun.sleep(100);
 	expect(await Effect.runPromise(answering(port))).toBe(false);
-	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(2);
+	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(3);
 });
 
 test("a stuck service: /desk-mode and the tools fail after the timeout instead of waiting for good", async () => {

@@ -64,6 +64,12 @@ export interface Options<R = never> {
 	readonly wanted?: boolean;
 }
 
+/** A live link: the service's API, and its page's URL from its answer to `hello`. */
+export interface Link {
+	readonly client: Client;
+	readonly url: string;
+}
+
 export interface Connection {
 	/** Connects, or hangs up; done once the connection has taken it in. */
 	readonly want: (on: boolean) => Effect.Effect<void>;
@@ -73,7 +79,13 @@ export interface Connection {
 	readonly live: Effect.Effect<Option.Option<Client>>;
 	/** The page's URL, from the service's answer to `hello`. */
 	readonly url: Effect.Effect<string, DeskError>;
+	/** The live link now (none while not connected), then each new one, and none whenever it drops. */
+	readonly links: Stream.Stream<Option.Option<Link>>;
 }
+
+/** The same link, or none both times. */
+const sameLink = (a: Option.Option<Link>, b: Option.Option<Link>) =>
+	Option.isNone(a) ? Option.isNone(b) : Option.isSome(b) && a.value.client === b.value.client;
 
 export type State = Data.TaggedEnum<{
 	Off: Empty;
@@ -282,6 +294,13 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 			client: Effect.map(live, (now) => now.client),
 			live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
 			url: Effect.map(live, (now) => now.url),
+			links: actor.changes.pipe(
+				Stream.map(
+					(state): Option.Option<Link> =>
+						state._tag === "Live" ? Option.some({ client: state.client, url: state.url }) : Option.none(),
+				),
+				Stream.changesWith(sameLink),
+			),
 		};
 		return connection;
 	});
