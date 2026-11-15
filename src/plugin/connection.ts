@@ -32,7 +32,7 @@ import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
 import { protocol } from "../api/protocol";
-import { rpcPath } from "../api/routes";
+import { host, rpcUrl } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
@@ -182,10 +182,9 @@ const upgrades = (url: string) =>
 		Effect.provide(BunSocket.layerWebSocketConstructor),
 	);
 
-/** Whether something listens on `port` (on 127.0.0.1): connects, and hangs up at once. */
+/** Whether something listens on `port` (on {@link host}): connects, and hangs up at once. */
 export const answering = (port: number) =>
-	// TODO main | we hardcode this host in several spots - if anything should be part of settings | by Evgenii Perminov at Sun, 15 Nov 2026 16:54:32 GMT
-	BunSocket.makeNet({ host: "127.0.0.1", port }).pipe(
+	BunSocket.makeNet({ host, port }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
 		Effect.as(true),
@@ -194,7 +193,7 @@ export const answering = (port: number) =>
 
 /** The connection, off until needed; hangs up when the scope closes. */
 export const make = Effect.fn("Connection.make")(function* <R = never>(options: Options<R>) {
-	const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
+	const url = rpcUrl(options.port).href;
 	const transport = RpcClient.layerProtocolSocket().pipe(
 		Layer.provide(BunSocket.layerWebSocket(url)),
 		Layer.provide(RpcSerialization.layerNdjson),

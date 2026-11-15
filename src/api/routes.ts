@@ -25,5 +25,17 @@ export const sessionIn = (pathname: string) => {
 /** The desk's API (`api.ts`), a WebSocket beside the routes, for the page and the plugins alike. */
 export const rpcPath = "/rpc";
 
+/**
+ * The one host the service listens on and its clients reach it at: loopback only. Not a setting, deliberately: bound
+ * anywhere else, the API (which trusts its callers, `api.ts`) would be open to other machines.
+ */
+export const host = "127.0.0.1";
+
+/** The service's page on `port`: `http://127.0.0.1:<port>/`. */
+export const serviceUrl = (port: number) => new URL(`http://${host}:${port}/`);
+
+/** The service's API on `port`: `ws://127.0.0.1:<port>/rpc`. */
+export const rpcUrl = (port: number) => new URL(rpcPath, `ws://${host}:${port}/`);
+
 /** A path as a link on the page at `page` (the service's URL, e.g. `http://127.0.0.1:47400/`). */
 export const link = (page: string, path: string) => `${page.replace(/\/$/, "")}${path}`;

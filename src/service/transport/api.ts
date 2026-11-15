@@ -12,7 +12,7 @@ import type * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { type DeskApi, party, View } from "../../api/api";
-import { deskPath, entryPath, link } from "../../api/routes";
+import { deskPath, entryPath, link, serviceUrl } from "../../api/routes";
 import { type Entry, SessionID, waitingFor } from "../../model/entry";
 import { DeskInUse } from "../../model/errors";
 import { Failures } from "../delivery/delivery";
@@ -51,7 +51,7 @@ export class Api extends Context.Service<
 			Api,
 			Effect.gen(function* () {
 				const server = yield* HttpServer.HttpServer;
-				const url = server.address._tag === "UnixPathAddress" ? "" : `http://127.0.0.1:${server.address.port}/`;
+				const url = server.address._tag === "UnixPathAddress" ? "" : serviceUrl(server.address.port).href;
 				const desk = yield* Desk;
 				const sessions = yield* Sessions;
 				const opencode = yield* OpenCode;

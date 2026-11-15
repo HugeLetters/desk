@@ -21,23 +21,27 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Runtime from "effect/Runtime";
+import { host } from "../../api/routes";
 import { Desk } from "../desk";
 import { type Content, Storage } from "../storage/storage";
 import * as Rpc from "./rpc";
+
+/** A Host header that names the service on a loopback name: {@link host} or `localhost`, and a port. */
+const loopbackHost = new RegExp(`^(${host.replaceAll(".", "\\.")}|localhost):\\d+$`);
 
 const Guard = HttpRouter.middleware(
 	(app) =>
 		Effect.gen(function* () {
 			const request = yield* HttpServerRequest.HttpServerRequest;
-			const host = request.headers.host ?? "";
+			const hostHeader = request.headers.host ?? "";
 			const origin = request.headers.origin;
-			if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) {
+			if (!loopbackHost.test(hostHeader)) {
 				return HttpServerResponse.text("wrong host", { status: 421 });
 			}
 
 			// Browsers send an Origin with every write and every WebSocket upgrade; a plugin, not being one, sends none.
 			const upgrade = request.headers.upgrade?.toLowerCase() === "websocket";
-			if ((request.method !== "GET" || upgrade) && origin !== undefined && origin !== `http://${host}`) {
+			if ((request.method !== "GET" || upgrade) && origin !== undefined && origin !== `http://${hostHeader}`) {
 				return HttpServerResponse.text("forbidden", { status: 403 });
 			}
 
@@ -137,7 +141,7 @@ export const layer = (outdated?: Effect.Effect<boolean, never, FileSystem.FileSy
  */
 export const server = (port: number) =>
 	Layer.effectContext(
-		Layer.build(BunHttpServer.layer({ port, hostname: "127.0.0.1", gracefulShutdownTimeout: "1 second" })).pipe(
+		Layer.build(BunHttpServer.layer({ port, hostname: host, gracefulShutdownTimeout: "1 second" })).pipe(
 			// Bun throws it as it starts to listen.
 			Effect.catchDefect((defect) =>
 				Predicate.hasProperty(defect, "code") && defect.code === "EADDRINUSE"

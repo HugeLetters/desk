@@ -59,7 +59,8 @@ flowchart LR
 ```
 
 - **The service** (`src/service/main.ts`, Effect on Bun) is the only thing that touches the store. It has one server,
-  on 127.0.0.1 at the `port` setting (47400), and no other port: taken by another program, the service doesn't start
+  on 127.0.0.1 (`host` in `src/api/routes.ts`; not a setting, so the API is never open to other machines) at the
+  `port` setting (47400), and no other port: taken by another program, the service doesn't start
   (it logs why). There it serves the page, and the desk's API at `/rpc`, a WebSocket, for the page and the plugins
   alike; and it delivers answers.
   One per store: it registers itself in `<store>/service.json` (`{ pid, protocol, url }`, `src/shared/service-info.ts`),
