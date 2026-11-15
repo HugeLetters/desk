@@ -45,7 +45,7 @@ export const make = (
 		yield* ctx.storage.set(key(rootID), true);
 		return Option.some(rootID);
 	}),
-	// TODO main | why only in thie directory? | by Evgenii Perminov at Sun, 15 Nov 2026 16:12:22 GMT
+	// One plugin instance per directory, not per session: each reports the sessions located in its own (README).
 	here: Effect.gen(function* () {
 		/** Where a session works: in this directory, elsewhere (or OpenCode can't say now), or gone. */
 		const where = (sessionID: SessionID) =>

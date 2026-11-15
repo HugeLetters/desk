@@ -89,6 +89,11 @@ flowchart LR
   each the desks' summary from the service's `view` on its connection while it's live, else "not connected". The TUI
   part keeps the latest per location (one plugin instance per directory) and shows a session's from its top-level
   session's location; it never talks to the service, nor starts it.
+- **One plugin instance per directory, not per session.** Each instance holds a connection while at least one
+  desk-mode session _located in its directory_ exists: desk mode is stored plugin-wide (`on/<session>` in the plugin's
+  storage), and `modes.here` keeps the sessions whose location is this directory. It reports exactly those sessions
+  (`attach`, then `modes`). Its tools are one list for the whole instance (`tool.transform`'s callback gets no session),
+  hidden per session by the `context` hook. The TUI badge asks the instance of the session's directory.
 - **Delivery**: the user's text is written to its entries as an outbox (an OpenCode message id, fixed up front), then
   sent with `session.prompt({ id })` through a connected plugin instance whose OpenCode knows the session. OpenCode admits a message id
   once, so retries can't duplicate. With no such OpenCode connected, the entry stays "answered, not delivered" (a

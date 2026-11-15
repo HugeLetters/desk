@@ -193,7 +193,9 @@ export const register = Effect.fn("register")(function* (ctx: Context, desk: Des
 	});
 	const names = all.map((one) => one.name);
 
-	// TODO main | shouldnt we instead call transform on each event and add or not add depending on `on`. keep registration dispose in sync ref which you dispose off when new registration happens | by Evgenii Perminov at Sun, 15 Nov 2026 18:12:26 GMT
+	// `tool.transform`'s callback receives only the editor, no session or request, and builds this instance's one tool
+	// list (run again on `tool.reload`): registering per desk-mode change would add or remove the tools for every session
+	// of the directory. The `context` hook is the only place that's per session and per request.
 	yield* ctx.session.hook("context", (event) =>
 		Effect.map(
 			Effect.orElseSucceed(desk.modes.on(event.sessionID), () => false),

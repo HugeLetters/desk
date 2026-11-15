@@ -84,9 +84,10 @@ const later = (attempt: number, pid: number): State =>
 
 export const reconcile = (state: State, event: Event): State => {
 	switch (state._tag) {
+		// Final states: the lock is held, or another live service holds it; nothing changes them (their run is
+		// `Effect.never`). The live states below ignore only the events their own step can't produce.
 		case "Registered":
 		case "Taken":
-			// TODO main | its kinda weird that some states do nothing regardless of even. os it that normal? | by Evgenii Perminov at Sun, 15 Nov 2026 18:53:18 GMT
 			return state;
 		case "Waiting":
 			return event._tag === "Retry" ? State.Creating({ attempt: state.attempt + 1 }) : state;
