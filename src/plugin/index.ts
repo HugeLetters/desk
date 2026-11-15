@@ -17,7 +17,6 @@ import { Plugin } from "@opencode/plugin/effect";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import * as ServiceInfo from "../shared/service-info";
 import * as Settings from "../shared/settings";
 import * as Badge from "./badge";
 import * as Calls from "./calls";
@@ -31,21 +30,20 @@ export default Plugin.define<Scope.Scope>({
 	id: "desk",
 	effect: Effect.fnUntraced(
 		function* (ctx) {
-			const store = yield* Settings.store;
 			const port = yield* Settings.port;
-			const files = yield* ServiceInfo.files(store);
+			const { registration } = yield* Settings.files;
 			const getRootSessionId = yield* Sessions.createRootSessionLookup(ctx);
 			const modes = Modes.make(ctx, getRootSessionId);
 			const connection = yield* Connection.make({
 				port,
-				start: Connection.startService({ store, port }),
+				start: Connection.startService(),
 				directory: ctx.location.directory,
 				modes: modes.here,
 				serve: Sessions.serve(ctx),
 			});
 			const sync = yield* Modes.follow(modes, connection);
 			yield* sync;
-			const calls = Calls.make(connection, yield* Settings.timeout, files.registration);
+			const calls = Calls.make(connection, yield* Settings.timeout, registration);
 
 			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name. A session
 			// moving in or out of this directory may connect or hang up this instance, too.

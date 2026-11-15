@@ -18,7 +18,6 @@ import { Api } from "./transport/api";
 /** The service's configuration, from the settings. */
 export const configuration = Effect.gen(function* () {
 	const config: App.Config = {
-		store: yield* Settings.store,
 		port: yield* Settings.port,
 		idle: yield* Settings.idle,
 	};
@@ -29,7 +28,7 @@ if (import.meta.main) {
 	Effect.gen(function* () {
 		const config = yield* configuration;
 		yield* Effect.gen(function* () {
-			yield* Effect.log(`desk: serving ${config.store} on ${(yield* Api).url}`);
+			yield* Effect.log(`desk: serving ${yield* Settings.store} on ${(yield* Api).url}`);
 			yield* Clients.use((clients) => clients.idle);
 			yield* Effect.log("desk: exiting");
 		}).pipe(Effect.provide(Layer.fresh(App.layer(config))));

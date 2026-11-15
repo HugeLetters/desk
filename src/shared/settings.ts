@@ -74,6 +74,20 @@ export const store = Effect.gen(function* () {
 });
 
 /**
+ * The store and the running service's files in it: its registration (`service.json`, the store's lock:
+ * `service/storage/registration.ts`) and its log (its stdout and stderr, when a plugin started it).
+ */
+export const files = Effect.gen(function* () {
+	const path = yield* Path.Path;
+	const home = yield* store;
+	return {
+		store: home,
+		registration: AbsolutePath.make(path.join(home, "service.json")),
+		log: AbsolutePath.make(path.join(home, "service.log")),
+	};
+});
+
+/**
  * Service port, 1 to 65535.
  * @default 47400
  */

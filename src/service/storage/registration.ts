@@ -1,7 +1,8 @@
 /**
- * The service's registration, `<store>/service.json`: the lock that keeps the store to one service, and what the
- * running service is (`Info`, `service-info.ts`), as OpenCode's own `service.json` is. Part of the store on disk: the
- * file storage (`files.ts`) takes it before anything else, and `Storage.publish` writes where the page is.
+ * The service's registration, `<store>/service.json` (`Settings.files`): the lock that keeps the store to one service,
+ * and what the running service is (`Info`), as OpenCode's own `service.json` is. Part of the store on disk, behind
+ * `Storage` like the rest of it: the file storage (`files.ts`) takes it before anything else, `Storage.publish` writes
+ * where the page is and `Storage.registration` reads it. The store in memory (`memory.ts`) keeps one of its own.
  *
  * A service creates the file exclusively when it starts. If it exists and names a live process, another service has
  * the store and this one leaves (`AlreadyRunning`); if that process is gone, the file is stale and replaced, by one
@@ -21,12 +22,34 @@ import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import * as Unify from "effect/Unify";
 import { protocol } from "../../api/protocol";
 import type { AbsolutePath } from "../../model/paths";
 import type { Empty } from "../../shared/empty";
 import * as Machine from "../../shared/machine";
-import * as ServiceInfo from "../../shared/service-info";
+import * as Settings from "../../shared/settings";
+import type { Identity } from "../../shared/type";
+
+/** What the running service is (its pid and protocol), and where its page is once it's up. */
+export const Info = Schema.Struct({
+	pid: Schema.Int,
+	protocol: Schema.String,
+	/** Once the page is up. */
+	url: Schema.optional(Schema.URLFromString),
+});
+export interface Info extends Identity<typeof Info.Type> {}
+
+/** A registration's text, parsed: fails on anything that isn't one (an empty or half-written file, say). */
+export const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info));
+/** A registration's text. */
+export const encode = Schema.encodeEffect(Schema.fromJsonString(Info));
+
+/** The registration at `path` now; none when there's no file or it isn't one. */
+export const read = Effect.fnUntraced(function* (path: AbsolutePath) {
+	const fs = yield* FileSystem.FileSystem;
+	return yield* fs.readFileString(path).pipe(Effect.flatMap(decode), Effect.option);
+});
 
 export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
 	readonly path: string;
@@ -119,22 +142,22 @@ export interface Where {
 }
 
 /**
- * Takes the store's lock for the scope's lifetime, or fails with `AlreadyRunning`; returns `publish`, which records
- * where the page is.
+ * Takes the lock of the store the settings name for the scope's lifetime, or fails with `AlreadyRunning`; returns
+ * `publish`, which records where the page is, and `registration`, what's recorded now.
  */
-export const register = Effect.fn("register")(function* (store: AbsolutePath) {
-	const own: ServiceInfo.Info = { pid: process.pid, protocol };
+export const register = Effect.fn("register")(function* () {
+	const own: Info = { pid: process.pid, protocol };
 	const fs = yield* FileSystem.FileSystem;
-	const path = (yield* ServiceInfo.files(store)).registration;
+	const { store, registration: path } = yield* Settings.files;
 
 	/** The registration there now; undefined when there's none or it isn't one. */
-	const read = Effect.map(ServiceInfo.read(store), Option.getOrUndefined);
+	const holder = Effect.map(read(path), Option.getOrUndefined);
 
 	// Whole or not at all: written beside it, then linked into place (failing if it exists). Created empty and then
 	// written, a reader in between would take the empty file for a dead service's, remove it and take the lock.
 	const create = Effect.gen(function* () {
 		const temp = `${path}.${process.pid}.new`;
-		yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
+		yield* fs.writeFileString(temp, yield* encode(own));
 		yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 	});
 	const alreadyExists = (error: unknown) => {
@@ -160,8 +183,8 @@ export const register = Effect.fn("register")(function* (store: AbsolutePath) {
 			return Event.Contended();
 		}
 		yield* Effect.addFinalizer(() => Effect.ignore(fs.remove(takeover, { recursive: true })));
-		const holder = yield* read;
-		if (holder && exists(holder.pid)) return Event.Held({ pid: holder.pid });
+		const held = yield* holder;
+		if (held && exists(held.pid)) return Event.Held({ pid: held.pid });
 
 		yield* fs.remove(path, { force: true });
 		yield* create;
@@ -178,8 +201,8 @@ export const register = Effect.fn("register")(function* (store: AbsolutePath) {
 						Effect.catchIf(alreadyExists, () => Effect.succeed(Event.Exists())),
 					);
 				case "Checking":
-					return Effect.map(read, (holder) =>
-						holder && exists(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
+					return Effect.map(holder, (held) =>
+						held && exists(held.pid) ? Event.Held({ pid: held.pid }) : Event.Stale(),
 					);
 				case "Replacing":
 					return replace;
@@ -214,13 +237,16 @@ export const register = Effect.fn("register")(function* (store: AbsolutePath) {
 	if (Option.isSome(taken)) return yield* new AlreadyRunning({ path, pid: taken.value });
 
 	yield* Effect.addFinalizer(() =>
-		Effect.flatMap(read, (holder) => (holder?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void)),
+		Effect.flatMap(holder, (held) => (held?.pid === process.pid ? Effect.ignore(fs.remove(path)) : Effect.void)),
 	);
 	return {
 		publish: Effect.fn("publish")(function* (where: Where) {
 			const temp = `${path}.${process.pid}`;
-			yield* fs.writeFileString(temp, yield* ServiceInfo.encode({ ...own, ...where }));
+			yield* fs.writeFileString(temp, yield* encode({ ...own, ...where }));
 			yield* fs.rename(temp, path);
 		}, Effect.orDie),
+		registration: read(path).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
+		/** The store this registration locks. */
+		store,
 	};
 });

@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as BunServices from "@effect/platform-bun/BunServices";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -16,9 +17,11 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { protocol } from "../src/api/protocol";
 import { type Entry, fileName, serialize } from "../src/model/entry";
 import { type AbsolutePath, RelativePath } from "../src/model/paths";
 import { type Content, Storage } from "../src/service/storage/storage";
+import * as Settings from "../src/shared/settings";
 import { D, E, R, S } from "./support/ids";
 
 const isRelative = Schema.is(RelativePath);
@@ -61,6 +64,10 @@ const temp = async () => {
 	return directory;
 };
 
+/** The store's files in `root` (the `home` setting), read again every `rescan`. */
+const onDisk = (root: string, rescan?: Duration.Input) =>
+	Storage.layer(rescan).pipe(Layer.provide(Settings.layer({ home: root })), Layer.provide(BunServices.layer));
+
 /** A store, and a directory (an entry's) holding `files` (path below it → text). */
 interface Fixture {
 	readonly layer: Layer.Layer<Storage, unknown>;
@@ -84,7 +91,7 @@ const implementations: ReadonlyArray<readonly [string, (files: Record<string, st
 				await mkdir(join(directory, below, ".."), { recursive: true });
 				await writeFile(join(directory, below), data);
 			}
-			return { layer: Storage.layer(D(await temp())).pipe(Layer.provide(BunServices.layer)), directory: D(directory) };
+			return { layer: onDisk(await temp()), directory: D(directory) };
 		},
 	],
 ];
@@ -166,6 +173,26 @@ for (const [name, open] of implementations) {
 			expect(signals).toBeGreaterThanOrEqual(3);
 		});
 
+		test("the registration is this service's, with where the page is once that's published", async () => {
+			const result = await run(
+				await open({}),
+				Storage.use((storage) =>
+					Effect.gen(function* () {
+						const before = yield* storage.registration;
+						yield* storage.publish({ url: new URL("http://127.0.0.1:1/") });
+						return { before, after: yield* storage.registration };
+					}),
+				),
+			);
+			expect(result.before).toEqual(Option.some({ pid: process.pid, protocol }));
+			const after = Option.getOrThrow(result.after);
+			expect({ pid: after.pid, protocol: after.protocol, url: after.url?.href }).toEqual({
+				pid: process.pid,
+				protocol,
+				url: "http://127.0.0.1:1/",
+			});
+		});
+
 		test("attachments: stored below attachments/, read back, deleted; a failed transaction leaves none; nothing outside attachments/", async () => {
 			const fixture = await open({});
 			const result = await run(
@@ -227,8 +254,6 @@ for (const [name, open] of implementations) {
 }
 
 describe("on files only", () => {
-	const onDisk = (root: string) => Storage.layer(D(root)).pipe(Layer.provide(BunServices.layer));
-
 	test("an entry is a whole file, <id>.md; other files and unparseable ones aren't entries", async () => {
 		const root = await temp();
 		const one = entry("a", "2026-01-01");
@@ -258,7 +283,7 @@ describe("on files only", () => {
 					storage.transact((_, store) => store.write(one)),
 					storage.changes.pipe(Stream.runForEach(() => Effect.sync(() => signals.push(Date.now())))),
 				),
-			).pipe(Effect.provide(Storage.layer(D(root), "1 hour").pipe(Layer.provide(BunServices.layer)))),
+			).pipe(Effect.provide(onDisk(root, "1 hour"))),
 		);
 		await eventually(() => signals.length >= 1);
 		await Bun.sleep(100);

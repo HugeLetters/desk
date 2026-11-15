@@ -7,7 +7,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import type { AbsolutePath, Port } from "../model/paths";
+import type { Port } from "../model/paths";
 import { Clients } from "./clients";
 import * as Delivery from "./delivery/delivery";
 import { Desk } from "./desk";
@@ -17,9 +17,8 @@ import { Storage } from "./storage/storage";
 import { Api } from "./transport/api";
 import * as Http from "./transport/http";
 
+/** The service's configuration; the store is the `home` setting's (`Settings.files`), read where it's opened. */
 export interface Config {
-	/** The store: entries, attachments, the registration and the log. */
-	readonly store: AbsolutePath;
 	/**
 	 * The server's port; taken by another program, the service doesn't start (`Http.PortTaken`). 0 (tests only): any
 	 * free one.
@@ -39,7 +38,10 @@ export interface Config {
 	readonly outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem> | undefined;
 }
 
-/** Needs the platform (`BunServices.layer`): provided where the service is run, `main.ts` or the tests. */
+/**
+ * Needs the platform (`BunServices.layer`) and the settings (a `ConfigProvider`, `Settings.layer`): provided where the
+ * service is run, `main.ts` or the tests.
+ */
 export const layer = (config: Config) => {
 	const core = Layer.mergeAll(Desk.layer, Sessions.layer, Delivery.Failures.layer).pipe(
 		Layer.provideMerge(OpenCode.layer),
@@ -59,6 +61,6 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(Http.server(config.port)),
 		Layer.provideMerge(core),
 		// The store first, and with it its lock: nothing else starts while another service has the store.
-		Layer.provideMerge(Storage.layer(config.store)),
+		Layer.provideMerge(Storage.layer()),
 	);
 };

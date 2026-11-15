@@ -28,6 +28,7 @@ import { Refusal } from "../src/model/errors";
 import { type AbsolutePath, Port } from "../src/model/paths";
 import * as App from "../src/service/app";
 import { changedOnDisk, outdatedBy } from "../src/service/transport/rpc";
+import * as Settings from "../src/shared/settings";
 import { D, E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
@@ -667,7 +668,13 @@ describe("the service's life", () => {
 	const another = async (store: AbsolutePath, port: Port | 0) => {
 		const scope = Effect.runSync(Scope.make());
 		const exit = await Effect.runPromiseExit(
-			Layer.buildWithScope(App.layer({ store, port, idle: 60_000 }).pipe(Layer.provideMerge(BunServices.layer)), scope),
+			Layer.buildWithScope(
+				App.layer({ port, idle: 60_000 }).pipe(
+					Layer.provide(Settings.layer({ home: store })),
+					Layer.provideMerge(BunServices.layer),
+				),
+				scope,
+			),
 		);
 		return { exit, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
 	};

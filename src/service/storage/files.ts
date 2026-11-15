@@ -1,5 +1,5 @@
 /**
- * The store on disk: one flat directory (`~/.local/share/desk/`, or `$DESK_HOME`) of `<entry id>.md` files, and the
+ * The store on disk: one flat directory (the `home` setting: `~/.local/share/desk/`) of `<entry id>.md` files, and the
  * attachments the user sent, in `attachments/`. Other files there (the service's log and registration) aren't
  * entries.
  *
@@ -15,14 +15,13 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { type EntryId, fileName, idOf, newId, parse, serialize } from "../../model/entry";
-import type { AbsolutePath } from "../../model/paths";
 import { register } from "./registration";
 import type { Backend, Content } from "./storage";
 
-/** The files in `root` as the storage's backend ({@link Backend.files}). */
-export const files = Effect.fn("Storage.files")(function* (root: AbsolutePath, rescan: Duration.Input) {
+/** The files of the store the settings name as the storage's backend ({@link Backend.files}). */
+export const files = Effect.fn("Storage.files")(function* (rescan: Duration.Input) {
 	// The lock first: nothing else touches the store while another service has it.
-	const { publish } = yield* register(root);
+	const { publish, registration, store: root } = yield* register();
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const io = Effect.orDie;
@@ -101,6 +100,7 @@ export const files = Effect.fn("Storage.files")(function* (root: AbsolutePath, r
 			Stream.tick(rescan),
 		),
 		publish,
+		registration,
 	};
 	return backend;
 });

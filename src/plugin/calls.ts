@@ -1,6 +1,7 @@
 /** The desk service as the tools and `/desk-mode` call it: through the connection, and never for longer than `timeout`. */
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import type { AbsolutePath } from "../model/paths";
 import * as Connection from "./connection";
 
 export interface Calls {
@@ -15,7 +16,11 @@ export interface Calls {
 }
 
 /** `registration`: the service's `service.json`, whose pid the user can kill. */
-export const make = (connection: Connection.Connection, timeout: Duration.Duration, registration: string): Calls => ({
+export const make = (
+	connection: Connection.Connection,
+	timeout: Duration.Duration,
+	registration: AbsolutePath,
+): Calls => ({
 	service: (f) =>
 		Effect.flatMap(connection.client, f).pipe(
 			Effect.timeoutOrElse({

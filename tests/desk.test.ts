@@ -23,6 +23,7 @@ import type { RelativePath } from "../src/model/paths";
 import { refusal } from "../src/model/wording";
 import { Desk, type Question } from "../src/service/desk";
 import { Backend, Storage } from "../src/service/storage/storage";
+import * as Settings from "../src/shared/settings";
 import { D, E, S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually } from "./support/service";
@@ -36,7 +37,9 @@ async function open(storage: Layer.Layer<Storage, unknown> = Storage.layerMemory
 		Layer.buildWithScope(Desk.layer.pipe(Layer.provideMerge(storage), Layer.provideMerge(BunServices.layer)), scope),
 	)) as typeof services;
 }
-const onDisk = (root: string) => Storage.layer(D(root)).pipe(Layer.provide(BunServices.layer));
+/** The store's files in `root`: the `home` setting. */
+const onDisk = (root: string) =>
+	Storage.layer().pipe(Layer.provide(Settings.layer({ home: root })), Layer.provide(BunServices.layer));
 const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
 const desk = <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) =>
 	Effect.runPromise(Effect.provideContext(Desk.use(f), services));

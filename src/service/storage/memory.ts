@@ -1,15 +1,18 @@
 /**
  * The store in memory, for tests that are about the desk's rules rather than files: entries kept as their file text
  * (so they round-trip as they do on disk), attachments and the files of entries' directories as bytes. Nobody else
- * edits it, so only transactions change it; its lock is always free, and where the page is goes nowhere.
+ * edits it, so only transactions change it; its lock is always free, and its registration is this process's, kept
+ * here.
  */
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import { protocol } from "../../api/protocol";
 import { type EntryId, parse, serialize } from "../../model/entry";
 import type { AbsolutePath, RelativePath } from "../../model/paths";
+import type { Info } from "./registration";
 import type { Backend } from "./storage";
 
 interface Stored {
@@ -28,6 +31,8 @@ export const memory = Effect.fn("Storage.memory")(function* (
 ) {
 	/** Entry id → its file's text. */
 	const entries = yield* Ref.make<ReadonlyMap<EntryId, string>>(new Map());
+
+	const registered = yield* Ref.make<Info>({ pid: process.pid, protocol });
 
 	/** Path below the store → the attachment. */
 	const attachments = yield* Ref.make<ReadonlyMap<RelativePath, Stored>>(new Map());
@@ -58,7 +63,8 @@ export const memory = Effect.fn("Storage.memory")(function* (
 		attachmentUrl: (relative) => Effect.succeed(new URL(`memory:${relative}`)),
 		file: (path) => Effect.succeed(content(directories.get(path))),
 		changed: Stream.never,
-		publish: () => Effect.void,
+		publish: (where) => Ref.update(registered, (info) => ({ ...info, ...where })),
+		registration: Effect.map(Ref.get(registered), Option.some),
 	};
 	return backend;
 });

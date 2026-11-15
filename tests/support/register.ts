@@ -5,12 +5,12 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { AbsolutePath } from "../../src/model/paths";
 import { Storage } from "../../src/service/storage/storage";
+import * as Settings from "../../src/shared/settings";
 import { present } from "./present";
 
 await Effect.runPromise(
-	Layer.build(Storage.layer(AbsolutePath.make(present(process.argv[2])))).pipe(
+	Layer.build(Storage.layer().pipe(Layer.provide(Settings.layer({ home: present(process.argv[2]) })))).pipe(
 		Effect.andThen(Effect.sync(() => console.log("held"))),
 		Effect.andThen(Effect.sleep("4 seconds")),
 		Effect.scoped,

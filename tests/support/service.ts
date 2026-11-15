@@ -27,6 +27,7 @@ import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
 import { OpenCode } from "../../src/service/opencode/opencode";
 import { Api } from "../../src/service/transport/api";
+import * as Settings from "../../src/shared/settings";
 import type { Identity } from "../../src/shared/type";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 import { D } from "./ids";
@@ -53,12 +54,11 @@ export async function startService(
 	const services = (await Effect.runPromise(
 		Layer.buildWithScope(
 			App.layer({
-				store,
 				port: options.port ?? 0,
 				idle: options.idle ?? 60_000,
 				retry: "50 millis",
 				outdated: options.outdated ?? Effect.succeed(false),
-			}).pipe(Layer.provideMerge(BunServices.layer)),
+			}).pipe(Layer.provide(Settings.layer({ home: store })), Layer.provideMerge(BunServices.layer)),
 			scope,
 		),
 	)) as Context.Context<Api | Clients | OpenCode>;

@@ -23,7 +23,7 @@ import { type Entry, type EntryId, newId } from "../../model/entry";
 import { AbsolutePath, RelativePath } from "../../model/paths";
 import { files } from "./files";
 import { memory } from "./memory";
-import type { Where } from "./registration";
+import type { Info, Where } from "./registration";
 
 type Entries = ReadonlyArray<Entry>;
 
@@ -70,15 +70,17 @@ export class Backend extends Context.Service<
 		/** Something may have changed without a transaction (someone else's edit): read again. */
 		readonly changed: Stream.Stream<void>;
 		readonly publish: (where: Where) => Effect.Effect<void>;
+		/** The registration now; none when there's none (or it isn't one). */
+		readonly registration: Effect.Effect<Option.Option<Info>>;
 	}
 >()("desk/Storage/Backend") {
 	/**
-	 * The store's files in `root`. Takes the store's lock (`registration.ts`) for the layer's lifetime first, or fails
-	 * with `AlreadyRunning`.
+	 * The files of the store the settings name (`Settings.files`). Takes the store's lock (`registration.ts`) for the
+	 * layer's lifetime first, or fails with `AlreadyRunning`.
 	 * @param rescan How often to read again regardless, should a file event get lost.
 	 */
-	static files(root: AbsolutePath, rescan: Duration.Input = "5 seconds") {
-		return Layer.effect(Backend, files(root, rescan));
+	static files(rescan: Duration.Input = "5 seconds") {
+		return Layer.effect(Backend, files(rescan));
 	}
 
 	/** A store in memory, empty but for `files` (by absolute path) to read as if they were in entries' directories. */
@@ -112,6 +114,8 @@ export class Storage extends Context.Service<
 		readonly file: (directory: AbsolutePath, below: RelativePath) => Effect.Effect<Option.Option<Content>>;
 		/** Records where the page is, once it's up (in the registration, on disk). */
 		readonly publish: (where: Where) => Effect.Effect<void>;
+		/** The store's registration now (`registration.ts`): this service's, while it holds the store. */
+		readonly registration: Effect.Effect<Option.Option<Info>>;
 	}
 >()("desk/Storage") {
 	/** Storage over the {@link Backend} provided. */
@@ -119,9 +123,9 @@ export class Storage extends Context.Service<
 		return Layer.effect(Storage, make());
 	}
 
-	/** Storage over the store's files in `root` ({@link Backend.files}). */
-	static layer(root: AbsolutePath, rescan?: Duration.Input) {
-		return Storage.layerFromBackend.pipe(Layer.provide(Backend.files(root, rescan)));
+	/** Storage over the files of the store the settings name ({@link Backend.files}). */
+	static layer(rescan?: Duration.Input) {
+		return Storage.layerFromBackend.pipe(Layer.provide(Backend.files(rescan)));
 	}
 
 	/** Storage over a store in memory ({@link Backend.memory}). */
@@ -184,5 +188,6 @@ export const make = Effect.fn("Storage.make")(function* () {
 		attachmentUrl: backend.attachmentUrl,
 		file: (directory, below) => backend.file(AbsolutePath.make(path.join(directory, below))),
 		publish: backend.publish,
+		registration: backend.registration,
 	});
 });

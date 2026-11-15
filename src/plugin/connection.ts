@@ -14,6 +14,7 @@
  */
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Cause from "effect/Cause";
+import type * as Config from "effect/Config";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -38,7 +39,7 @@ import type { AbsolutePath, Port } from "../model/paths";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
 import * as Process from "../shared/process";
-import * as ServiceInfo from "../shared/service-info";
+import * as Settings from "../shared/settings";
 import type { Failure, OpenCodeError } from "./sessions";
 
 /** The service can't be reached, or won't take this plugin (the message says why). */
@@ -51,7 +52,7 @@ export interface Options<R = never> {
 	/** The service's port, on {@link host}. */
 	readonly port: Port;
 	/** Starts the service; run when nothing listens on the port. */
-	readonly start: Effect.Effect<void, PlatformError.PlatformError, R>;
+	readonly start: Effect.Effect<void, PlatformError.PlatformError | Config.ConfigError, R>;
 	/** This plugin instance's directory. */
 	readonly directory: AbsolutePath;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
@@ -324,22 +325,17 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 	return connection;
 });
 
-/** Where the service runs: its store and port, as the settings give them (`settings.ts`). */
-export interface Service {
-	readonly store: AbsolutePath;
-	readonly port: Port;
-}
-
 /**
- * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), on the service's
- * store and port, logging to the store's log, which it gets as its own stdout and stderr.
+ * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), on the store and port
+ * the settings name, logging to the store's log (`Settings.files`), which it gets as its own stdout and stderr.
  */
-export const startService = Effect.fn("startService")(function* (service: Service) {
+export const startService = Effect.fn("startService")(function* () {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const main = path.resolve(import.meta.dir, "../service/main.ts");
-	const { log } = yield* ServiceInfo.files(service.store);
-	yield* fs.makeDirectory(service.store, { recursive: true });
+	const { store, log } = yield* Settings.files;
+	const port = yield* Settings.port;
+	yield* fs.makeDirectory(store, { recursive: true });
 
 	// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
 	const bun = yield* Process.which("bun");
@@ -350,8 +346,8 @@ export const startService = Effect.fn("startService")(function* (service: Servic
 		env: {
 			...process.env,
 			// TODO main | kinda dont like this would silently use default if this is passed in wrong | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:04 GMT
-			DESK_HOME: service.store,
-			DESK_PORT: String(service.port),
+			DESK_HOME: store,
+			DESK_PORT: String(port),
 			...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }),
 		},
 	});
