@@ -29,7 +29,7 @@ afterEach(async () => {
 const page = (port: number) => `http://127.0.0.1:${port}/`;
 
 /**
- * Every status a plugin instance on `port` gives the badge, as they come: its connection is wanted from the start, with
+ * Every status a plugin instance on `port` gives the badge, as they come: its connection is needed from the start, with
  * ses_a in desk mode, and doesn't start a service (the test does).
  */
 const watching = (port: number) => {
@@ -44,7 +44,7 @@ const watching = (port: number) => {
 				modes: Effect.succeed([S("ses_a")]),
 				serve: { session: () => Effect.succeed(null), prompt: () => Effect.void },
 				timeout: 200,
-				wanted: true,
+				needed: true,
 			}),
 			scope,
 		),

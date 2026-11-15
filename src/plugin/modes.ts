@@ -86,12 +86,12 @@ export const follow = Effect.fn("follow")(function* (modes: Modes, connection: C
 	return Effect.gen(function* () {
 		const mine = yield* modes.here;
 		if (mine.length === 0) {
-			return yield* connection.want(false);
+			return yield* connection.needsConnection(false);
 		}
 
 		const live = yield* connection.live;
 		if (Option.isNone(live)) {
-			yield* connection.want(true);
+			yield* connection.needsConnection(true);
 			return;
 		}
 

@@ -133,7 +133,7 @@ const connectionEvents = events(
 		switch (tag) {
 			case "On":
 			case "Off":
-				return Connection.Event.Want({ on: tag === "On" });
+				return Connection.Event.Need({ needed: tag === "On" });
 			case "Hello":
 				return Connection.Event.Hello({ client, url: `http://127.0.0.1:${n}/` });
 			case "Dropped":
@@ -148,10 +148,10 @@ const connectionEvents = events(
 const connectionSteps = (sequence: ReadonlyArray<Connection.Event>) =>
 	steps(Connection.reconcile, Connection.State.Off(), sequence);
 
-test("connection: off only when not wanted, and always then; live only by hello while connecting", async () => {
+test("connection: off only when not needed, and always then; live only by hello while connecting", async () => {
 	await check(connectionEvents, (sequence) =>
 		connectionSteps(sequence).every(({ before, event, after }) => {
-			if (event._tag === "Want" && !event.on) return after._tag === "Off";
+			if (event._tag === "Need" && !event.needed) return after._tag === "Off";
 			if (after._tag === "Off") return before._tag === "Off";
 			if (after._tag === "Live" && before._tag !== "Live")
 				return before._tag === "Connecting" && event._tag === "Hello" && after.url === event.url;

@@ -1,6 +1,6 @@
 /**
  * A plugin instance's connection to the desk service: an RPC client of `DeskApi` (`api.ts`) over a WebSocket to the
- * service's port (`ws://127.0.0.1:<port>/rpc`), the port setting's. While it's wanted (a session here is in desk
+ * service's port (`ws://127.0.0.1:<port>/rpc`), the port setting's. While it's needed (a session here is in desk
  * mode), it starts the service (detached, so it outlives this OpenCode) when nothing listens there, says `hello`, and
  * holds `attach` open, answering the service's calls into this OpenCode (`serve`) as they come on it. When the service
  * goes, it does it all again, starting a new one; requests wait for that.
@@ -68,10 +68,10 @@ export interface Options<R = never> {
 	 */
 	readonly timeout?: Duration.Input;
 	/**
-	 * Wanted from the start, else off until `want`.
+	 * Needed from the start, else off until {@link Connection.needsConnection}.
 	 * @default false
 	 */
-	readonly wanted?: boolean;
+	readonly needed?: boolean;
 }
 
 /** A live link: the service's API, and its page's URL from its answer to `hello`. */
@@ -81,9 +81,11 @@ export interface Link {
 }
 
 export interface Connection {
-	/** Connects, or hangs up; done once the connection has taken it in. */
-	// TODO main | what is want-off? that this connection doesnt need a live service? | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:43 GMT
-	readonly want: (on: boolean) => Effect.Effect<void>;
+	/**
+	 * Whether this plugin instance needs the service: true connects (starting it if needed) and keeps reconnecting;
+	 * false hangs up. Done once the connection has taken it in.
+	 */
+	readonly needsConnection: (needed: boolean) => Effect.Effect<void>;
 	/** The service's API, once connected; fails at once while off or refused. */
 	readonly client: Effect.Effect<Client, DeskError>;
 	/** The service's API if connected right now. */
@@ -111,7 +113,8 @@ export type State = Data.TaggedEnum<{
 export const State = Data.taggedEnum<State>();
 
 export type Event = Data.TaggedEnum<{
-	Want: { readonly on: boolean };
+	/** Whether this plugin instance needs the service ({@link Connection.needsConnection}). */
+	Need: { readonly needed: boolean };
 	/** The service answered `hello`. */
 	Hello: { readonly client: Client; readonly url: string };
 	/** The link ended: the service went, or couldn't be started or greeted. */
@@ -127,8 +130,8 @@ export const Event = Data.taggedEnum<Event>();
 
 export const reconcile = (state: State, event: Event): State => {
 	switch (event._tag) {
-		case "Want":
-			return !event.on ? State.Off() : state._tag === "Off" ? State.Connecting() : state;
+		case "Need":
+			return !event.needed ? State.Off() : state._tag === "Off" ? State.Connecting() : state;
 		case "Hello":
 			return state._tag === "Connecting" ? State.Live({ client: event.client, url: event.url }) : state;
 		case "Dropped":
@@ -144,8 +147,8 @@ export const reconcile = (state: State, event: Event): State => {
 /** `Connecting` and `Live` are one link: one WebSocket, one `run`. */
 export const key = (state: State): State["_tag"] => (state._tag === "Live" ? "Connecting" : state._tag);
 
-/** Whether the connection has taken in `Want({ on })`: `Off` when not wanted, anything but `Off` when wanted. */
-const settled = (on: boolean) => (state: State) => (state._tag === "Off") !== on;
+/** Whether the connection has taken in `Need({ needed })`: `Off` when not needed, anything but `Off` when needed. */
+const settled = (needed: boolean) => (state: State) => (state._tag === "Off") !== needed;
 
 const off = "Desk mode is off in this directory; the user turns it on with /desk-mode.";
 
@@ -189,7 +192,7 @@ export const answering = (port: number) =>
 		Effect.orElseSucceed(() => false),
 	);
 
-/** The connection, off until wanted; hangs up when the scope closes. */
+/** The connection, off until needed; hangs up when the scope closes. */
 export const make = Effect.fn("Connection.make")(function* <R = never>(options: Options<R>) {
 	const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
 	const transport = RpcClient.layerProtocolSocket().pipe(
@@ -283,7 +286,7 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 	);
 
 	const actor = yield* Machine.start<State, Event, R>({
-		initial: options.wanted ? State.Connecting() : State.Off(),
+		initial: options.needed ? State.Connecting() : State.Off(),
 		reconcile,
 		key,
 		run: (state, emit) =>
@@ -305,10 +308,10 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 	);
 	const live = Effect.flatten(awaitLink);
 	const connection: Connection = {
-		want: (on) =>
+		needsConnection: (needed) =>
 			actor
-				.send(Event.Want({ on }))
-				.pipe(Effect.andThen(actor.until(Option.liftPredicate(settled(on)))), Effect.asVoid),
+				.send(Event.Need({ needed }))
+				.pipe(Effect.andThen(actor.until(Option.liftPredicate(settled(needed)))), Effect.asVoid),
 		client: Effect.map(live, (now) => now.client),
 		live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
 		url: Effect.map(live, (now) => now.url),
