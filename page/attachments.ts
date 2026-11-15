@@ -20,6 +20,7 @@ export const link = (file: Local) =>
 /** The attachment ids a draft's text references. */
 export const referenced = referencedAttachments;
 
+// TODO main | effect-browser has api for idb i think | by Evgenii Perminov at Sun, 15 Nov 2026 14:35:28 GMT
 const database = new Promise<IDBDatabase>((resolve, reject) => {
 	const request = indexedDB.open("desk", 1);
 	request.onupgradeneeded = () => request.result.createObjectStore("attachments", { keyPath: "id" });

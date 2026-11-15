@@ -20,6 +20,7 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import { Delivery, Entry, EntryId, MessageID, type Party, Priority, SessionID } from "../model/entry";
 import { DeliveryFailed, Refusal } from "../model/errors";
+import type { Identity } from "../shared/type";
 
 /** Who's calling: an agent, in its top-level session (a subagent's is the one above it) and where that works, or the user. */
 export const Caller = Schema.TaggedUnion({
@@ -28,7 +29,8 @@ export const Caller = Schema.TaggedUnion({
 });
 export type Caller = typeof Caller.Type;
 export const Agent = Caller.cases.Agent;
-export type Agent = typeof Agent.Type;
+// TODO main | use interfaces for pretty types. use identity trick to bypass typeof error in ts | by Evgenii Perminov at Sun, 15 Nov 2026 18:10:35 GMT
+export interface Agent extends Identity<typeof Agent.Type> {}
 
 /** The caller as the desk's rules know them: which party. */
 export const party = (by: Caller): Party => (by._tag === "Agent" ? "agent" : "user");
@@ -39,7 +41,7 @@ export const SessionInfo = Schema.Struct({
 	title: Schema.String,
 	directory: Schema.String,
 });
-export type SessionInfo = typeof SessionInfo.Type;
+export interface SessionInfo extends Identity<typeof SessionInfo.Type> {}
 
 export const Prompt = Schema.Struct({
 	sessionID: SessionID,

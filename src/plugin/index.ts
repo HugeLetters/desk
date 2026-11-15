@@ -38,8 +38,8 @@ export default Plugin.define<Scope.Scope>({
 			const store = yield* Settings.store;
 			const port = yield* Settings.port;
 			const files = yield* ServiceInfo.files(store);
-			const root = yield* Sessions.roots(ctx);
-			const modes = Modes.make(ctx, root);
+			const getRootSessionId = yield* Sessions.createRootSessionLookup(ctx);
+			const modes = Modes.make(ctx, getRootSessionId);
 			const connection = yield* Connection.make({
 				port,
 				start: Connection.startService({ store, port, log: files.log }),
@@ -55,17 +55,17 @@ export default Plugin.define<Scope.Scope>({
 			// moving in or out of this directory may connect or hang up this instance, too.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				Stream.runForEach((event) =>
-					Effect.andThen(
-						Effect.ignore(calls.service((client) => client.moved({ session: event.data.sessionID }))),
-						sync,
-					),
+					calls
+						.service((client) => client.moved({ session: event.data.sessionID }))
+						.pipe(Effect.ignore, Effect.andThen(sync)),
 				),
+				// TODO main | isnt this ignore useless? stream processing would stil abort if run for each fails and forked fiber errors dont propagate  | by Evgenii Perminov at Sun, 15 Nov 2026 16:22:51 GMT
 				Effect.ignore,
 				Effect.forkScoped,
 			);
 
 			yield* Command.register(ctx, { ...calls, modes, sync });
-			yield* Tools.register(ctx, { ...calls, modes, root });
+			yield* Tools.register(ctx, { ...calls, modes, getRootSessionId });
 			yield* Badge.register(ctx, connection);
 		}).pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
 });

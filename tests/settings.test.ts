@@ -14,7 +14,7 @@ const read = (options: Record<string, unknown>, env: Record<string, string>) =>
 			Effect.provide(
 				Layer.mergeAll(
 					BunServices.layer,
-					ConfigProvider.layer(Settings.provider(options, ConfigProvider.fromEnv({ env }))),
+					ConfigProvider.layer(Settings.optionsProvider(options, ConfigProvider.fromEnv({ env }))),
 				),
 			),
 		),
@@ -62,7 +62,7 @@ test("idle is a duration, as text or ms, else 10 minutes", async () => {
 	const idle = (options: Record<string, unknown>, env: Record<string, string>) =>
 		Effect.runPromise(
 			Settings.idle.pipe(
-				Effect.provide(ConfigProvider.layer(Settings.provider(options, ConfigProvider.fromEnv({ env })))),
+				Effect.provide(ConfigProvider.layer(Settings.optionsProvider(options, ConfigProvider.fromEnv({ env })))),
 			),
 		);
 	expect(await idle({}, {})).toEqual(Duration.minutes(10));

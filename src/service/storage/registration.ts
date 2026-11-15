@@ -20,6 +20,7 @@ import * as FileSystem from "effect/FileSystem";
 import { flow } from "effect/Function";
 import * as Option from "effect/Option";
 import type * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Unify from "effect/Unify";
 import { protocol } from "../../api/protocol";
 import type { Empty } from "../../shared/empty";
@@ -32,6 +33,7 @@ export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
 }> {}
 
 /** Whether a process exists. Effect has no way to ask, so this is `kill(pid, 0)`. */
+// TODO main | why asking whether a process is alive kills it?.. | by Evgenii Perminov at Sun, 15 Nov 2026 18:52:37 GMT
 const alive = (pid: number) => {
 	try {
 		process.kill(pid, 0);
@@ -82,6 +84,7 @@ export const reconcile = (state: State, event: Event): State => {
 	switch (state._tag) {
 		case "Registered":
 		case "Taken":
+			// TODO main | its kinda weird that some states do nothing regardless of even. os it that normal? | by Evgenii Perminov at Sun, 15 Nov 2026 18:53:18 GMT
 			return state;
 		case "Waiting":
 			return event._tag === "Retry" ? State.Creating({ attempt: state.attempt + 1 }) : state;
@@ -129,8 +132,9 @@ export const register = (store: string) => {
 			yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
 			yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 		});
-		const exists = (error: { readonly _tag: string; readonly reason?: { readonly _tag: string } }) =>
-			error._tag === "PlatformError" && error.reason?._tag === "AlreadyExists";
+		const exists = (error: unknown) => {
+			return PlatformError.isPlatformError(error) && error.reason?._tag === "AlreadyExists";
+		};
 		/**
 		 * Replacing a dead service's file, one service at a time: whoever makes this directory. Only a service holding
 		 * it removes the file, after reading it again: two removing at once, one could remove the other's fresh one,

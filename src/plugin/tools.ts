@@ -27,7 +27,7 @@ const isRefusal = Schema.is(Refusal);
 /** What the tools use: desk mode, a session's top-level session, and the service. */
 export interface Desk extends Calls {
 	readonly modes: Modes;
-	readonly root: (sessionID: SessionID) => Effect.Effect<SessionID, unknown>;
+	readonly getRootSessionId: (sessionID: SessionID) => Effect.Effect<SessionID, unknown>;
 }
 
 /** A tool as the editor takes any of them, its input's type checked against its schema here. */
@@ -35,12 +35,13 @@ const define = <Input extends Tool.ValueSchema>(info: Tool.Info<Input, undefined
 
 /** The tools, for `ctx` and `desk`. */
 const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
-	const { service, root } = desk;
+	const { service, getRootSessionId } = desk;
 	/** The calling agent, as the service is told: its top-level session (whose desk it is), and where that works. */
 	const agent = (sessionID: SessionID) =>
 		Effect.gen(function* () {
-			const session = yield* ctx.session.get({ sessionID: yield* root(sessionID) });
-			return { _tag: "Agent", session: session.id, directory: session.location.directory } satisfies Agent;
+			const session = yield* ctx.session.get({ sessionID: yield* getRootSessionId(sessionID) });
+			const out: Agent = { _tag: "Agent", session: session.id, directory: session.location.directory };
+			return out;
 		});
 	/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
 	const tool =
@@ -82,8 +83,8 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 				),
 			}),
 			options: { codemode: false },
-			execute: tool((question: Question, sessionID) =>
-				Effect.gen(function* () {
+			execute: tool(
+				Effect.fnUntraced(function* (question: Question, sessionID) {
 					const by = yield* agent(sessionID);
 					const asked = yield* service((client) => client.ask({ by, question }));
 					const where =
@@ -151,7 +152,9 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 			input: Schema.Struct({ id: Schema.optional(EntryId) }),
 			options: { codemode: false },
 			execute: tool((input: { id?: EntryId | undefined }, sessionID) =>
-				Effect.flatMap(root(sessionID), (session) => service((client) => client.list({ session, id: input.id }))),
+				Effect.flatMap(getRootSessionId(sessionID), (session) =>
+					service((client) => client.list({ session, id: input.id })),
+				),
 			),
 		}),
 		define({
@@ -181,20 +184,20 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
  * request's tools, and takes the desk's out of them while the session's desk mode is off. A tool called anyway
  * refuses (`tool` above).
  */
-export const register = (ctx: Context, desk: Desk) =>
-	Effect.gen(function* () {
-		const all = tools(ctx, desk);
-		yield* ctx.tool.transform((editor) => {
-			for (const one of all) editor.add(one);
-		});
-		const names = all.map((one) => one.name);
-		yield* ctx.session.hook("context", (event) =>
-			Effect.map(
-				Effect.orElseSucceed(desk.modes.on(event.sessionID), () => false),
-				(on) => {
-					// The hook's request is edited in place: that's how OpenCode's hooks answer.
-					if (!on) for (const name of names) delete event.tools[name];
-				},
-			),
-		);
+export const register = Effect.fn("register")(function* (ctx: Context, desk: Desk) {
+	const all = tools(ctx, desk);
+	yield* ctx.tool.transform((editor) => {
+		for (const one of all) editor.add(one);
 	});
+	const names = all.map((one) => one.name);
+	// TODO main | shouldnt we instead call transform on each event and add or not add depending on `on`. keep registration dispose in sync ref which you dispose off when new registration happens | by Evgenii Perminov at Sun, 15 Nov 2026 18:12:26 GMT
+	yield* ctx.session.hook("context", (event) =>
+		Effect.map(
+			Effect.orElseSucceed(desk.modes.on(event.sessionID), () => false),
+			(on) => {
+				// The hook's request is edited in place: that's how OpenCode's hooks answer.
+				if (!on) for (const name of names) delete event.tools[name];
+			},
+		),
+	);
+});

@@ -35,6 +35,7 @@ export const sameStatus = Schema.toEquivalence(Status);
 
 const status = Schema.toStandardSchemaV1(Status);
 
+// TODO main | look up rpcClient helper from /Users/evperminov/.config/opencode/src/lib/rpc-client.ts . it doesnt have event support but you can copy it here and extend to return a stream/callback | by Evgenii Perminov at Sun, 15 Nov 2026 16:26:42 GMT
 export const BadgeRpc = Rpc.define({
 	id: "desk",
 	methods: {

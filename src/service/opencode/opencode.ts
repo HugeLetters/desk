@@ -87,6 +87,7 @@ export class OpenCode extends Context.Service<
 				// Instances of one OpenCode report the same sessions, so they're counted once.
 				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> =>
 					[...new Set(all.flatMap((attached) => attached.deskMode))].sort();
+				// TODO main | Equivalence.Array? | by Evgenii Perminov at Sun, 15 Nov 2026 18:47:31 GMT
 				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) =>
 					a.length === b.length && a.every((session, index) => session === b[index]);
 

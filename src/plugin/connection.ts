@@ -12,6 +12,7 @@
  * moment after the link drops; `Refused` while this plugin is older than the service or another program has the port,
  * until it's turned off.
  */
+
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync } from "node:fs";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
@@ -40,7 +41,7 @@ import * as Machine from "../shared/machine";
 /** The service can't be reached, or won't take this plugin (the message says why). */
 export class DeskError extends Data.TaggedError("DeskError")<{ readonly message: string }> {}
 
-export type Client = RpcClient.FromGroup<typeof DeskApi, RpcClientError.RpcClientError>;
+export interface Client extends RpcClient.FromGroup<typeof DeskApi, RpcClientError.RpcClientError> {}
 
 /** `R`: what starting the service needs. */
 export interface Options<R = never> {
@@ -55,6 +56,7 @@ export interface Options<R = never> {
 	/** Answers the service's calls, in this OpenCode. */
 	readonly serve: {
 		/** Null when this OpenCode doesn't know the session. */
+		// TODO main | no unknown errors | by Evgenii Perminov at Sun, 15 Nov 2026 15:45:39 GMT
 		readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | null, unknown>;
 		readonly prompt: (prompt: Prompt) => Effect.Effect<void, unknown>;
 	};
@@ -72,18 +74,21 @@ export interface Link {
 
 export interface Connection {
 	/** Connects, or hangs up; done once the connection has taken it in. */
+	// TODO main | what is want-off? that this connection doesnt need a live service? | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:43 GMT
 	readonly want: (on: boolean) => Effect.Effect<void>;
 	/** The service's API, once connected; fails at once while off or refused. */
 	readonly client: Effect.Effect<Client, DeskError>;
 	/** The service's API if connected right now. */
 	readonly live: Effect.Effect<Option.Option<Client>>;
 	/** The page's URL, from the service's answer to `hello`. */
+	// TODO main | would be nice to stop using plain strings everywhere for stuff which isnt just a string semantically - urls/paths etc | by Evgenii Perminov at Sun, 15 Nov 2026 16:47:46 GMT
 	readonly url: Effect.Effect<string, DeskError>;
 	/** The live link now (none while not connected), then each new one, and none whenever it drops. */
 	readonly links: Stream.Stream<Option.Option<Link>>;
 }
 
 /** The same link, or none both times. */
+// TODO main | Option.makeEquivalence? | by Evgenii Perminov at Sun, 15 Nov 2026 17:54:30 GMT
 const sameLink = (a: Option.Option<Link>, b: Option.Option<Link>) =>
 	Option.isNone(a) ? Option.isNone(b) : Option.isSome(b) && a.value.client === b.value.client;
 
@@ -129,7 +134,7 @@ export const reconcile = (state: State, event: Event): State => {
 };
 
 /** `Connecting` and `Live` are one link: one WebSocket, one `run`. */
-export const key = (state: State) => (state._tag === "Live" ? "Connecting" : state._tag);
+export const key = (state: State): State["_tag"] => (state._tag === "Live" ? "Connecting" : state._tag);
 
 const off = "Desk mode is off in this directory; the user turns it on with /desk-mode.";
 
@@ -165,6 +170,7 @@ const upgrades = (url: string): Effect.Effect<boolean> =>
 
 /** Whether something listens on `port` (on 127.0.0.1): connects, and hangs up at once. */
 export const answering = (port: number): Effect.Effect<boolean> =>
+	// TODO main | we hardcode this host in several spots - if anything should be part of settings | by Evgenii Perminov at Sun, 15 Nov 2026 16:54:32 GMT
 	BunSocket.makeNet({ host: "127.0.0.1", port }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
@@ -173,6 +179,7 @@ export const answering = (port: number): Effect.Effect<boolean> =>
 	);
 
 /** The connection, off until wanted; hangs up when the scope closes. */
+// TODO main | use ineference in return types more | by Evgenii Perminov at Sun, 15 Nov 2026 16:55:10 GMT
 export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, never, Scope.Scope | R> =>
 	Effect.gen(function* () {
 		const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
@@ -252,6 +259,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 					),
 				);
 				if (Option.isNone(greeted)) return;
+
 				yield* emit(Event.Hello({ client, url: greeted.value }));
 				yield* client
 					.attach({ directory: options.directory, sessions: yield* options.modes })
@@ -289,6 +297,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 			want: (on) =>
 				Effect.andThen(
 					actor.send(Event.Want({ on })),
+					// TODO main | this reads a bit weird - like we wait til state connection is the same as on? | by Evgenii Perminov at Sun, 15 Nov 2026 17:52:29 GMT
 					actor.when((state) => ((state._tag === "Off") === !on ? Option.some(undefined) : Option.none())),
 				),
 			client: Effect.map(live, (now) => now.client),
@@ -312,9 +321,12 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
  * exits, and the service outlives it. Nor does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The
  * log is closed here once the child has it.
  */
+// TODO main | hardcoded type which can be probably derived/used from somewhere else | by Evgenii Perminov at Sun, 15 Nov 2026 16:30:11 GMT
 export const startService = (service: { readonly store: string; readonly port: number; readonly log: string }) =>
 	Effect.gen(function* () {
+		// TODO main | why not just use import.meta.dir and path.resolve? | by Evgenii Perminov at Sun, 15 Nov 2026 16:39:50 GMT
 		const main = yield* (yield* Path.Path).fromFileUrl(new URL("../service/main.ts", import.meta.url));
+		// TODO main | since you're saying effect doesnt have primitives to this - move this out to a generic helpers first and use those created helper primitives here. | by Evgenii Perminov at Sun, 15 Nov 2026 16:29:24 GMT
 		yield* Effect.acquireUseRelease(
 			Effect.sync(() => {
 				mkdirSync(service.store, { recursive: true });
@@ -329,6 +341,7 @@ export const startService = (service: { readonly store: string; readonly port: n
 						stdio: ["ignore", log, log],
 						env: {
 							...process.env,
+							// TODO main | kinda dont like this would silently use default if this is passed in wrong | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:04 GMT
 							DESK_HOME: service.store,
 							DESK_PORT: String(service.port),
 							...(bun ? {} : { BUN_BE_BUN: "1" }),

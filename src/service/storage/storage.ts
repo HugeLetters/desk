@@ -56,6 +56,7 @@ export interface Transaction {
  * where a read may go. A store that can't be read or written is a broken service, not something the desk refuses:
  * failures are defects.
  */
+// TODO main | why not make this an effect service? | by Evgenii Perminov at Sun, 15 Nov 2026 18:54:30 GMT
 export interface Backend {
 	/** Every entry, by `created` then id; unparseable ones are skipped. */
 	readonly load: Effect.Effect<Entries>;

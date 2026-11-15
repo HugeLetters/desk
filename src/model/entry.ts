@@ -25,7 +25,8 @@
  * The answer, in Markdown.
  * ```
  */
-import { SessionID } from "@opencode/schema/session-id";
+import { Session } from "@opencode/schema/session";
+import { Delivery } from "@opencode/schema/session-inbox";
 import { SessionMessage } from "@opencode/schema/session-message";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -35,7 +36,9 @@ import * as Schema from "effect/Schema";
 export const EntryId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("EntryId"));
 export type EntryId = typeof EntryId.Type;
 
-export { SessionID };
+export const SessionID = Session.ID;
+export type SessionID = Session.ID;
+
 /** The OpenCode message the user's text goes out as. */
 export const MessageID = SessionMessage.ID;
 export type MessageID = typeof MessageID.Type;
@@ -72,8 +75,7 @@ export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "cr
 }
 
 /** queue: after the session's current turn. steer: into it (urgent). */
-export const Delivery = Schema.Literals(["queue", "steer"]);
-export type Delivery = typeof Delivery.Type;
+export { Delivery };
 
 /** open: waiting on the answerer. answered: waiting on the asker. resolved: the asker marked it done. */
 export const Status = Schema.Literals(["open", "answered", "resolved"]);
@@ -92,7 +94,7 @@ const Fields = {
 	asker: Party,
 	status: Status,
 	/** The top-level OpenCode session that asked, or that the user's reply belongs to; it hears about the entry. */
-	session: SessionID,
+	session: Session.ID,
 	/** Where the asking session works: relative paths in the entry's Markdown resolve against it. */
 	directory: Schema.String,
 	labels: Schema.Array(Schema.String),

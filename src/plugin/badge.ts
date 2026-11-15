@@ -16,6 +16,7 @@ import type { Connection, Link } from "./connection";
 export const fromView = (url: string, view: View): Status => ({
 	live: {
 		url,
+		// TODO main | why do such a remap? | by Evgenii Perminov at Sun, 15 Nov 2026 18:15:55 GMT
 		desks: view.desks.map(({ session, waiting, critical }) => ({ session, waiting, critical })),
 		deskMode: view.deskMode,
 	},
@@ -37,16 +38,18 @@ export const statuses = (connection: Pick<Connection, "links">): Stream.Stream<S
 	);
 
 /** Registers the badge's RPC in this plugin instance, answering `status` and emitting `changed`, until the scope closes. */
-export const register = (ctx: Pick<Plugin.Context, "rpc">, connection: Pick<Connection, "links">) =>
-	Effect.gen(function* () {
-		const current = yield* SubscriptionRef.make(off);
-		const registration = yield* ctx.rpc.register(BadgeRpc, { status: () => SubscriptionRef.get(current) });
-		yield* statuses(connection).pipe(
-			Stream.runForEach((status) =>
-				Effect.flatMap(SubscriptionRef.getAndSet(current, status), (before) =>
-					sameStatus(before, status) ? Effect.void : Effect.ignore(registration.events.emit("changed", status)),
-				),
+export const register = Effect.fn("register")(function* (
+	ctx: Pick<Plugin.Context, "rpc">,
+	connection: Pick<Connection, "links">,
+) {
+	const current = yield* SubscriptionRef.make(off);
+	const registration = yield* ctx.rpc.register(BadgeRpc, { status: () => SubscriptionRef.get(current) });
+	yield* statuses(connection).pipe(
+		Stream.runForEach((status) =>
+			Effect.flatMap(SubscriptionRef.getAndSet(current, status), (before) =>
+				sameStatus(before, status) ? Effect.void : Effect.ignore(registration.events.emit("changed", status)),
 			),
-			Effect.forkScoped,
-		);
-	});
+		),
+		Effect.forkScoped,
+	);
+});

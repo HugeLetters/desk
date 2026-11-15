@@ -22,10 +22,8 @@ export const make = (connection: Connection.Connection, timeout: Duration.Durati
 		Effect.timeoutOrElse(effect, {
 			duration: timeout,
 			orElse: () =>
-				Effect.fail(
-					new Connection.DeskError({
-						message: `The desk service didn't answer within ${Duration.format(timeout)}; it may be stuck. The user can restart it: kill the pid in ${registration}.`,
-					}),
-				),
+				new Connection.DeskError({
+					message: `The desk service didn't answer within ${Duration.format(timeout)}; it may be stuck. The user can restart it: kill the pid in ${registration}.`,
+				}),
 		}),
 });

@@ -24,6 +24,7 @@ export interface Machine<S, E, R = never> {
 	readonly initial: S;
 	readonly reconcile: (state: S, event: E) => S;
 	readonly run: (state: S, emit: (event: E) => Effect.Effect<void>) => Effect.Effect<void, never, R>;
+	// TODO main | whats key for? | by Evgenii Perminov at Sun, 15 Nov 2026 17:50:39 GMT
 	readonly key?: (state: S) => unknown;
 }
 
@@ -62,6 +63,7 @@ export const start = <S, E, R>(machine: Machine<S, E, R>): Effect.Effect<Actor<S
 		/** The `n`th run, from `state` until an event changes the key; then the next, for good. */
 		const enter = (state: S, n: number): Effect.Effect<never, never, R> =>
 			Effect.andThen(SubscriptionRef.set(states, state), () =>
+				// TODO main | can you elaborate a bit what this race does? | by Evgenii Perminov at Sun, 15 Nov 2026 17:47:52 GMT
 				Effect.raceFirst(
 					Effect.andThen(
 						machine.run(state, (event) => Effect.asVoid(Queue.offer(mailbox, { event, from: n }))),
@@ -78,7 +80,9 @@ export const start = <S, E, R>(machine: Machine<S, E, R>): Effect.Effect<Actor<S
 			changes: SubscriptionRef.changes(states),
 			when: (pick) =>
 				SubscriptionRef.changes(states).pipe(
+					// TODO main | pick is filter? or more like until? | by Evgenii Perminov at Sun, 15 Nov 2026 17:49:16 GMT
 					Stream.map(pick),
+					// TODO main | why not just filterMap? | by Evgenii Perminov at Sun, 15 Nov 2026 17:49:41 GMT
 					Stream.filter(Option.isSome),
 					Stream.runHead,
 					// `changes` never ends: without a head, it was interrupted.

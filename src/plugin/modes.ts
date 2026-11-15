@@ -40,13 +40,15 @@ export const make = (ctx: Context, root: (sessionID: SessionID) => Effect.Effect
 			yield* ctx.storage.set(key(rootID), true);
 			return Option.some(rootID);
 		}),
+	// TODO main | why only in thie directory? | by Evgenii Perminov at Sun, 15 Nov 2026 16:12:22 GMT
 	here: Effect.gen(function* () {
-		const sessions = yield* Stream.paginate(undefined as string | undefined, (after) =>
+		const sessions = yield* Stream.paginate(undefined, (after: string | undefined) =>
 			Effect.map(ctx.storage.scan({ prefix, after }), (page) => [
 				page.entries.map((entry) => SessionID.make(entry.key.slice(prefix.length))),
 				Option.fromUndefinedOr(page.next),
 			]),
 		).pipe(Stream.runCollect);
+
 		const where = yield* Effect.forEach(sessions, (id) =>
 			ctx.session.get({ sessionID: id }).pipe(
 				Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
@@ -54,6 +56,7 @@ export const make = (ctx: Context, root: (sessionID: SessionID) => Effect.Effect
 				Effect.orElseSucceed(() => "elsewhere" as const),
 			),
 		);
+		// TODO main | why not tie them up together in session stream above instead of relying on index? | by Evgenii Perminov at Sun, 15 Nov 2026 16:11:00 GMT
 		yield* Effect.forEach(
 			sessions.filter((_, index) => where[index] === "gone"),
 			(id) => ctx.storage.remove(key(id)),
@@ -68,18 +71,22 @@ export const make = (ctx: Context, root: (sessionID: SessionID) => Effect.Effect
  * sessions, and a plugin instance with none has nothing to ask or deliver. Connecting reports them itself (`attach`
  * reads them), so only a live connection is told.
  */
-export const follow = (modes: Modes, connection: Connection) =>
-	Effect.map(Semaphore.make(1), (lock) =>
-		Semaphore.withPermits(
-			lock,
-			1,
-		)(
-			Effect.gen(function* () {
-				const mine = yield* modes.here;
-				if (mine.length === 0) return yield* connection.want(false);
-				const live = yield* connection.live;
-				if (Option.isSome(live)) yield* Effect.ignore(live.value.modes({ sessions: mine }));
-				else yield* connection.want(true);
-			}),
-		),
-	);
+export const follow = Effect.fn("follow")(function* (modes: Modes, connection: Connection) {
+	const lock = yield* Semaphore.make(1);
+
+	// @effect-diagnostics-next-line returnEffectInGen:off
+	return Effect.gen(function* () {
+		const mine = yield* modes.here;
+		if (mine.length === 0) {
+			return yield* connection.want(false);
+		}
+
+		const live = yield* connection.live;
+		if (Option.isNone(live)) {
+			yield* connection.want(true);
+			return;
+		}
+
+		yield* Effect.ignore(live.value.modes({ sessions: mine }));
+	}).pipe(Semaphore.withPermits(lock, 1));
+});

@@ -11,6 +11,7 @@ import type { Desk, Status } from "../plugin/badge-rpc";
 export type Statuses = Readonly<Record<string, Status>>;
 
 /** `statuses` with `directory`'s status now `status`. */
+// TODO main | learn/first are super unclear function names | by Evgenii Perminov at Sun, 15 Nov 2026 18:34:19 GMT
 export const learn = (statuses: Statuses, directory: string, status: Status): Statuses => ({
 	...statuses,
 	[directory]: status,

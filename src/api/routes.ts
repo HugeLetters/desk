@@ -14,6 +14,7 @@ export const patterns = {
 export const deskPath = (session: string) => `/sessions/${encodeURIComponent(session)}`;
 
 /** An entry, on `session`'s desk (or, without one, below the current path). */
+// TODO main | this can produce route /questions/${entry} which i dont think is a valid route? | by Evgenii Perminov at Sun, 15 Nov 2026 18:45:32 GMT
 export const entryPath = (session: string | undefined, entry: string) =>
 	`${session === undefined ? "" : deskPath(session)}/questions/${entry}`;
 

@@ -1,3 +1,4 @@
+// TODO main | very big file, should be split by pages + separate stores where possible | by Evgenii Perminov at Sun, 15 Nov 2026 14:37:29 GMT
 /** @jsxImportSource solid-js */
 /**
  * The desk page: one session's desk (`/sessions/<id>`; at `/`, the list of desks), its open entries as a flat list,
@@ -6,6 +7,7 @@
  * Drafts live in the browser until Submit (all of them, one message per session), ⌘↵ (the same, then Next) or Send now (one, steering).
  */
 
+import * as BrowserSocket from "@effect/platform-browser/BrowserSocket";
 import { MetaProvider, Title } from "@solidjs/meta";
 import { A, Route, Router, useLocation, useNavigate, useParams } from "@solidjs/router";
 import * as Effect from "effect/Effect";
@@ -48,7 +50,7 @@ const runtime = ManagedRuntime.make(
 		Layer.provide(
 			Socket.layerWebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}${rpcPath}`),
 		),
-		Layer.provide([Socket.layerWebSocketConstructorGlobal, RpcSerialization.layerNdjson]),
+		Layer.provide([BrowserSocket.layerWebSocketConstructor, RpcSerialization.layerNdjson]),
 	),
 );
 const client = RpcClient.make(DeskApi);
@@ -74,11 +76,14 @@ const Icon = (props: { name: keyof typeof icons }) => (
 );
 
 /** The desk the page shows, following the route; drafts are kept per desk. */
+// TODO main | why a global store instead of deriving from route? | by Evgenii Perminov at Sun, 15 Nov 2026 14:36:32 GMT
 const [session, setSession] = createSignal(sessionIn(location.pathname));
 const draftsPrefix = "desk.drafts.";
 const draftsKey = (id: string | undefined) => `${draftsPrefix}${id ?? ""}`;
+// TODO main | why not keep drafts in idb too to have 1 storage? dont worry about migrating existing drafts | by Evgenii Perminov at Sun, 15 Nov 2026 14:37:01 GMT
 const loadDrafts = (key: string): Partial<Record<string, string>> => JSON.parse(localStorage.getItem(key) ?? "{}");
 /** How a desk is shown: its session's title and folder. */
+// TODO main | why not take proper desk type instead of redeclaring it? | by Evgenii Perminov at Sun, 15 Nov 2026 14:35:56 GMT
 const deskName = (desk: { readonly title: string; readonly folder: string } | null | undefined) =>
 	!desk ? "" : desk.title === desk.folder ? desk.title : `${desk.title} · ${desk.folder}`;
 const home = () => {
