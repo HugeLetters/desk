@@ -7,16 +7,18 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Settings from "../src/shared/settings";
 
+/** What `Settings.layer` reads, with `env` as the whole environment: `options` over `DESK_<NAME>`. */
+const provider = (options: Record<string, unknown>, env: Record<string, string>) =>
+	ConfigProvider.orElse(
+		Settings.optionsProvider(options),
+		ConfigProvider.fromEnv({ env }).pipe(ConfigProvider.constantCase),
+	);
+
 /** The plugin's settings for `options`, with `env` as the whole environment. */
 const read = (options: Record<string, unknown>, env: Record<string, string>) =>
 	Effect.runPromise(
 		Effect.all({ store: Settings.store, port: Settings.port, timeout: Settings.timeout }).pipe(
-			Effect.provide(
-				Layer.mergeAll(
-					BunServices.layer,
-					ConfigProvider.layer(Settings.optionsProvider(options, ConfigProvider.fromEnv({ env }))),
-				),
-			),
+			Effect.provide(Layer.mergeAll(BunServices.layer, ConfigProvider.layer(provider(options, env)))),
 		),
 	);
 
@@ -60,11 +62,7 @@ test("an entry's layer puts the options and the environment in front of a provid
 
 test("idle is a duration, as text or ms, else 10 minutes", async () => {
 	const idle = (options: Record<string, unknown>, env: Record<string, string>) =>
-		Effect.runPromise(
-			Settings.idle.pipe(
-				Effect.provide(ConfigProvider.layer(Settings.optionsProvider(options, ConfigProvider.fromEnv({ env })))),
-			),
-		);
+		Effect.runPromise(Settings.idle.pipe(Effect.provide(ConfigProvider.layer(provider(options, env)))));
 	expect(await idle({}, {})).toEqual(Duration.minutes(10));
 	expect(await idle({}, { DESK_IDLE: "1000" })).toEqual(Duration.millis(1000));
 	expect(await idle({ idle: "2 minutes" }, { DESK_IDLE: "1000" })).toEqual(Duration.minutes(2));
