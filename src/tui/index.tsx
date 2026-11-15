@@ -5,7 +5,7 @@
  * desk's page. Hidden in sessions without desk mode, and while the plugin isn't connected to the desk service. It's
  * the `./tui` part beside the plugin, so it loads wherever the plugin does. It knows nothing of the service: the
  * plugin's server part, which connects to it (and starts it), tells it what to show over OpenCode's plugin RPC
- * (`badge-rpc.ts`), one status per location. Options as the plugin's (`opener`).
+ * (`badge-rpc.ts`): each session's badge, asked of the instance in its directory. Options as the plugin's (`opener`).
  */
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/tui";
@@ -15,14 +15,14 @@ import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Ref from "effect/Ref";
-import * as Schedule from "effect/Schedule";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { createEffect, createSignal, Show } from "solid-js";
-import { BadgeRpc } from "../plugin/badge-rpc";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { SessionID } from "../model/entry";
+import { BadgeRpc, type Status } from "../plugin/badge-rpc";
 import * as Settings from "../shared/settings";
-import { type Report, report, type Statuses, statusAt, withFirstStatus, withStatus } from "./badge";
-import { type RpcClient, rpcClient } from "./rpc-client";
+import { count, follow } from "./badge";
+import { rpcClient } from "./rpc-client";
 
 /** Opens `url` in the browser with `opener` (`open`, which exits at once, once it has handed over). */
 const open = (opener: string, url: URL) =>
@@ -32,21 +32,21 @@ const open = (opener: string, url: URL) =>
 		Effect.ignore,
 	);
 
-/** The badge for one desk; `report` is undefined to hide it. */
-function Badge(props: { theme: Context["theme"]; report: Report | undefined; open: (page: URL) => void }) {
+/** The badge for one session; `status` is null to hide it. */
+function Badge(props: { theme: Context["theme"]; status: Status | null; open: (page: URL) => void }) {
 	const [hovered, setHovered] = createSignal(false);
 
 	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.
 	return (
 		<text
-			visible={props.report !== undefined}
+			visible={props.status !== null}
 			marginLeft={1}
 			selectable={false}
 			fg={hovered() ? props.theme.text.base : props.theme.text.muted}
 			onMouseOver={() => setHovered(true)}
 			onMouseOut={() => setHovered(false)}
 			onMouseDown={(event) => {
-				const shown = props.report;
+				const shown = props.status;
 				if (event.button !== 0 || !shown) return;
 
 				event.preventDefault();
@@ -55,13 +55,13 @@ function Badge(props: { theme: Context["theme"]; report: Report | undefined; ope
 			}}
 		>
 			desk
-			<Show when={props.report?.count}>
-				{(count) => (
+			<Show when={props.status && count(props.status)}>
+				{(counted) => (
 					<>
 						{" ["}
-						<span style={{ fg: props.theme.text.base }}>{count().waiting}</span>
-						<Show when={count().critical > 0}>
-							<span style={{ fg: props.theme.text.feedback.error.base }}> !{count().critical}</span>
+						<span style={{ fg: props.theme.text.base }}>{counted().waiting}</span>
+						<Show when={counted().critical > 0}>
+							<span style={{ fg: props.theme.text.feedback.error.base }}> !{counted().critical}</span>
 						</Show>
 						]
 					</>
@@ -71,90 +71,53 @@ function Badge(props: { theme: Context["theme"]; report: Report | undefined; ope
 	);
 }
 
-/** The status of `directory`'s plugin instance, asking again every couple of seconds while OpenCode's server can't answer. */
-const ask = (client: RpcClient<typeof BadgeRpc>, directory: string) =>
-	client.status({}, { location: { directory } }).pipe(Effect.retry(Schedule.spaced("2 seconds")));
-
 /**
- * The badge in the footer, for as long as it runs: the settings, the slot, and the statuses of the plugin's instances
- * into it. A location's is asked for once a session there shows the badge, and kept up to date by its events.
+ * The badge in the footer, for as long as it runs: the settings, and the slot, each session's badge in it asked of the
+ * plugin instance in that session's directory, and asked again when that instance says something changed.
  */
 const badge = Effect.fn("badge")(function* (context: Context) {
 	const opener = yield* Settings.opener;
 	const client = rpcClient(BadgeRpc, context);
 	const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
-	const [statuses, setStatuses] = createSignal<Statuses>({});
 
-	/** The locations asked for so far. */
-	// TODO main | why are we tracking several directories? | by Evgenii Perminov at Sun, 15 Nov 2026 18:40:57 GMT
-	const asked = yield* Ref.make<ReadonlySet<string>>(new Set());
-
-	/** Asks `directory`'s instance, the first time only; its events tell the rest. */
-	const askOnce = Effect.fn("askOnce")(function* (directory: string) {
-		const known = yield* Ref.getAndUpdate(asked, (seen) => new Set([...seen, directory]));
-		if (known.has(directory)) return;
-
-		const status = yield* ask(client, directory);
-		yield* Effect.sync(() => setStatuses((now) => withFirstStatus(now, directory, status)));
-	});
-
-	/** Asks every location asked before again: after OpenCode's server reconnects, its events since are lost. */
-	const again = Effect.flatMap(Ref.get(asked), (seen) =>
-		Effect.forEach(
-			seen,
-			(directory) =>
-				Effect.flatMap(ask(client, directory), (status) =>
-					Effect.sync(() => setStatuses((now) => withStatus(now, directory, status))),
-				),
-			{ concurrency: "unbounded", discard: true },
+	/** Each time OpenCode's server reconnects, while the stream runs. */
+	const reconnects = Stream.callback<void>((queue) =>
+		Effect.acquireRelease(
+			Effect.sync(() => context.data.on("server.connected", () => void Queue.offerUnsafe(queue, undefined))),
+			(unsubscribe) => Effect.sync(unsubscribe),
 		),
 	);
-
-	/** The desk a session's badge reports: its top-level session's (a subagent's desk is its parent's). */
-	const deskOf = (sessionID: string | undefined) =>
-		sessionID === undefined ? undefined : (context.data.session.root(sessionID) ?? sessionID);
-
-	/** Where that desk's plugin instance is: its session's location (else the session's own, until it's loaded). */
-	const locationOf = (sessionID: string | undefined, desk: string | undefined) =>
-		(desk === undefined ? undefined : context.data.session.get(desk)?.location.directory) ??
-		(sessionID === undefined ? undefined : context.data.session.get(sessionID)?.location.directory);
 
 	yield* Effect.acquireRelease(
 		Effect.sync(() =>
 			context.ui.slot({
 				append: "prompt.footer.status",
 				render: (slot) => {
-					const desk = () => deskOf(slot.sessionID);
-					const location = () => locationOf(slot.sessionID, desk());
+					const [status, setStatus] = createSignal<Status | null>(null);
+					/** Where the session works: its plugin instance is the one connected while its desk is in desk mode. */
+					const directory = () =>
+						slot.sessionID === undefined ? undefined : context.data.session.get(slot.sessionID)?.location.directory;
 					createEffect(() => {
-						const directory = location();
-						if (directory !== undefined) run(askOnce(directory));
+						const session = slot.sessionID;
+						const at = directory();
+						setStatus(null);
+						if (session === undefined || at === undefined) return;
+
+						const following = run(
+							follow(client, SessionID.make(session), at, reconnects).pipe(
+								Stream.runForEach((now) => Effect.sync(() => setStatus(now))),
+							),
+						);
+						onCleanup(() => run(Fiber.interrupt(following)));
 					});
-					return (
-						<Badge
-							theme={context.theme}
-							report={report(statusAt(statuses(), location()), desk())}
-							open={(page) => run(open(opener, page))}
-						/>
-					);
+					return <Badge theme={context.theme} status={status()} open={(page) => run(open(opener, page))} />;
 				},
 			}),
 		),
 		(unslot) => Effect.sync(unslot),
 	);
 
-	yield* Effect.acquireRelease(
-		Effect.sync(() => context.data.on("server.connected", () => void run(again))),
-		(unsubscribe) => Effect.sync(unsubscribe),
-	);
-
-	// Every location's `changed` events; one that doesn't decode ends the subscription, so it's taken out again.
-	yield* client.events("changed").pipe(
-		Stream.retry(Schedule.forever),
-		Stream.runForEach((event) =>
-			Effect.sync(() => setStatuses((now) => withStatus(now, event.location.directory, event.data))),
-		),
-	);
+	return yield* Effect.never;
 }, Effect.scoped);
 
 export default Plugin.define({

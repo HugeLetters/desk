@@ -15,7 +15,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { EntryId } from "../src/model/entry";
 import { Port } from "../src/model/paths";
-import { off, Status } from "../src/plugin/badge-rpc";
+import { BadgeRpc } from "../src/plugin/badge-rpc";
 import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { D, P, S } from "./support/ids";
@@ -33,10 +33,10 @@ interface Session {
 type Event = { type: string; data: { sessionID: string } };
 type Run<A = unknown> = Effect.Effect<A, unknown>;
 
-/** A status as it goes over OpenCode's plugin RPC. */
-const encodeStatus = Schema.encodeUnknownEffect(Status);
-/** Not connected, as it goes over the RPC. */
-const offOnTheWire = Schema.encodeSync(Status)(off);
+/** A badge as it goes over OpenCode's plugin RPC. */
+const encodeStatus = Schema.encodeUnknownEffect(BadgeRpc.methods.status.output);
+/** A declared error, as the RPC's handlers make them. */
+const error = (type: string, message: string, data: unknown) => ({ type, message, data });
 
 /** The parts of the plugin context the desk uses, recording what the plugin registers and says. */
 function fakeContext(home: string, sessions: Array<Session>, options: Record<string, unknown> = {}) {
@@ -126,14 +126,13 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 		command: (name: string, sessionID: string) => Effect.runPromise(present(commands.get(name)).execute({ sessionID })),
 		tool: (name: string, sessionID: string, input: unknown) =>
 			Effect.runPromise(present(tools.get(name)).execute(input, { sessionID })),
-		/** The badge's status, as the TUI asks this plugin instance for it: encoded, as OpenCode's plugin RPC sends it. */
-		status: () =>
-			Effect.runPromise(Effect.flatMap(present(present(rpcs.get("desk")).handlers.status)({}, {}), encodeStatus)),
-		/** The badge's `changed` events so far, encoded. */
-		changed: () =>
-			present(rpcs.get("desk"))
-				.emitted.filter((event) => event.name === "changed")
-				.map((event) => Schema.encodeUnknownSync(Status)(event.data)),
+		/** `session`'s badge, as the TUI asks this plugin instance for it: encoded, as OpenCode's plugin RPC sends it. */
+		status: (session: string) =>
+			Effect.runPromise(
+				Effect.flatMap(present(present(rpcs.get("desk")).handlers.status)({ session }, { error }), encodeStatus),
+			),
+		/** The badge's `changed` events so far. */
+		changed: () => present(rpcs.get("desk")).emitted.filter((event) => event.name === "changed"),
 	};
 }
 
@@ -192,7 +191,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service; nor is there a badge.
 	expect(await Effect.runPromise(answering(port))).toBe(false);
-	expect(await first.status()).toEqual(offOnTheWire);
+	expect(await first.status("ses_main")).toBeNull();
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(present(first.synthetic.at(-1)).text).toMatch(
@@ -229,25 +228,21 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 	expect(await readFile(join(home, "service.log"), "utf8")).toContain(`desk: serving ${home}`);
 });
 
-test("the TUI badge's data, over the plugin's RPC: while connected, the service's desks and the sessions in desk mode; each change emitted", async () => {
-	const ofMain = (status: typeof Status.Encoded) => status.live?.desks.find((desk) => desk.session === "ses_main");
-	const live = await eventually(async () => {
-		const status = await first.status();
-		return ofMain(status)?.waiting === 1 && status.live;
-	});
-	expect(live).toMatchObject({ url: `http://127.0.0.1:${port}/`, deskMode: ["ses_main"] });
-	// Desk mode on, then the first question: each a change, the TUI told of both.
-	expect(first.changed().some((status) => status.live?.deskMode.includes("ses_main"))).toBe(true);
+test("the TUI badge's data, over the plugin's RPC: while connected, a desk-mode session's desk, a subagent's its top-level session's; each change emitted", async () => {
+	const page = `http://127.0.0.1:${port}/sessions/ses_main`;
+	await eventually(async () => (await first.status("ses_main"))?.waiting === 1);
+	expect(await first.status("ses_main")).toEqual({ page, waiting: 1, critical: 0 });
+	expect(await first.status("ses_sub")).toEqual({ page, waiting: 1, critical: 0 });
+	// Not in desk mode: no badge.
+	expect(await first.status("ses_other")).toBeNull();
+	// The connection and the service's views so far: the TUI was told to ask again.
+	expect(first.changed().length).toBeGreaterThan(0);
+	expect(first.changed().every((event) => JSON.stringify(event.data) === "{}")).toBe(true);
 	const before = first.changed().length;
 	await first.tool("desk_ask", "ses_main", { title: "Counted?", body: "", priority: "critical" });
-	const changed = await eventually(() =>
-		first
-			.changed()
-			.slice(before)
-			.find((status) => ofMain(status)?.critical === 1),
-	);
-	expect(ofMain(changed)).toMatchObject({ waiting: 2, critical: 1 });
-	await eventually(async () => JSON.stringify(await first.status()) === JSON.stringify(first.changed().at(-1)));
+	await eventually(() => first.changed().length > before);
+	await eventually(async () => (await first.status("ses_main"))?.critical === 1);
+	expect(await first.status("ses_main")).toEqual({ page, waiting: 2, critical: 1 });
 });
 
 test("the plugin is the service's way into its OpenCode: the user's reply goes out through it, and so do moves", async () => {
@@ -287,6 +282,7 @@ test("a second plugin instance (another OpenCode) shares the one service and the
 });
 
 test("/desk-mode again turns it off", async () => {
+	const before = first.changed().length;
 	await first.command("desk-mode", "ses_sub");
 	expect(first.storage.has("on/ses_main")).toBe(false);
 	expect(present(first.synthetic.at(-1)).text).toContain("Desk mode is off");
@@ -298,10 +294,11 @@ test("/desk-mode again turns it off", async () => {
 		present(Array.from(await rpc(page, (desk) => desk.view({}).pipe(Stream.take(1), Stream.runCollect)))[0]);
 	await eventually(async () => (await view()).deskMode.length === 1);
 	expect(await view()).toMatchObject({ deskMode: ["ses_main"] });
-	// Hung up: no badge from the first instance, and the TUI is told; the second's still has the desk.
-	await eventually(async () => (await first.status()).live === null);
-	expect(first.changed().at(-1)).toEqual(offOnTheWire);
-	expect((await second.status()).live).toMatchObject({ deskMode: ["ses_main"] });
+	// Hung up: no badge from the first instance (nor would there be: desk mode is off in its storage), and the TUI is
+	// told; the second's still has the desk.
+	await eventually(() => first.changed().length > before);
+	expect(await first.status("ses_main")).toBeNull();
+	expect(await second.status("ses_main")).toMatchObject({ page: `http://127.0.0.1:${port}/sessions/ses_main` });
 });
 
 test("the service exits once every plugin instance has gone", async () => {

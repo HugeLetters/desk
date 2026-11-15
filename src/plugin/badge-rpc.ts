@@ -1,52 +1,41 @@
 /**
- * The TUI badge's view of the desk, as the server part of the plugin gives it over OpenCode's plugin RPC: `status` (what
- * this plugin instance knows now) and `changed` (every change after). One instance per directory, so the TUI calls
- * each location's and tells their events apart by `location`.
+ * The TUI badge's view of a desk, as the server part of the plugin gives it over OpenCode's plugin RPC: `status` (a
+ * session's badge now) and `changed` (ask again). One instance per directory, so the TUI asks the instance of the
+ * session's directory, the one connected while that session is in desk mode.
  *
- * Between the desk's own two parts, in one OpenCode: not the desk service's contract (`api.ts`), nor its version, though
- * a desk is the contract's summary, picked. Only schemas here, so the TUI imports nothing else of the plugin's but
- * those; its client (`tui/rpc-client.ts`) makes them portable.
+ * Between the desk's own two parts, in one OpenCode: not the desk service's contract (`api.ts`), nor its version. Only
+ * schemas here, so the TUI imports nothing else of the plugin's but those; its client (`tui/rpc-client.ts`) makes them
+ * portable.
  */
 import { Rpc } from "@opencode/schema/rpc";
 import * as Schema from "effect/Schema";
-import * as Struct from "effect/Struct";
-import { DeskSummary } from "../api/api";
+import { SessionID } from "../model/entry";
 import type { Identity } from "../shared/type";
 
-/**
- * A desk: how many entries wait on the user, and how many of those are critical. The API's {@link DeskSummary}, picked:
- * encoding drops its other fields, so the plugin passes the service's summaries as they are.
- */
-export const Desk = DeskSummary.mapFields(Struct.pick(["session", "waiting", "critical"]));
-export interface Desk extends Identity<typeof Desk.Type> {}
-
-/** What a connected plugin instance knows: the service's page and the desks' summary. */
-export const Live = Schema.Struct({
-	/** The page, e.g. `http://127.0.0.1:47400/`. */
-	url: Schema.URLFromString,
-	desks: Schema.Array(Desk),
-	/** The top-level sessions in desk mode, in every OpenCode. */
-	deskMode: Schema.Array(Schema.String),
+/** A session's badge: its desk's page, how many entries there wait on the user, and how many of those are critical. */
+export const Status = Schema.Struct({
+	/** The desk's page, e.g. `http://127.0.0.1:47400/sessions/ses_…`. */
+	page: Schema.URLFromString,
+	waiting: Schema.Number,
+	critical: Schema.Number,
 });
-export interface Live extends Identity<typeof Live.Type> {}
-
-/** A plugin instance's status: `live` is null while it isn't connected to the service (no badge). */
-export const Status = Schema.Struct({ live: Schema.NullOr(Live) });
 export interface Status extends Identity<typeof Status.Type> {}
-
-/** Not connected. */
-export const off: Status = { live: null };
-
-export const sameStatus = Schema.toEquivalence(Status);
 
 export const BadgeRpc = Rpc.define({
 	id: "desk",
 	methods: {
-		/** This plugin instance's status now. */
-		status: { input: Schema.Struct({}), output: Status },
+		/**
+		 * The badge of `session` (a subagent's is its top-level session's desk): null while that desk isn't in desk mode,
+		 * or this plugin instance isn't connected to the service. Fails while OpenCode can't say which desk it is.
+		 */
+		status: {
+			input: Schema.Struct({ session: SessionID }),
+			output: Schema.NullOr(Status),
+			errors: { opencode: Schema.Struct({}) },
+		},
 	},
 	events: {
-		/** The status, whenever it changes. */
-		changed: { schema: Status },
+		/** Something this plugin instance knows changed: ask again. */
+		changed: { schema: Schema.Struct({}) },
 	},
 });

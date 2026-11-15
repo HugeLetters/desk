@@ -4,8 +4,8 @@
  * - `/desk-mode` (`command.ts`), which turns desk mode on or off for the current session (off by default), kept in the
  *   plugin's storage (`modes.ts`), so a session's subagents follow it;
  * - the `desk_*` tools (`tools.ts`), which forward to the service and which only sessions with the desk on get to see;
- * - the TUI badge's data (`badge.ts`), over OpenCode's plugin RPC (`badge-rpc.ts`): the desks' summary while
- *   connected, so the TUI part never talks to the service itself.
+ * - the TUI badge's data (`badge.ts`), over OpenCode's plugin RPC (`badge-rpc.ts`): a session's desk while it's in
+ *   desk mode and this instance is connected, so the TUI part never talks to the service itself.
  *
  * For the service, it's also the way into this OpenCode (`sessions.ts`): it looks sessions up and delivers the user's
  * replies here when the service asks, and tells the service about sessions that move. Its options are the settings
@@ -60,7 +60,7 @@ export default Plugin.define<Scope.Scope>({
 
 			yield* Command.register(ctx, { calls, modes, sync });
 			yield* Tools.register(ctx, { calls, modes, getRootSessionId });
-			yield* Badge.register(ctx, connection);
+			yield* Badge.register(ctx, { connection, modes, getRootSessionId });
 		},
 		(effect, ctx) => effect.pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
 	),

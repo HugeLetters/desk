@@ -52,7 +52,7 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 flowchart LR
   subgraph OC[OpenCode, one or more]
     P1[plugin instance] --- P2[plugin instance]
-    T[TUI badge] <-- "plugin RPC desk: status, changed" --> P1
+    T[TUI badge] <-- "plugin RPC desk: status of a session, changed" --> P1
   end
   P1 <-- "WebSocket :47400/rpc: hello, attach (calls back: session, prompt), desk_* requests, moved" --> S
   P2 <--> S
@@ -89,10 +89,11 @@ flowchart LR
   something else listens on the port and keeps refusing the WebSocket, the plugin doesn't wait for a service that can't
   start there: `/desk-mode` and the tools say the port is taken, until OpenCode reloads its plugins (or no session in
   that directory is in desk mode any more).
-  It also feeds the TUI's badge, over OpenCode's plugin RPC (`desk`): `status`, and a `changed` event on every change,
-  each the desks' summary from the service's `view` on its connection while it's live, else "not connected". The TUI
-  part keeps the latest per location (one plugin instance per directory) and shows a session's from its top-level
-  session's location; it never talks to the service, nor starts it.
+  It also feeds the TUI's badge, over OpenCode's plugin RPC (`desk`): `status({ session })` is that session's desk (its
+  top-level session's: the page and its counts, from the service's `view` on its connection while it's live), or
+  nothing while that desk isn't in desk mode or the instance isn't connected; `changed` (no data) says to ask again,
+  on every new view and whenever the connection comes or goes. Each footer badge asks the instance of its session's
+  directory, again on that instance's `changed`; the TUI part never talks to the service, nor starts it.
 - **One plugin instance per directory, not per session.** Each instance holds a connection while at least one
   desk-mode session _located in its directory_ exists: desk mode is stored plugin-wide (`on/<session>` in the plugin's
   storage), and `modes.here` keeps the sessions whose location is this directory. It reports exactly those sessions
@@ -121,8 +122,8 @@ flowchart LR
 | `src/service/delivery/`  | `outbox.ts` (outbox entries → the messages to send), `delivery.ts` (sends them, one machine per due message, retrying on reconnect and every 30 s)                                                                                                                                                                                                                                                                                                                                       |
 | `src/service/opencode/`  | OpenCode as the service reaches it: `opencode.ts` (the connected plugin instances), `sessions.ts` (a desk's name: its session's title and folder, cached)                                                                                                                                                                                                                                                                                                                                |
 | `src/service/transport/` | `api.ts` (what each request does), `rpc.ts` (the API over the WebSocket: the version check, the bridge into the plugins' OpenCode), `http.ts` (the one server: the page, `/rpc`, attachments and files; the port, and only that one)                                                                                                                                                                                                                                                     |
-| `src/plugin/`            | `index.ts` (the assembly), `modes.ts` (desk mode in storage, the connection following it), `command.ts` (`/desk-mode`), `tools.ts` (the tools, hiding them), `sessions.ts` (OpenCode's sessions), `calls.ts` (the service, within the timeout), `connection.ts` (connect to the port or start the service; a machine), `badge.ts` (the badge's status from the live connection's `view`, as an OpenCode plugin RPC), `badge-rpc.ts` (that RPC: `status`, `changed`; shared with the TUI) |
-| `src/tui/`               | `index.tsx` (the TUI's footer badge: which desk a session reports, asked of its location's plugin instance over the plugin RPC), `badge.ts` (its data: the latest status per location, the report for a desk), `rpc-client.ts` (a plugin RPC client from Effect schemas: methods as Effects, events as Streams)                                                                                                                                                                                                                                                                            |
+| `src/plugin/`            | `index.ts` (the assembly), `modes.ts` (desk mode in storage, the connection following it), `command.ts` (`/desk-mode`), `tools.ts` (the tools, hiding them), `sessions.ts` (OpenCode's sessions), `calls.ts` (the service, within the timeout), `connection.ts` (connect to the port or start the service; a machine), `badge.ts` (a session's badge from the live connection's `view`, as an OpenCode plugin RPC), `badge-rpc.ts` (that RPC: `status`, `changed`; shared with the TUI) |
+| `src/tui/`               | `index.tsx` (the TUI's footer badge), `badge.ts` (its data: a session's badge, asked of its directory's plugin instance over the plugin RPC, again on `changed`), `rpc-client.ts` (a plugin RPC client from Effect schemas: methods as Effects, events as Streams)                                                                                                                                                                                                                                                                            |
 | `src/shared/`            | `machine.ts` (state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts), `settings.ts` (the settings as Effect `Config`: the plugin's options, then `DESK_<NAME>`, then the defaults; `files`: the store, its registration and log, read from them where they're used), `process.ts` (what Effect lacks to start the service detached), `type.ts`, `empty.ts`                                                                                                                                                          |
 | `page/`                  | the page (Solid, built by Vite into `page/dist/`): `main.tsx` (the router), `shell.tsx` and `pages/` (the desks, a desk, an entry), `components/`, `stores/` (the desk shown, the drafts, their attachments, the toast; composed in `desk.tsx`), `database.ts` (IndexedDB); Mermaid renders in the browser, loaded on first use                                                                                                                                                                                                                                                                                                                                                                                   |
 

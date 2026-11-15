@@ -1,24 +1,28 @@
 /**
- * The TUI badge's data: what the plugin's server part gives it (`src/plugin/badge.ts`: the desks of the service its
- * connection is live to, through restarts), and what the TUI makes of it (`src/tui/badge.ts`: which location's status a
- * session uses, and the report).
+ * The TUI badge's data: what the plugin's server part answers for a session (`src/plugin/badge.ts`: its desk, from the
+ * service its connection is live to, through restarts, while the desk is in desk mode), and how the TUI asks for it
+ * (`src/tui/badge.ts`: per session, of its directory's instance, again on that instance's `changed`).
  */
 import { afterEach, expect, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionNotFoundError } from "@opencode/protocol/errors";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { View } from "../src/api/api";
+import type { SessionID } from "../src/model/entry";
 import { Port } from "../src/model/paths";
-import { fromView, statuses } from "../src/plugin/badge";
-import { BadgeRpc, off, Status } from "../src/plugin/badge-rpc";
+import * as Badge from "../src/plugin/badge";
+import { BadgeRpc, type Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
-import { count, type Report, report, statusAt, withFirstStatus, withStatus } from "../src/tui/badge";
+import { OpenCodeError } from "../src/plugin/sessions";
+import { count, follow } from "../src/tui/badge";
 import { rpcClient } from "../src/tui/rpc-client";
 import { D, S } from "./support/ids";
 import { present } from "./support/present";
@@ -32,37 +36,6 @@ afterEach(async () => {
 /** The page on `port`. */
 const page = (port: number) => new URL(`http://127.0.0.1:${port}/`);
 
-/**
- * Every status a plugin instance on `port` gives the badge, as they come: its connection is needed from the start, with
- * ses_a in desk mode, and doesn't start a service (the test does).
- */
-const watching = (port: Port) => {
-	const seen: Array<Status> = [];
-	const scope = Effect.runSync(Scope.make());
-	const connection = Effect.runSync(
-		Scope.provide(
-			Connection.make({
-				port,
-				start: Effect.void,
-				directory: D("/work/a"),
-				modes: Effect.succeed([S("ses_a")]),
-				serve: { session: () => Effect.succeed(null), prompt: () => Effect.void },
-				timeout: 200,
-				needed: true,
-			}),
-			scope,
-		),
-	);
-	const fiber = Effect.runFork(
-		Stream.runForEach(statuses(connection), (status) => Effect.sync(() => seen.push(status))),
-	);
-	cleanup.push(async () => {
-		await Effect.runPromise(Fiber.interrupt(fiber));
-		await Effect.runPromise(Scope.close(scope, Exit.void));
-	});
-	return { seen, latest: () => seen.at(-1) };
-};
-
 /** A port nothing listens on now. */
 const freePort = async () => {
 	const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
@@ -71,56 +44,137 @@ const freePort = async () => {
 	return port;
 };
 
-test("the plugin gives the badge the desks of the service it's connected to: a desk's entries waiting on the user, the sessions in desk mode, through a restart", async () => {
+/** ses_sub is ses_a's subagent; ses_fails is one OpenCode can't look up now; ses_gone, one it doesn't know. */
+const roots = (session: SessionID) =>
+	session === "ses_sub"
+		? Effect.succeed(S("ses_a"))
+		: session === "ses_fails"
+			? Effect.fail(new OpenCodeError({ message: "OpenCode is busy", cause: null }))
+			: session === "ses_gone"
+				? Effect.fail(new SessionNotFoundError({ sessionID: session, message: `Session not found: ${session}` }))
+				: Effect.succeed(session);
+
+/**
+ * A plugin instance on `port` with the badge's RPC registered, as the TUI reaches it: its connection is needed from the
+ * start, with the sessions in `on` in desk mode, and doesn't start a service (the test does).
+ */
+const registered = (port: Port, on: Set<string>) => {
+	const scope = Effect.runSync(Scope.make());
+	let handlers: { status: (input: unknown, context: unknown) => Effect.Effect<unknown, unknown> } | undefined;
+	const changed: Array<unknown> = [];
+	const ctx = {
+		rpc: {
+			register: (_definition: unknown, registering: typeof handlers) =>
+				Effect.sync(() => {
+					handlers = registering;
+					return {
+						dispose: Effect.void,
+						events: { emit: (name: string, data: unknown) => Effect.sync(() => void changed.push([name, data])) },
+					};
+				}),
+		},
+	} as never;
+	Effect.runSync(
+		Scope.provide(
+			Effect.gen(function* () {
+				const connection = yield* Connection.make({
+					port,
+					start: Effect.void,
+					directory: D("/work/a"),
+					modes: Effect.succeed([S("ses_a")]),
+					serve: { session: () => Effect.succeed(null), prompt: () => Effect.void },
+					timeout: 200,
+					needed: true,
+				});
+				yield* Badge.register(ctx, {
+					connection,
+					modes: { on: (session) => Effect.succeed(on.has(session)) },
+					getRootSessionId: roots,
+				});
+			}),
+			scope,
+		),
+	);
+	cleanup.push(() => Effect.runPromise(Scope.close(scope, Exit.void)));
+	const error = (type: string, message: string, data: unknown) => ({ type, message, data });
+
+	return {
+		/** `session`'s badge, encoded, as OpenCode's plugin RPC sends it. */
+		status: (session: string) =>
+			Effect.runPromise(
+				Effect.flatMap(
+					present(handlers).status({ session }, { error }),
+					Schema.encodeUnknownEffect(BadgeRpc.methods.status.output),
+				),
+			),
+		/** What `status` fails with for `session`. */
+		failure: (session: string) => Effect.runPromise(Effect.flip(present(handlers).status({ session }, { error }))),
+		changed,
+	};
+};
+
+test("the plugin answers a session's badge with its desk on the service it's connected to: the page, the entries waiting on the user, through a restart", async () => {
 	const home = await mkdtemp(join(tmpdir(), "desk-badge-"));
 	cleanup.push(() => rm(home, { recursive: true, force: true }));
 	const port = await freePort();
-	const { seen, latest } = watching(port);
-	// No service yet: not connected, nothing to show.
-	await eventually(() => seen.length > 0);
-	expect(latest()).toEqual(off);
+	const on = new Set(["ses_a"]);
+	const plugin = registered(port, on);
+	// No service yet: not connected, nothing to show; the TUI was told to ask.
+	await eventually(() => plugin.changed.length > 0);
+	expect(plugin.changed[0]).toEqual(["changed", {}]);
+	expect(await plugin.status("ses_a")).toBeNull();
 
 	const first = await startService({ store: home, port });
 	const opencode = first.fake.server("http://opencode");
 	opencode.session({ id: S("ses_a") });
-	const plugin = first.plugin(opencode);
+	const asking = first.plugin(opencode);
 	const asked = { session: S("ses_a"), directory: D("/work/a") };
-	await plugin.request("ask", { by: asked, question: { title: "One?", body: "" } });
-	await plugin.request("ask", { by: asked, question: { title: "Two?", body: "", priority: "critical" } });
-	const counted = await eventually(() =>
-		latest()?.live?.desks.find((desk) => desk.session === "ses_a" && desk.waiting === 2),
-	);
-	expect(present(latest()?.live)).toMatchObject({ url: page(port), deskMode: ["ses_a"] });
-	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
-	expect(report(latest(), "ses_a")?.page.href).toBe(`${page(port).href}sessions/ses_a`);
-	expect(report(latest(), "ses_a")?.count).toEqual({ waiting: 2, critical: 1 });
+	await asking.request("ask", { by: asked, question: { title: "One?", body: "" } });
+	await asking.request("ask", { by: asked, question: { title: "Two?", body: "", priority: "critical" } });
+	const desk = { page: `${page(port).href}sessions/ses_a`, waiting: 2, critical: 1 };
+	await eventually(async () => (await plugin.status("ses_a"))?.waiting === 2);
+	expect(await plugin.status("ses_a")).toEqual(desk);
+	// A subagent's badge is its top-level session's desk.
+	expect(await plugin.status("ses_sub")).toEqual(desk);
+	// Desk mode off for that desk: no badge, though the instance is still connected.
+	on.delete("ses_a");
+	expect(await plugin.status("ses_a")).toBeNull();
+	expect(await plugin.status("ses_sub")).toBeNull();
+	on.add("ses_a");
+	// A session in desk mode with nothing on its desk: its page, nothing waiting.
+	on.add("ses_b");
+	expect(await plugin.status("ses_b")).toEqual({ page: `${page(port).href}sessions/ses_b`, waiting: 0, critical: 0 });
 
-	// The service goes: not connected, so the badge hides; then the connection finds the next one on the same port.
+	// The service goes: not connected, so the badge hides, and the TUI is told; then the connection finds the next
+	// one on the same port.
+	const before = plugin.changed.length;
 	await first.close(false);
-	await eventually(() => latest()?.live === null);
-	expect(report(latest(), "ses_a")).toBeUndefined();
+	await eventually(async () => (await plugin.status("ses_a")) === null);
+	expect(plugin.changed.length).toBeGreaterThan(before);
 	const second = await startService({ store: home, port });
 	cleanup.push(() => second.close(false));
-	const back = await eventually(() => latest()?.live?.desks.length === 1 && latest()?.live);
-	expect(back).toMatchObject({ url: page(port), deskMode: ["ses_a"] });
-	// Each change once.
-	expect(
-		seen.filter((status, index) => index > 0 && JSON.stringify(status) === JSON.stringify(seen[index - 1])),
-	).toEqual([]);
+	await eventually(async () => (await plugin.status("ses_a")) !== null);
+	expect(await plugin.status("ses_a")).toMatchObject({ page: desk.page, waiting: 2 });
 });
 
-test("a service on another port isn't the plugin's, so nothing for the badge", async () => {
+test("a session OpenCode doesn't know has no badge; one it can't look up now fails, so the TUI asks again", async () => {
+	const plugin = registered(await freePort(), new Set(["ses_gone", "ses_fails"]));
+	expect(await plugin.status("ses_gone")).toBeNull();
+	expect(await plugin.failure("ses_fails")).toEqual({ type: "opencode", message: "OpenCode is busy", data: {} });
+});
+
+test("a service on another port isn't the plugin's, so no badge", async () => {
 	const elsewhere = await startService();
 	cleanup.push(() => elsewhere.close());
 	const port = await freePort();
-	const { seen, latest } = watching(port);
-	await eventually(() => seen.length > 0);
+	const plugin = registered(port, new Set(["ses_a"]));
+	await eventually(() => plugin.changed.length > 0);
 	await Bun.sleep(300);
-	expect(latest()).toEqual(off);
+	expect(await plugin.status("ses_a")).toBeNull();
 	expect(elsewhere.port).not.toBe(port);
 });
 
-test("of the service's desk summaries, only a desk's session and counts reach the TUI: the RPC's encoding drops the rest", async () => {
+test("a desk's badge out of the service's view: its page and counts, none waiting when the view has no summary for it", () => {
 	const view: View = {
 		desk: null,
 		entries: [],
@@ -128,64 +182,92 @@ test("of the service's desk summaries, only a desk's session and counts reach th
 		deskMode: ["ses_a"],
 		failures: {},
 	};
-
-	// What the plugin's `status` answers, as OpenCode's plugin RPC encodes it, and the TUI's client decodes.
-	const sent = await Effect.runPromise(Schema.encodeEffect(Status)(fromView(page(1), view)));
-	const context = {
-		client: { rpc: () => ({ status: () => Promise.resolve(sent), events: { on: () => () => {} } }) },
-		location: { directory: D("/work/a") },
-	} as never;
-	const received = await Effect.runPromise(rpcClient(BadgeRpc, context).status({}));
-	expect(received.live?.desks).toEqual([{ session: "ses_a", waiting: 2, critical: 1 }]);
+	const seen = { url: page(1), view };
+	expect(Badge.fromView(seen, S("ses_a"))).toEqual({
+		page: new URL("http://127.0.0.1:1/sessions/ses_a"),
+		waiting: 2,
+		critical: 1,
+	});
+	expect(Badge.fromView(seen, S("ses_b"))).toEqual({
+		page: new URL("http://127.0.0.1:1/sessions/ses_b"),
+		waiting: 0,
+		critical: 0,
+	});
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
-	expect(count(undefined)).toBeUndefined();
-	expect(count({ session: "ses_a", waiting: 0, critical: 0 })).toBeUndefined();
-	expect(count({ session: "ses_a", waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
+	const at = new URL("http://127.0.0.1:1/sessions/ses_a");
+	expect(count({ page: at, waiting: 0, critical: 0 })).toBeUndefined();
+	expect(count({ page: at, waiting: 3, critical: 1 })).toEqual({ waiting: 3, critical: 1 });
 });
 
-test("the report for a desk: its page and count while its session is in desk mode and the plugin connected, else nothing", () => {
-	const summary = { session: "ses_a", waiting: 2, critical: 0 };
-	const live = { url: new URL("http://127.0.0.1:47400/"), desks: [summary], deskMode: ["ses_a"] };
-	const shown = (report: Report | undefined) => report && { page: report.page.href, count: report.count };
-	expect(shown(report({ live }, "ses_a"))).toEqual({
-		page: "http://127.0.0.1:47400/sessions/ses_a",
-		count: { waiting: 2, critical: 0 },
-	});
-	expect(shown(report({ live: { ...live, desks: [] } }, "ses_a"))).toEqual({
-		page: "http://127.0.0.1:47400/sessions/ses_a",
-		count: undefined,
-	});
-	expect(report({ live }, "ses_b")).toBeUndefined();
-	expect(report({ live }, undefined)).toBeUndefined();
-	expect(report(off, "ses_a")).toBeUndefined();
-	expect(report(undefined, "ses_a")).toBeUndefined();
-});
-
-test("statuses per location: a session's badge uses its location's, the latest event wins, and a late first answer doesn't undo one", () => {
-	const live = (waiting: number): Status => ({
-		live: {
-			url: new URL("http://127.0.0.1:47400/"),
-			desks: [{ session: "ses_a", waiting, critical: 0 }],
-			deskMode: ["ses_a"],
+/** The TUI client's `rpc`: `status` answers each session's badge from `badges`, recording each call; `emit` sends `changed`. */
+const fakeClient = (badges: Map<string, Status | null>) => {
+	const listeners: Array<(event: unknown) => void> = [];
+	const calls: Array<[unknown, unknown]> = [];
+	const rpc = () => ({
+		status: (input: { session: string }, options: { location?: { directory: string } }) => {
+			calls.push([input.session, options.location?.directory]);
+			return Promise.resolve(Schema.encodeSync(BadgeRpc.methods.status.output)(badges.get(input.session) ?? null));
+		},
+		events: {
+			on: (_name: string, listener: (event: unknown) => void) => {
+				listeners.push(listener);
+				return () => void listeners.splice(listeners.indexOf(listener), 1);
+			},
 		},
 	});
-	const a = withStatus(withStatus({}, "/work/a", live(1)), "/work/b", off);
-	expect(statusAt(a, "/work/a")).toEqual(live(1));
-	expect(statusAt(a, "/work/b")).toEqual(off);
-	// Not asked yet, or not loaded: nothing.
-	expect(statusAt(a, "/work/c")).toBeUndefined();
-	expect(statusAt(a, undefined)).toBeUndefined();
-	expect(statusAt(a, "constructor")).toBeUndefined();
-	// Each location's its own: ses_a's desk shows from /work/a's instance, not /work/b's.
-	expect(report(statusAt(a, "/work/a"), "ses_a")?.count).toEqual({ waiting: 1, critical: 0 });
-	expect(report(statusAt(a, "/work/b"), "ses_a")).toBeUndefined();
-	// An event replaces a location's status.
-	const b = withStatus(a, "/work/a", live(2));
-	expect(statusAt(b, "/work/a")).toEqual(live(2));
-	expect(statusAt(a, "/work/a")).toEqual(live(1));
-	// The first answer for a location counts only if no event came first.
-	expect(statusAt(withFirstStatus(b, "/work/a", off), "/work/a")).toEqual(live(2));
-	expect(statusAt(withFirstStatus(b, "/work/c", live(3)), "/work/c")).toEqual(live(3));
+	const context = { client: { rpc }, location: { directory: "/work/tui" } } as never;
+	const emit = (directory: string) => {
+		for (const listener of listeners) listener({ type: "rpc.desk.changed", location: { directory }, data: {} });
+	};
+	return { client: rpcClient(BadgeRpc, context), calls, emit };
+};
+
+test("the TUI asks per session, of its directory's instance, and again on that instance's changed and on a reconnect", async () => {
+	const badge = (session: string, waiting: number): Status => ({
+		page: new URL(`http://127.0.0.1:1/sessions/${session}`),
+		waiting,
+		critical: 0,
+	});
+	const badges = new Map<string, Status | null>([
+		["ses_a", badge("ses_a", 1)],
+		["ses_b", null],
+	]);
+	const fake = fakeClient(badges);
+	const reconnects = Effect.runSync(PubSub.unbounded<void>());
+	const seen: Record<string, Array<Status | null>> = { ses_a: [], ses_b: [] };
+	const slot = (session: string, directory: string) => {
+		const fiber = Effect.runFork(
+			follow(fake.client, S(session), directory, Stream.fromPubSub(reconnects)).pipe(
+				Stream.runForEach((now) => Effect.sync(() => void present(seen[session]).push(now))),
+			),
+		);
+		cleanup.push(() => Effect.runPromise(Fiber.interrupt(fiber)));
+	};
+	slot("ses_a", "/work/a");
+	slot("ses_b", "/work/b");
+	await eventually(() => seen.ses_a?.length === 1 && seen.ses_b?.length === 1);
+	expect(fake.calls).toEqual(
+		expect.arrayContaining([
+			["ses_a", "/work/a"],
+			["ses_b", "/work/b"],
+		]),
+	);
+	expect(seen).toEqual({ ses_a: [badge("ses_a", 1)], ses_b: [null] });
+
+	// /work/a's instance says something changed: only ses_a's slot asks again.
+	badges.set("ses_a", badge("ses_a", 2));
+	fake.emit("/work/a");
+	await eventually(() => seen.ses_a?.length === 2);
+	await Bun.sleep(20);
+	expect(seen).toEqual({ ses_a: [badge("ses_a", 1), badge("ses_a", 2)], ses_b: [null] });
+	expect(fake.calls).toHaveLength(3);
+
+	// OpenCode's server reconnected: both ask again.
+	badges.set("ses_b", badge("ses_b", 1));
+	Effect.runSync(PubSub.publish(reconnects, undefined));
+	await eventually(() => seen.ses_b?.length === 2);
+	await eventually(() => seen.ses_a?.length === 3);
+	expect(seen.ses_b?.at(-1)).toEqual(badge("ses_b", 1));
 });

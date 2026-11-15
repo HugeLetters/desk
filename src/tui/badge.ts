@@ -1,49 +1,41 @@
 /**
- * What the TUI's footer badge shows (`index.tsx`), out of the statuses the server part of the plugin gives over
- * OpenCode's plugin RPC (`badge-rpc.ts`). There's one plugin instance per location (directory), each with its own
- * status, so they're kept per location: a session's badge uses its top-level session's location's, the instance
+ * What the TUI's footer badge shows (`index.tsx`), as the server part of the plugin gives it over OpenCode's plugin RPC
+ * (`badge-rpc.ts`): a session's badge, asked of the plugin instance in the session's directory, which is the one
  * connected while that session is in desk mode.
  */
-import { deskPath, link } from "../api/routes";
-import type { Desk, Status } from "../plugin/badge-rpc";
+import * as Effect from "effect/Effect";
+import * as Schedule from "effect/Schedule";
+import * as Stream from "effect/Stream";
+import type { SessionID } from "../model/entry";
+import type { BadgeRpc, Status } from "../plugin/badge-rpc";
+import type { RpcClient } from "./rpc-client";
 
-/** The latest status of each location's plugin instance, by directory. */
-export type Statuses = Readonly<Record<string, Status>>;
+/** The footer's count: none when nothing waits on the user, else how many do and how many of those are critical. */
+export const count = (status: Status) =>
+	status.waiting === 0 ? undefined : { waiting: status.waiting, critical: status.critical };
 
-/** `statuses` with `directory`'s status now `status`. */
-export const withStatus = (statuses: Statuses, directory: string, status: Status) => ({
-	...statuses,
-	[directory]: status,
-});
+/** `session`'s badge, asked of `directory`'s plugin instance, again every couple of seconds while the call fails. */
+export const ask = (client: RpcClient<typeof BadgeRpc>, session: SessionID, directory: string) =>
+	client.status({ session }, { location: { directory } }).pipe(Effect.retry(Schedule.spaced("2 seconds")));
 
 /**
- * `statuses` with `directory`'s status `status` unless it has one already: an answer to asking for it may come after
- * an event with a newer one.
+ * `session`'s badge now, then again on each `changed` from `directory`'s instance and each of `reconnects` (after
+ * OpenCode's server reconnects, the events since are lost). A newer ask replaces one still waiting.
  */
-export const withFirstStatus = (statuses: Statuses, directory: string, status: Status) =>
-	Object.hasOwn(statuses, directory) ? statuses : withStatus(statuses, directory, status);
+export const follow = (
+	client: RpcClient<typeof BadgeRpc>,
+	session: SessionID,
+	directory: string,
+	reconnects: Stream.Stream<void>,
+) => {
+	// One that doesn't decode ends the subscription, so it's taken out again.
+	const changed = client.events("changed").pipe(
+		Stream.retry(Schedule.forever),
+		Stream.filter((event) => event.location.directory === directory),
+	);
 
-/** The status of the plugin instance in `directory`, if known. */
-export const statusAt = (statuses: Statuses, directory: string | undefined) =>
-	directory === undefined || !Object.hasOwn(statuses, directory) ? undefined : statuses[directory];
-
-/** The footer's count for a desk: none when nothing waits on the user, else how many do and how many of those are critical. */
-export const count = (summary: Desk | undefined) =>
-	summary === undefined || summary.waiting === 0 ? undefined : { waiting: summary.waiting, critical: summary.critical };
-
-/** What the badge shows for one desk: where its page is, and its count. */
-export interface Report {
-	readonly page: URL;
-	readonly count: ReturnType<typeof count>;
-}
-
-/** The badge for `desk` (a top-level session): none unless the plugin is connected and the session is in desk mode. */
-export const report = (status: Status | undefined, desk: string | undefined): Report | undefined => {
-	const live = status?.live;
-	return !live || desk === undefined || !live.deskMode.includes(desk)
-		? undefined
-		: {
-				page: link(live.url, deskPath(desk)),
-				count: count(live.desks.find((summary) => summary.session === desk)),
-			};
+	return Stream.make(undefined).pipe(
+		Stream.merge(Stream.merge(changed, reconnects)),
+		Stream.switchMap(() => Stream.fromEffect(ask(client, session, directory))),
+	);
 };
