@@ -1,7 +1,8 @@
 /**
- * Storage: the only way the service reaches the store, and the only part of it that knows the store is files. Two
- * implementations: the files (`layer`, `files.ts`), and memory (`layerMemory`, `memory.ts`) for tests that are about
- * the desk's rules, not about files.
+ * Storage: the only way the service reaches the store, and the only part of it that knows the store is files. It runs
+ * over a {@link Backend}, of which there are two: the files (`Backend.files`, `files.ts`), and memory (`Backend.memory`,
+ * `memory.ts`) for tests that are about the desk's rules, not about files. `Storage.layer` and `Storage.layerMemory`
+ * are each one with its backend; a test can give `Storage.layerFromBackend` a backend of its own (one that fails, say).
  *
  * What it keeps out of the rest of the service: changes run one at a time (`transact`, a lock), so the desk decides on
  * the entries as they are and nothing writes in between; `changes` says when to read again, whoever changed what;
@@ -53,24 +54,40 @@ export interface Transaction {
  * where a read may go. A store that can't be read or written is a broken service, not something the desk refuses:
  * failures are defects.
  */
-// TODO main | why not make this an effect service? | by Evgenii Perminov at Sun, 15 Nov 2026 18:54:30 GMT
-export interface Backend {
-	/** Every entry, by `created` then id; unparseable ones are skipped. */
-	readonly load: Effect.Effect<Entries>;
-	readonly write: (entry: Entry) => Effect.Effect<void>;
-	readonly remove: (id: EntryId) => Effect.Effect<void>;
-	/** Stores an attachment at `file`, its path below the store (`attachments/<uuid>.<ext>`). */
-	readonly attach: (file: string, data: Uint8Array) => Effect.Effect<void>;
-	readonly detach: (files: Iterable<string>) => Effect.Effect<void>;
-	/** An attachment by its path below the store (already checked to be in `attachments/`); none when it's missing. */
-	readonly attachment: (file: string) => Effect.Effect<Option.Option<Content>>;
-	/** Where the session reads an attachment from. */
-	readonly attachmentUrl: (file: string) => Effect.Effect<string>;
-	/** A file by its absolute path (already checked to be in its entry's directory); none when it's missing. */
-	readonly file: (path: string) => Effect.Effect<Option.Option<Content>>;
-	/** Something may have changed without a transaction (someone else's edit): read again. */
-	readonly changed: Stream.Stream<void>;
-	readonly publish: (where: Where) => Effect.Effect<void>;
+export class Backend extends Context.Service<
+	Backend,
+	{
+		/** Every entry, by `created` then id; unparseable ones are skipped. */
+		readonly load: Effect.Effect<Entries>;
+		readonly write: (entry: Entry) => Effect.Effect<void>;
+		readonly remove: (id: EntryId) => Effect.Effect<void>;
+		/** Stores an attachment at `file`, its path below the store (`attachments/<uuid>.<ext>`). */
+		readonly attach: (file: string, data: Uint8Array) => Effect.Effect<void>;
+		readonly detach: (files: Iterable<string>) => Effect.Effect<void>;
+		/** An attachment by its path below the store (already checked to be in `attachments/`); none when it's missing. */
+		readonly attachment: (file: string) => Effect.Effect<Option.Option<Content>>;
+		/** Where the session reads an attachment from. */
+		readonly attachmentUrl: (file: string) => Effect.Effect<string>;
+		/** A file by its absolute path (already checked to be in its entry's directory); none when it's missing. */
+		readonly file: (path: string) => Effect.Effect<Option.Option<Content>>;
+		/** Something may have changed without a transaction (someone else's edit): read again. */
+		readonly changed: Stream.Stream<void>;
+		readonly publish: (where: Where) => Effect.Effect<void>;
+	}
+>()("desk/Storage/Backend") {
+	/**
+	 * The store's files in `root`. Takes the store's lock (`registration.ts`) for the layer's lifetime first, or fails
+	 * with `AlreadyRunning`.
+	 * @param rescan How often to read again regardless, should a file event get lost.
+	 */
+	static files(root: string, rescan: Duration.Input = "5 seconds") {
+		return Layer.effect(Backend, files(root, rescan));
+	}
+
+	/** A store in memory, empty but for `files` (by absolute path) to read as if they were in entries' directories. */
+	static memory(files: Readonly<Record<string, string | Uint8Array>> = {}) {
+		return Layer.effect(Backend, memory(files));
+	}
 }
 
 export class Storage extends Context.Service<
@@ -97,23 +114,25 @@ export class Storage extends Context.Service<
 		readonly publish: (where: Where) => Effect.Effect<void>;
 	}
 >()("desk/Storage") {
-	/**
-	 * The store's files in `root`. Takes the store's lock (`registration.ts`) for the layer's lifetime first, or fails
-	 * with `AlreadyRunning`.
-	 * @param rescan How often to read again regardless, should a file event get lost.
-	 */
-	static layer(root: string, rescan: Duration.Input = "5 seconds") {
-		return Layer.effect(Storage, Effect.flatMap(files(root, rescan), make));
+	/** Storage over the {@link Backend} provided. */
+	static get layerFromBackend() {
+		return Layer.effect(Storage, make());
 	}
 
-	/** A store in memory, empty but for `files` (by absolute path) to read as if they were in entries' directories. */
+	/** Storage over the store's files in `root` ({@link Backend.files}). */
+	static layer(root: string, rescan?: Duration.Input) {
+		return Storage.layerFromBackend.pipe(Layer.provide(Backend.files(root, rescan)));
+	}
+
+	/** Storage over a store in memory ({@link Backend.memory}). */
 	static layerMemory(options: { readonly files?: Readonly<Record<string, string | Uint8Array>> } = {}) {
-		return Layer.effect(Storage, Effect.flatMap(memory(options.files ?? {}), make)).pipe(Layer.provide(Path.layer));
+		return Storage.layerFromBackend.pipe(Layer.provide(Backend.memory(options.files)), Layer.provide(Path.layer));
 	}
 }
 
-/** Storage over `backend`: the lock, the change signal and the checks on where a read may go. */
-export const make = Effect.fn("Storage.make")(function* (backend: Backend) {
+/** Storage over the {@link Backend}: the lock, the change signal and the checks on where a read may go. */
+export const make = Effect.fn("Storage.make")(function* () {
+	const backend = yield* Backend;
 	const path = yield* Path.Path;
 	const lock = yield* Semaphore.make(1);
 	const transacted = yield* PubSub.unbounded<void>();

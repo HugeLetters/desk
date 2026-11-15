@@ -18,6 +18,7 @@ import { type EntryId, fileName, idOf, newId, parse, serialize } from "../../mod
 import { register } from "./registration";
 import type { Backend, Content } from "./storage";
 
+/** The files in `root` as the storage's backend ({@link Backend.files}). */
 export const files = Effect.fn("Storage.files")(function* (root: string, rescan: Duration.Input) {
 	// The lock first: nothing else touches the store while another service has it.
 	const { publish } = yield* register(root);
@@ -48,7 +49,7 @@ export const files = Effect.fn("Storage.files")(function* (root: string, rescan:
 
 	yield* io(fs.makeDirectory(root, { recursive: true }));
 
-	const backend: Backend = {
+	const backend: Backend["Service"] = {
 		load: io(
 			Effect.gen(function* () {
 				const ids = (yield* fs.readDirectory(root)).flatMap((name) => {

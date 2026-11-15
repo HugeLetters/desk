@@ -21,6 +21,7 @@ const content = (stored: Stored | undefined) =>
 		? Option.none()
 		: Option.some({ data: new Blob([stored.data.slice()]), modified: stored.modified });
 
+/** A store in memory as the storage's backend ({@link Backend.memory}). */
 export const memory = Effect.fn("Storage.memory")(function* (files: Readonly<Record<string, string | Uint8Array>>) {
 	/** Entry id → its file's text. */
 	const entries = yield* Ref.make<ReadonlyMap<EntryId, string>>(new Map());
@@ -37,7 +38,7 @@ export const memory = Effect.fn("Storage.memory")(function* (files: Readonly<Rec
 	const without = <K, V>(map: ReadonlyMap<K, V>, gone: ReadonlySet<K>): ReadonlyMap<K, V> =>
 		new Map([...map].filter(([key]) => !gone.has(key)));
 
-	const backend: Backend = {
+	const backend: Backend["Service"] = {
 		load: Effect.map(Ref.get(entries), (all) =>
 			[...all]
 				.flatMap(([id, text]) => Option.toArray(parse(id, text)))

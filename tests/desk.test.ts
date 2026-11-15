@@ -14,13 +14,14 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Refusal } from "../src/model/errors";
 import { refusal } from "../src/model/wording";
 import { Desk, type Question } from "../src/service/desk";
-import { Storage } from "../src/service/storage/storage";
+import { Backend, Storage } from "../src/service/storage/storage";
 import { E, S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually } from "./support/service";
@@ -59,29 +60,24 @@ const stored = (file: string) =>
 	);
 
 /**
- * Memory storage that records the path of every attachment a transaction stores, in `files`; the `failing`th one
- * (counting from 1) can't be stored.
+ * Memory storage that records the path of every attachment it stores, in `files`; the `failing`th one (counting from 1)
+ * can't be stored. Its own backend: the memory one, wrapped.
  */
 const recording = (files: Array<string>, failing?: number) => {
 	let tries = 0;
-	return Layer.effect(
-		Storage,
-		Effect.map(Storage, (storage) =>
-			Storage.of({
-				...storage,
-				transact: (change) =>
-					storage.transact((all, store) =>
-						change(all, {
-							...store,
-							attach: (name, data) =>
-								++tries === failing
-									? Effect.die("disk full")
-									: Effect.tap(store.attach(name, data), (file) => Effect.sync(() => files.push(file))),
-						}),
-					),
+	const backend = Layer.effect(
+		Backend,
+		Effect.map(Backend, (memory) =>
+			Backend.of({
+				...memory,
+				attach: (file, data) =>
+					++tries === failing
+						? Effect.die("disk full")
+						: Effect.tap(memory.attach(file, data), () => Effect.sync(() => files.push(file))),
 			}),
 		),
-	).pipe(Layer.provide(Storage.layerMemory()));
+	).pipe(Layer.provide(Backend.memory()));
+	return Storage.layerFromBackend.pipe(Layer.provide(backend), Layer.provide(Path.layer));
 };
 
 describe("the rules, on memory storage", () => {
