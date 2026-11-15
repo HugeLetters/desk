@@ -363,15 +363,24 @@ function App() {
 			},
 			{ parent: null, created: "", priority: "normal" },
 		);
-		const goNext = () => {
+		/**
+		 * The next entry waiting on the user, past the ones they've already written to (`drafted`): those are answered as
+		 * far as they're concerned, whether the drafts wait in the browser or were just submitted and the desk doesn't
+		 * show it yet. None: the desk.
+		 */
+		const goNext = (drafted: ReadonlySet<string> = new Set(pending().map((draft) => draft.entry))) => {
 			// Only compared with the entries' ids: a bad one in the URL is simply not among them.
-			const following = next(entries(), { id: params.id as EntryId, ...place() });
+			const following = next(
+				entries().filter((other) => !drafted.has(other.id)),
+				{ id: params.id as EntryId, ...place() },
+			);
 			navigate(following ? entryOnDesk(following.id) : home());
 		};
 		/** Submits every draft, like the header's Submit, then goes on. Next (Shift) leaves them in the browser instead. */
 		const sendAndNext = () => {
-			if (pending().length > 0) void submit();
-			goNext();
+			const drafted = new Set(pending().map((draft) => draft.entry));
+			if (drafted.size > 0) void submit();
+			goNext(drafted);
 		};
 		const onKey = (event: KeyboardEvent) => {
 			if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) return;
@@ -423,7 +432,7 @@ function App() {
 							type="button"
 							class="primary"
 							title="Go to the next entry, leaving this one and its draft as they are (Ctrl+Shift+Enter)"
-							onClick={goNext}
+							onClick={() => goNext()}
 						>
 							Next <Icon name="next" /> <small class="keys">⇧⌘↵</small>
 						</button>
