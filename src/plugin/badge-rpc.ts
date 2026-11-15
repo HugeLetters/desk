@@ -3,15 +3,21 @@
  * this plugin instance knows now) and `changed` (every change after). One instance per directory, so the TUI calls
  * each location's and tells their events apart by `location`.
  *
- * Between the desk's own two parts, in one OpenCode: not the desk service's contract (`api.ts`), nor its version. Only
- * schemas here, so the TUI imports nothing else of the plugin's; its client (`tui/rpc-client.ts`) makes them portable.
+ * Between the desk's own two parts, in one OpenCode: not the desk service's contract (`api.ts`), nor its version, though
+ * a desk is the contract's summary, picked. Only schemas here, so the TUI imports nothing else of the plugin's but
+ * those; its client (`tui/rpc-client.ts`) makes them portable.
  */
 import { Rpc } from "@opencode/schema/rpc";
 import * as Schema from "effect/Schema";
+import * as Struct from "effect/Struct";
+import { DeskSummary } from "../api/api";
 import type { Identity } from "../shared/type";
 
-/** A desk: how many entries wait on the user, and how many of those are critical. */
-export const Desk = Schema.Struct({ session: Schema.String, waiting: Schema.Int, critical: Schema.Int });
+/**
+ * A desk: how many entries wait on the user, and how many of those are critical. The API's {@link DeskSummary}, picked:
+ * encoding drops its other fields, so the plugin passes the service's summaries as they are.
+ */
+export const Desk = DeskSummary.mapFields(Struct.pick(["session", "waiting", "critical"]));
 export interface Desk extends Identity<typeof Desk.Type> {}
 
 /** What a connected plugin instance knows: the service's page and the desks' summary. */

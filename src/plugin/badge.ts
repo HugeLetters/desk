@@ -16,8 +16,8 @@ import type { Connection, Link } from "./connection";
 export const fromView = (url: string, view: View) => ({
 	live: {
 		url,
-		// TODO main | why do such a remap? | by Evgenii Perminov at Sun, 15 Nov 2026 18:15:55 GMT
-		desks: view.desks.map(({ session, waiting, critical }) => ({ session, waiting, critical })),
+		// As they are: the RPC's encoding keeps only what a badge `Desk` has.
+		desks: view.desks,
 		deskMode: view.deskMode,
 	},
 });

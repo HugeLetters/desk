@@ -10,12 +10,15 @@ import { join } from "node:path";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import { statuses } from "../src/plugin/badge";
-import { off, type Status } from "../src/plugin/badge-rpc";
+import type { View } from "../src/api/api";
+import { fromView, statuses } from "../src/plugin/badge";
+import { BadgeRpc, off, Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
 import { count, report, statusAt, withFirstStatus, withStatus } from "../src/tui/badge";
+import { rpcClient } from "../src/tui/rpc-client";
 import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, startService } from "./support/service";
@@ -116,6 +119,25 @@ test("a service on another port isn't the plugin's, so nothing for the badge", a
 	await Bun.sleep(300);
 	expect(latest()).toEqual(off);
 	expect(elsewhere.port).not.toBe(port);
+});
+
+test("of the service's desk summaries, only a desk's session and counts reach the TUI: the RPC's encoding drops the rest", async () => {
+	const view: View = {
+		desk: null,
+		entries: [],
+		desks: [{ session: "ses_a", title: "Phantom", folder: "phantom", known: true, waiting: 2, critical: 1 }],
+		deskMode: ["ses_a"],
+		failures: {},
+	};
+
+	// What the plugin's `status` answers, as OpenCode's plugin RPC encodes it, and the TUI's client decodes.
+	const sent = await Effect.runPromise(Schema.encodeEffect(Status)(fromView(page(1), view)));
+	const context = {
+		client: { rpc: () => ({ status: () => Promise.resolve(sent), events: { on: () => () => {} } }) },
+		location: { directory: "/work/a" },
+	} as never;
+	const received = await Effect.runPromise(rpcClient(BadgeRpc, context).status({}));
+	expect(received.live?.desks).toEqual([{ session: "ses_a", waiting: 2, critical: 1 }]);
 });
 
 test("the count: none when nothing waits on the user, else how many and how many of those are critical", () => {
