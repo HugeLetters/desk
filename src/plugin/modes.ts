@@ -10,7 +10,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { SessionID } from "../model/entry";
 import type { Connection } from "./connection";
-import { notFound } from "./sessions";
+import * as Sessions from "./sessions";
 
 export type Context = Pick<Plugin.Context, "storage" | "session" | "location">;
 
@@ -19,49 +19,57 @@ const key = (root: SessionID) => `${prefix}${root}`;
 
 export interface Modes {
 	/** Whether a session (or the top-level session it's under) is in desk mode. */
-	readonly on: (sessionID: SessionID) => Effect.Effect<boolean, unknown>;
+	readonly on: (sessionID: SessionID) => Effect.Effect<boolean, Sessions.Failure>;
 	/** Turns desk mode on or off for a session's top-level session: on, the top-level session; off, none. */
-	readonly toggle: (sessionID: SessionID) => Effect.Effect<Option.Option<SessionID>, unknown>;
+	readonly toggle: (sessionID: SessionID) => Effect.Effect<Option.Option<SessionID>, Sessions.Failure>;
 	/** The sessions in desk mode in this plugin instance's directory, forgetting deleted ones. */
 	readonly here: Effect.Effect<ReadonlyArray<SessionID>>;
 }
 
-/** Desk mode in `ctx`'s storage; `root` gives a session's top-level session. */
-export const make = (ctx: Context, root: (sessionID: SessionID) => Effect.Effect<SessionID, unknown>): Modes => ({
+/** Desk mode in `ctx`'s storage; `getRootSessionId` gives a session's top-level session. */
+export const make = (
+	ctx: Context,
+	getRootSessionId: (sessionID: SessionID) => Effect.Effect<SessionID, Sessions.Failure>,
+): Modes => ({
 	on: (sessionID) =>
-		Effect.flatMap(root(sessionID), (rootID) => Effect.map(ctx.storage.get(key(rootID)), (value) => value === true)),
-	toggle: (sessionID) =>
-		Effect.gen(function* () {
-			const rootID = yield* root(sessionID);
-			if ((yield* ctx.storage.get(key(rootID))) === true) {
-				yield* ctx.storage.remove(key(rootID));
-				return Option.none();
-			}
-			yield* ctx.storage.set(key(rootID), true);
-			return Option.some(rootID);
-		}),
+		Effect.flatMap(getRootSessionId(sessionID), (rootID) =>
+			Effect.map(ctx.storage.get(key(rootID)), (value) => value === true),
+		),
+	toggle: Effect.fnUntraced(function* (sessionID) {
+		const rootID = yield* getRootSessionId(sessionID);
+		if ((yield* ctx.storage.get(key(rootID))) === true) {
+			yield* ctx.storage.remove(key(rootID));
+			return Option.none();
+		}
+
+		yield* ctx.storage.set(key(rootID), true);
+		return Option.some(rootID);
+	}),
 	// TODO main | why only in thie directory? | by Evgenii Perminov at Sun, 15 Nov 2026 16:12:22 GMT
 	here: Effect.gen(function* () {
+		/** Where a session works: in this directory, elsewhere (or OpenCode can't say now), or gone. */
+		const where = (sessionID: SessionID) =>
+			Sessions.get(ctx, sessionID).pipe(
+				Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
+				Effect.catchTag("SessionNotFoundError", () => Effect.succeed("gone" as const)),
+				Effect.orElseSucceed(() => "elsewhere" as const),
+			);
+
 		const sessions = yield* Stream.paginate(undefined, (after: string | undefined) =>
 			Effect.map(ctx.storage.scan({ prefix, after }), (page) => [
 				page.entries.map((entry) => SessionID.make(entry.key.slice(prefix.length))),
 				Option.fromUndefinedOr(page.next),
 			]),
-		).pipe(Stream.runCollect);
+		).pipe(
+			Stream.mapEffect((sessionID) => Effect.map(where(sessionID), (at) => ({ sessionID, at }))),
+			Stream.runCollect,
+		);
 
-		const where = yield* Effect.forEach(sessions, (id) =>
-			ctx.session.get({ sessionID: id }).pipe(
-				Effect.map((session) => (session.location.directory === ctx.location.directory ? "here" : "elsewhere")),
-				Effect.catchIf(notFound, () => Effect.succeed("gone" as const)),
-				Effect.orElseSucceed(() => "elsewhere" as const),
-			),
-		);
-		// TODO main | why not tie them up together in session stream above instead of relying on index? | by Evgenii Perminov at Sun, 15 Nov 2026 16:11:00 GMT
 		yield* Effect.forEach(
-			sessions.filter((_, index) => where[index] === "gone"),
-			(id) => ctx.storage.remove(key(id)),
+			sessions.filter((session) => session.at === "gone"),
+			(session) => ctx.storage.remove(key(session.sessionID)),
 		);
-		return sessions.filter((_, index) => where[index] === "here");
+		return sessions.filter((session) => session.at === "here").map((session) => session.sessionID);
 	}),
 });
 

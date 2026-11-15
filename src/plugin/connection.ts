@@ -37,6 +37,7 @@ import { rpcPath } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
+import type { Failure, OpenCodeError } from "./sessions";
 
 /** The service can't be reached, or won't take this plugin (the message says why). */
 export class DeskError extends Data.TaggedError("DeskError")<{ readonly message: string }> {}
@@ -56,9 +57,8 @@ export interface Options<R = never> {
 	/** Answers the service's calls, in this OpenCode. */
 	readonly serve: {
 		/** Null when this OpenCode doesn't know the session. */
-		// TODO main | no unknown errors | by Evgenii Perminov at Sun, 15 Nov 2026 15:45:39 GMT
-		readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | null, unknown>;
-		readonly prompt: (prompt: Prompt) => Effect.Effect<void, unknown>;
+		readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | null, OpenCodeError>;
+		readonly prompt: (prompt: Prompt) => Effect.Effect<void, Failure>;
 	};
 	/** How long to wait for a started service to answer. */
 	readonly timeout?: Duration.Input;
@@ -194,7 +194,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 				? Effect.map(options.serve.session(call.sessionID), (session): Outcome => ({ _tag: "Session", session }))
 				: Effect.as(options.serve.prompt(call.prompt), { _tag: "Prompted" } as Outcome)
 			).pipe(
-				Effect.catch((error) => Effect.succeed<Outcome>({ _tag: "Failed", cause: errorMessage(error) })),
+				Effect.catch((error) => Effect.succeed<Outcome>({ _tag: "Failed", cause: error.message })),
 				Effect.flatMap((outcome) => client.reply({ call: call.call, outcome })),
 				Effect.ignore,
 			);

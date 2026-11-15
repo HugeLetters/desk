@@ -14,6 +14,7 @@ import { refusal } from "../model/wording";
 import type { Calls } from "./calls";
 import * as Connection from "./connection";
 import type { Modes } from "./modes";
+import * as Sessions from "./sessions";
 
 export type Context = Pick<Plugin.Context, "tool" | "session">;
 
@@ -27,7 +28,7 @@ const isRefusal = Schema.is(Refusal);
 /** What the tools use: desk mode, a session's top-level session, and the service. */
 export interface Desk extends Calls {
 	readonly modes: Modes;
-	readonly getRootSessionId: (sessionID: SessionID) => Effect.Effect<SessionID, unknown>;
+	readonly getRootSessionId: (sessionID: SessionID) => Effect.Effect<SessionID, Sessions.Failure>;
 }
 
 /** A tool as the editor takes any of them, its input's type checked against its schema here. */
@@ -39,7 +40,7 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 	/** The calling agent, as the service is told: its top-level session (whose desk it is), and where that works. */
 	const agent = (sessionID: SessionID) =>
 		Effect.gen(function* () {
-			const session = yield* ctx.session.get({ sessionID: yield* getRootSessionId(sessionID) });
+			const session = yield* Sessions.get(ctx, yield* getRootSessionId(sessionID));
 			const out: Agent = { _tag: "Agent", session: session.id, directory: session.location.directory };
 			return out;
 		});
