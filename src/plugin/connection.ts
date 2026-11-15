@@ -12,23 +12,22 @@
  * moment after the link drops; `Refused` while this plugin is older than the service or another program has the port,
  * until it's turned off.
  */
-
-import { spawn } from "node:child_process";
-import { closeSync, mkdirSync, openSync } from "node:fs";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Cause from "effect/Cause";
 import * as Data from "effect/Data";
 import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equivalence from "effect/Equivalence";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schedule from "effect/Schedule";
-import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
@@ -37,6 +36,9 @@ import { rpcPath } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
+import * as Process from "../shared/process";
+import * as ServiceInfo from "../shared/service-info";
+import type * as Settings from "../shared/settings";
 import type { Failure, OpenCodeError } from "./sessions";
 
 /** The service can't be reached, or won't take this plugin (the message says why). */
@@ -49,7 +51,7 @@ export interface Options<R = never> {
 	/** The service's port, on 127.0.0.1. */
 	readonly port: number;
 	/** Starts the service; run when nothing listens on the port. */
-	readonly start: Effect.Effect<void, unknown, R>;
+	readonly start: Effect.Effect<void, PlatformError.PlatformError, R>;
 	/** This plugin instance's directory. */
 	readonly directory: string;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
@@ -87,10 +89,10 @@ export interface Connection {
 	readonly links: Stream.Stream<Option.Option<Link>>;
 }
 
-/** The same link, or none both times. */
-// TODO main | Option.makeEquivalence? | by Evgenii Perminov at Sun, 15 Nov 2026 17:54:30 GMT
-const sameLink = (a: Option.Option<Link>, b: Option.Option<Link>) =>
-	Option.isNone(a) ? Option.isNone(b) : Option.isSome(b) && a.value.client === b.value.client;
+/** The same link (the same client), or none both times. */
+const sameLink = Option.makeEquivalence(
+	Equivalence.mapInput(Equivalence.strictEqual<Client>(), (link: Link) => link.client),
+);
 
 export type State = Data.TaggedEnum<{
 	Off: Empty;
@@ -136,6 +138,9 @@ export const reconcile = (state: State, event: Event): State => {
 /** `Connecting` and `Live` are one link: one WebSocket, one `run`. */
 export const key = (state: State): State["_tag"] => (state._tag === "Live" ? "Connecting" : state._tag);
 
+/** Whether the connection has taken in `Want({ on })`: `Off` when not wanted, anything but `Off` when wanted. */
+const settled = (on: boolean) => (state: State) => (state._tag === "Off") !== on;
+
 const off = "Desk mode is off in this directory; the user turns it on with /desk-mode.";
 
 /** A failure's message, whatever was thrown. */
@@ -159,7 +164,7 @@ const refused = (error: RpcClientError.RpcClientError) =>
 	error.reason._tag === "SocketOpenError" && error.reason.kind !== "Timeout";
 
 /** Whether a WebSocket to `url` opens: it connects, and hangs up at once. */
-const upgrades = (url: string): Effect.Effect<boolean> =>
+const upgrades = (url: string) =>
 	Socket.makeWebSocket(url, { openTimeout: "1 second" }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
@@ -169,7 +174,7 @@ const upgrades = (url: string): Effect.Effect<boolean> =>
 	);
 
 /** Whether something listens on `port` (on 127.0.0.1): connects, and hangs up at once. */
-export const answering = (port: number): Effect.Effect<boolean> =>
+export const answering = (port: number) =>
 	// TODO main | we hardcode this host in several spots - if anything should be part of settings | by Evgenii Perminov at Sun, 15 Nov 2026 16:54:32 GMT
 	BunSocket.makeNet({ host: "127.0.0.1", port }).pipe(
 		Effect.flatMap((socket) => socket.reader),
@@ -179,8 +184,7 @@ export const answering = (port: number): Effect.Effect<boolean> =>
 	);
 
 /** The connection, off until wanted; hangs up when the scope closes. */
-// TODO main | use ineference in return types more | by Evgenii Perminov at Sun, 15 Nov 2026 16:55:10 GMT
-export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, never, Scope.Scope | R> =>
+export const make = <R = never>(options: Options<R>) =>
 	Effect.gen(function* () {
 		const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
 		const transport = RpcClient.layerProtocolSocket().pipe(
@@ -284,7 +288,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 		});
 
 		/** What a request gets: the link once it's live, or why there's none; nothing yet while it's on its way. */
-		const settled = actor.until(
+		const awaitLink = actor.until(
 			(state): Option.Option<Effect.Effect<{ readonly client: Client; readonly url: string }, DeskError>> =>
 				state._tag === "Live"
 					? Option.some(Effect.succeed(state))
@@ -292,14 +296,12 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 						? Option.some(Effect.fail(new DeskError({ message: state._tag === "Off" ? off : state.message })))
 						: Option.none(),
 		);
-		const live = Effect.flatten(settled);
+		const live = Effect.flatten(awaitLink);
 		const connection: Connection = {
 			want: (on) =>
-				Effect.andThen(
-					actor.send(Event.Want({ on })),
-					// TODO main | this reads a bit weird - like we wait til state connection is the same as on? | by Evgenii Perminov at Sun, 15 Nov 2026 17:52:29 GMT
-					actor.until((state) => ((state._tag === "Off") === !on ? Option.some(undefined) : Option.none())),
-				),
+				actor
+					.send(Event.Want({ on }))
+					.pipe(Effect.andThen(actor.until(Option.liftPredicate(settled(on)))), Effect.asVoid),
 			client: Effect.map(live, (now) => now.client),
 			live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
 			url: Effect.map(live, (now) => now.url),
@@ -314,40 +316,35 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 		return connection;
 	});
 
+/** Where the service runs: its store and port, as the settings give them. */
+export interface Service {
+	readonly store: Effect.Success<typeof Settings.store>;
+	readonly port: Effect.Success<typeof Settings.port>;
+}
+
 /**
- * Starts `bun src/service/main.ts` detached, on `store` and `port`, logging to `log`,
- * which it gets as its own stdout and stderr. With `node:child_process`, not Effect's `ChildProcess`: that one can
- * detach and unref a child, but its output goes to a pipe (or a sink) in this process, which breaks when this OpenCode
- * exits, and the service outlives it. Nor does Effect's `FileSystem` hand out the file descriptor `spawn` needs. The
- * log is closed here once the child has it.
+ * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), on the service's
+ * store and port, logging to the store's log, which it gets as its own stdout and stderr.
  */
-// TODO main | hardcoded type which can be probably derived/used from somewhere else | by Evgenii Perminov at Sun, 15 Nov 2026 16:30:11 GMT
-export const startService = (service: { readonly store: string; readonly port: number; readonly log: string }) =>
-	Effect.gen(function* () {
-		// TODO main | why not just use import.meta.dir and path.resolve? | by Evgenii Perminov at Sun, 15 Nov 2026 16:39:50 GMT
-		const main = yield* (yield* Path.Path).fromFileUrl(new URL("../service/main.ts", import.meta.url));
-		// TODO main | since you're saying effect doesnt have primitives to this - move this out to a generic helpers first and use those created helper primitives here. | by Evgenii Perminov at Sun, 15 Nov 2026 16:29:24 GMT
-		yield* Effect.acquireUseRelease(
-			Effect.sync(() => {
-				mkdirSync(service.store, { recursive: true });
-				return openSync(service.log, "a");
-			}),
-			(log) =>
-				Effect.sync(() => {
-					// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
-					const bun = Bun.which("bun");
-					spawn(bun ?? process.execPath, [main], {
-						detached: true,
-						stdio: ["ignore", log, log],
-						env: {
-							...process.env,
-							// TODO main | kinda dont like this would silently use default if this is passed in wrong | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:04 GMT
-							DESK_HOME: service.store,
-							DESK_PORT: String(service.port),
-							...(bun ? {} : { BUN_BE_BUN: "1" }),
-						},
-					}).unref();
-				}),
-			(log) => Effect.sync(() => closeSync(log)),
-		);
+export const startService = Effect.fn("startService")(function* (service: Service) {
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const main = path.resolve(import.meta.dir, "../service/main.ts");
+	const { log } = yield* ServiceInfo.files(service.store);
+	yield* fs.makeDirectory(service.store, { recursive: true });
+
+	// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
+	const bun = yield* Process.which("bun");
+	yield* Process.spawnDetached({
+		command: Option.getOrElse(bun, () => process.execPath),
+		args: [main],
+		output: yield* Process.openForAppend(log),
+		env: {
+			...process.env,
+			// TODO main | kinda dont like this would silently use default if this is passed in wrong | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:04 GMT
+			DESK_HOME: service.store,
+			DESK_PORT: String(service.port),
+			...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }),
+		},
 	});
+}, Effect.scoped);

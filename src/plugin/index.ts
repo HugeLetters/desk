@@ -42,7 +42,7 @@ export default Plugin.define<Scope.Scope>({
 			const modes = Modes.make(ctx, getRootSessionId);
 			const connection = yield* Connection.make({
 				port,
-				start: Connection.startService({ store, port, log: files.log }),
+				start: Connection.startService({ store, port }),
 				directory: ctx.location.directory,
 				modes: modes.here,
 				serve: Sessions.serve(ctx),
