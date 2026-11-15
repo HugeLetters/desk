@@ -15,8 +15,19 @@
 		"plugins": [
 			{
 				"name": "@effect/language-service",
-				// `import * as Effect from "effect/Effect"`, never `import { Effect } from "effect"`.
 				"namespaceImportPackages": ["effect", "@effect/*"],
+				"importAliases": {
+					"Array": "Array_",
+					"String": "String_",
+					"Number": "Number_",
+					"Boolean": "Boolean_",
+					"BigInt": "BigInt_",
+					"Function": "Function_",
+					"Record": "Record_",
+					"Symbol": "Symbol_",
+					"Date": "Date_",
+					"RegExp": "RegExp_"
+				},
 				"topLevelNamedReexports": "follow"
 			}
 		]

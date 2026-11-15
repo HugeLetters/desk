@@ -1,26 +1,64 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-	"vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
-	"files": { "includes": ["**", "!!**/page/dist"] },
-	"formatter": { "indentStyle": "tab", "lineWidth": 120 },
-	"javascript": { "formatter": { "quoteStyle": "double" } },
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": ["**", "!!**/page/dist"]
+	},
+	"formatter": {
+		"indentStyle": "tab",
+		"lineWidth": 120
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
 	"linter": {
 		"rules": {
 			"preset": "recommended",
 			"style": {
 				"noNonNullAssertion": "error",
-				// The page's components each style their own `.title`; their selectors don't compete.
-				"noDescendingSpecificity": "off"
+				"noDescendingSpecificity": "off",
+				"useConsistentArrayType": {
+					"level": "error",
+					"fix": "safe",
+					"options": {
+						"syntax": "generic"
+					}
+				}
 			}
 		},
-		"domains": { "solid": "recommended" }
+		"domains": {
+			"solid": "recommended"
+		}
 	},
 	"overrides": [
 		{
-			// OpenTUI's elements, not the DOM's: the browser's a11y rules don't apply.
 			"includes": ["src/tui/**"],
-			"linter": { "rules": { "a11y": "off" } }
+			"linter": {
+				"rules": {
+					"a11y": "off"
+				}
+			}
 		}
 	],
-	"assist": { "actions": { "source": { "organizeImports": "on" } } }
+	"assist": {
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"markdown": {
+		"formatter": {
+			"enabled": false
+		},
+		"linter": {
+			"enabled": false
+		}
+	}
 }
