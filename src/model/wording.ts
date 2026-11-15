@@ -1,7 +1,7 @@
 /** The words for what the desk refuses and why a delivery failed: shared by the page (toasts, pills) and the plugin (the agent's tool errors). */
 import type { DeliveryFailed, Refusal } from "./errors";
 
-export const refusal = (refused: Refusal): string => {
+export const refusal = (refused: Refusal) => {
 	switch (refused._tag) {
 		case "NoSuchEntry":
 			return `No desk entry ${refused.id}.`;
@@ -34,4 +34,4 @@ export const refusal = (refused: Refusal): string => {
 	}
 };
 
-export const deliveryFailed = (failed: DeliveryFailed): string => `Delivering to ${failed.session}: ${failed.cause}`;
+export const deliveryFailed = (failed: DeliveryFailed) => `Delivering to ${failed.session}: ${failed.cause}`;

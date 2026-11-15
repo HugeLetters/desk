@@ -9,11 +9,11 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { View } from "../api/api";
-import { BadgeRpc, off, type Status, sameStatus } from "./badge-rpc";
+import { BadgeRpc, off, sameStatus } from "./badge-rpc";
 import type { Connection, Link } from "./connection";
 
 /** The badge's status out of the service's `view`. */
-export const fromView = (url: string, view: View): Status => ({
+export const fromView = (url: string, view: View) => ({
 	live: {
 		url,
 		// TODO main | why do such a remap? | by Evgenii Perminov at Sun, 15 Nov 2026 18:15:55 GMT
@@ -23,7 +23,7 @@ export const fromView = (url: string, view: View): Status => ({
 });
 
 /** The link's statuses, for as long as it lasts: not connected until the service's first view, and once it ends. */
-const over = (link: Link): Stream.Stream<Status> =>
+const linkStatuses = (link: Link) =>
 	link.client.view({}).pipe(
 		Stream.map((view) => fromView(link.url, view)),
 		Stream.catchCause(() => Stream.empty),
@@ -31,9 +31,9 @@ const over = (link: Link): Stream.Stream<Status> =>
 	);
 
 /** The status now, then every change: each live link's views, not connected between them. */
-export const statuses = (connection: Pick<Connection, "links">): Stream.Stream<Status> =>
+export const statuses = (connection: Pick<Connection, "links">) =>
 	connection.links.pipe(
-		Stream.switchMap(Option.match({ onNone: () => Stream.make(off), onSome: over })),
+		Stream.switchMap(Option.match({ onNone: () => Stream.make(off), onSome: linkStatuses })),
 		Stream.changesWith(sameStatus),
 	);
 

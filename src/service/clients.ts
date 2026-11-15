@@ -34,6 +34,7 @@ export const Event = Data.taggedEnum<Event>();
 
 export const reconcile = (state: State, event: Event): State => {
 	if (state._tag === "Done") return state;
+
 	switch (event._tag) {
 		case "Retire":
 			return State.Done({ why: "retired" });

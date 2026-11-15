@@ -18,9 +18,11 @@ export function EntryView() {
 	const { view, drafts, files, toast } = desk;
 	const params = useParams<{ session: string; id: string }>();
 	const navigate = useNavigate();
+
 	/** An entry on this entry's desk (the route's session, decoded as `sessionIn` does). */
 	const entryOnDesk = (id: string) => entryPath(decodeURIComponent(params.session), id);
 	const entry = () => view.byId(params.id);
+
 	/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
 	const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>(
 		(previous) => {
@@ -29,6 +31,7 @@ export function EntryView() {
 		},
 		{ parent: null, created: "", priority: "normal" },
 	);
+
 	/**
 	 * The next entry waiting on the user, past the ones they've already written to (`drafted`): those are answered as
 	 * far as they're concerned, whether the drafts wait in the browser or were just submitted and the desk doesn't
@@ -42,6 +45,7 @@ export function EntryView() {
 		);
 		navigate(following ? entryOnDesk(following.id) : home());
 	};
+
 	/** Submits every draft, like the header's Submit, then goes on. Next (Shift) leaves them in the browser instead. */
 	const sendAndNext = () => {
 		const drafted = new Set(drafts.pending().map((draft) => draft.entry));
@@ -55,18 +59,21 @@ export function EntryView() {
 	};
 	window.addEventListener("keydown", onKey);
 	onCleanup(() => window.removeEventListener("keydown", onKey));
+
 	// Files dropped anywhere on the window join this entry's draft, when it has a draft box.
 	const [dragging, setDragging] = createSignal(false);
 	const droppable = (event: DragEvent) =>
 		entry()?.status !== "resolved" && !!event.dataTransfer?.types.includes("Files");
 	const drag = (event: DragEvent) => {
 		if (!droppable(event)) return;
+
 		event.preventDefault();
 		setDragging(event.type !== "dragleave" || event.relatedTarget !== null);
 	};
 	const drop = (event: DragEvent) => {
 		setDragging(false);
 		if (!droppable(event)) return;
+
 		event.preventDefault();
 		void desk.attach(params.id, [...(event.dataTransfer?.files ?? [])]);
 	};
@@ -195,6 +202,7 @@ export function EntryView() {
 											onPaste={(event) => {
 												const files = [...(event.clipboardData?.files ?? [])];
 												if (files.length === 0) return;
+
 												event.preventDefault();
 												void desk.attach(entry().id, files, event.currentTarget.selectionStart);
 											}}

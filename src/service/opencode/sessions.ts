@@ -72,24 +72,24 @@ export class Sessions extends Context.Service<
 						: { title: path.basename(directory), folder: path.basename(directory), known: false };
 
 				return Sessions.of({
-					name: (session, directory) =>
-						Effect.gen(function* () {
-							const now = yield* SubscriptionRef.get(state);
-							const remembered = now.sessions.get(session);
-							if (remembered !== undefined && !now.stale.has(session)) return named(remembered, directory);
-							const lookup = yield* opencode.session(session);
-							const info =
-								lookup._tag === "Known" ? lookup.session : lookup._tag === "Unknown" ? null : (remembered ?? null);
-							yield* SubscriptionRef.update(state, (now) => ({
-								sessions: new Map(now.sessions).set(session, info),
-								// Couldn't be asked: what was known stands, and it's asked again next time.
-								stale:
-									lookup._tag === "Unreachable"
-										? new Set([...now.stale, session])
-										: new Set([...now.stale].filter((other) => other !== session)),
-							}));
-							return named(info, directory);
-						}),
+					name: Effect.fnUntraced(function* (session, directory) {
+						const now = yield* SubscriptionRef.get(state);
+						const remembered = now.sessions.get(session);
+						if (remembered !== undefined && !now.stale.has(session)) return named(remembered, directory);
+
+						const lookup = yield* opencode.session(session);
+						const info =
+							lookup._tag === "Known" ? lookup.session : lookup._tag === "Unknown" ? null : (remembered ?? null);
+						yield* SubscriptionRef.update(state, (now) => ({
+							sessions: new Map(now.sessions).set(session, info),
+							// Couldn't be asked: what was known stands, and it's asked again next time.
+							stale:
+								lookup._tag === "Unreachable"
+									? new Set([...now.stale, session])
+									: new Set([...now.stale].filter((other) => other !== session)),
+						}));
+						return named(info, directory);
+					}),
 					// News: what's known of a session changed, or a session is to be asked again. `name` remembering what it
 					// was just told isn't, or every view would be worked out twice.
 					changes: SubscriptionRef.changes(state).pipe(

@@ -18,86 +18,87 @@ import { type EntryId, fileName, idOf, newId, parse, serialize } from "../../mod
 import { register } from "./registration";
 import type { Backend, Content } from "./storage";
 
-export const files = (root: string, rescan: Duration.Input) =>
-	Effect.gen(function* () {
-		// The lock first: nothing else touches the store while another service has it.
-		const { publish } = yield* register(root);
-		const fs = yield* FileSystem.FileSystem;
-		const path = yield* Path.Path;
-		const io = Effect.orDie;
-		const file = (id: EntryId) => path.join(root, fileName(id));
-		/** A file to send, read as it's sent (Bun reads it, ranges and all); none when it isn't a file. */
-		const content = (at: string) =>
-			fs.stat(at).pipe(
-				Effect.option,
-				Effect.map(
-					Option.flatMap(
-						(info): Option.Option<Content> =>
-							info.type === "File"
-								? Option.some({
-										data: Bun.file(at),
-										modified: Option.getOrElse(
-											Option.map(info.mtime, (mtime) => mtime.getTime()),
-											() => 0,
-										),
-									})
-								: Option.none(),
-					),
-				),
-			);
+export const files = Effect.fn("Storage.files")(function* (root: string, rescan: Duration.Input) {
+	// The lock first: nothing else touches the store while another service has it.
+	const { publish } = yield* register(root);
+	const fs = yield* FileSystem.FileSystem;
+	const path = yield* Path.Path;
+	const io = Effect.orDie;
+	const file = (id: EntryId) => path.join(root, fileName(id));
 
-		yield* io(fs.makeDirectory(root, { recursive: true }));
+	/** A file to send, read as it's sent (Bun reads it, ranges and all); none when it isn't a file. */
+	const content = (at: string) =>
+		fs.stat(at).pipe(
+			Effect.option,
+			Effect.map(
+				Option.flatMap(
+					(info): Option.Option<Content> =>
+						info.type === "File"
+							? Option.some({
+									data: Bun.file(at),
+									modified: Option.getOrElse(
+										Option.map(info.mtime, (mtime) => mtime.getTime()),
+										() => 0,
+									),
+								})
+							: Option.none(),
+				),
+			),
+		);
 
-		const backend: Backend = {
-			load: io(
-				Effect.gen(function* () {
-					const ids = (yield* fs.readDirectory(root)).flatMap((name) => {
-						const id = idOf(name);
-						return id === undefined ? [] : [id];
-					});
-					const read = yield* Effect.forEach(ids, (id) =>
-						fs.readFileString(file(id)).pipe(
-							// Gone since the listing (removed meanwhile): not an entry anymore.
-							Effect.option,
-							Effect.map(Option.flatMap((text) => parse(id, text))),
-						),
-					);
-					// Same-millisecond entries in a fixed order, whatever order the directory lists them in.
-					return read
-						.flatMap((entry) => (Option.isSome(entry) ? [entry.value] : []))
-						.sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
-				}),
-			),
-			write: (entry) => {
-				// Beside the file under a name that isn't an entry's, then over it in one step.
-				const temp = path.join(root, `.${fileName(entry.id)}.${newId()}.tmp`);
-				return io(Effect.andThen(fs.writeFileString(temp, serialize(entry)), fs.rename(temp, file(entry.id))));
-			},
-			remove: (id) => io(fs.remove(file(id), { force: true })),
-			attach: (relative, data) =>
-				io(
-					Effect.andThen(
-						fs.makeDirectory(path.join(root, "attachments"), { recursive: true }),
-						fs.writeFile(path.join(root, relative), data),
+	yield* io(fs.makeDirectory(root, { recursive: true }));
+
+	const backend: Backend = {
+		load: io(
+			Effect.gen(function* () {
+				const ids = (yield* fs.readDirectory(root)).flatMap((name) => {
+					const id = idOf(name);
+					return id === undefined ? [] : [id];
+				});
+				const read = yield* Effect.forEach(ids, (id) =>
+					fs.readFileString(file(id)).pipe(
+						// Gone since the listing (removed meanwhile): not an entry anymore.
+						Effect.option,
+						Effect.map(Option.flatMap((text) => parse(id, text))),
 					),
+				);
+
+				// Same-millisecond entries in a fixed order, whatever order the directory lists them in.
+				return read
+					.flatMap((entry) => (Option.isSome(entry) ? [entry.value] : []))
+					.sort((a, b) => a.created.localeCompare(b.created) || a.id.localeCompare(b.id));
+			}),
+		),
+		write: (entry) => {
+			// Beside the file under a name that isn't an entry's, then over it in one step.
+			const temp = path.join(root, `.${fileName(entry.id)}.${newId()}.tmp`);
+			return io(Effect.andThen(fs.writeFileString(temp, serialize(entry)), fs.rename(temp, file(entry.id))));
+		},
+		remove: (id) => io(fs.remove(file(id), { force: true })),
+		attach: (relative, data) =>
+			io(
+				Effect.andThen(
+					fs.makeDirectory(path.join(root, "attachments"), { recursive: true }),
+					fs.writeFile(path.join(root, relative), data),
 				),
-			detach: (files) =>
-				Effect.forEach([...files], (relative) => Effect.ignore(fs.remove(path.join(root, relative), { force: true })), {
-					discard: true,
-				}),
-			attachment: (relative) => content(path.join(root, relative)),
-			// A path below the store always makes a file URL.
-			attachmentUrl: (relative) => Effect.map(io(path.toFileUrl(path.join(root, relative))), (url) => url.href),
-			file: content,
-			changed: Stream.merge(
-				fs.watch(root).pipe(
-					Stream.orDie,
-					Stream.filter((event) => idOf(path.basename(event.path)) !== undefined),
-					Stream.map(() => undefined),
-				),
-				Stream.tick(rescan),
 			),
-			publish,
-		};
-		return backend;
-	});
+		detach: (files) =>
+			Effect.forEach([...files], (relative) => Effect.ignore(fs.remove(path.join(root, relative), { force: true })), {
+				discard: true,
+			}),
+		attachment: (relative) => content(path.join(root, relative)),
+		// A path below the store always makes a file URL.
+		attachmentUrl: (relative) => Effect.map(io(path.toFileUrl(path.join(root, relative))), (url) => url.href),
+		file: content,
+		changed: Stream.merge(
+			fs.watch(root).pipe(
+				Stream.orDie,
+				Stream.filter((event) => idOf(path.basename(event.path)) !== undefined),
+				Stream.map(() => undefined),
+			),
+			Stream.tick(rescan),
+		),
+		publish,
+	};
+	return backend;
+});

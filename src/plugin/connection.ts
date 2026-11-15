@@ -62,9 +62,15 @@ export interface Options<R = never> {
 		readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | null, OpenCodeError>;
 		readonly prompt: (prompt: Prompt) => Effect.Effect<void, Failure>;
 	};
-	/** How long to wait for a started service to answer. */
+	/**
+	 * How long to wait for a started service to answer.
+	 * @default "10 seconds"
+	 */
 	readonly timeout?: Duration.Input;
-	/** Wanted from the start (default: off until `want`). */
+	/**
+	 * Wanted from the start, else off until `want`.
+	 * @default false
+	 */
 	readonly wanted?: boolean;
 }
 
@@ -184,137 +190,138 @@ export const answering = (port: number) =>
 	);
 
 /** The connection, off until wanted; hangs up when the scope closes. */
-export const make = <R = never>(options: Options<R>) =>
-	Effect.gen(function* () {
-		const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
-		const transport = RpcClient.layerProtocolSocket().pipe(
-			Layer.provide(BunSocket.layerWebSocket(url)),
-			Layer.provide(RpcSerialization.layerNdjson),
+export const make = Effect.fn("Connection.make")(function* <R = never>(options: Options<R>) {
+	const url = `ws://127.0.0.1:${options.port}${rpcPath}`;
+	const transport = RpcClient.layerProtocolSocket().pipe(
+		Layer.provide(BunSocket.layerWebSocket(url)),
+		Layer.provide(RpcSerialization.layerNdjson),
+	);
+
+	/** Answers one of the service's calls, in this OpenCode; a failure is the answer, not the connection's. */
+	const answer = (client: Client, call: ServiceCall) =>
+		(call._tag === "Session"
+			? Effect.map(options.serve.session(call.sessionID), (session): Outcome => ({ _tag: "Session", session }))
+			: Effect.as(options.serve.prompt(call.prompt), { _tag: "Prompted" } as Outcome)
+		).pipe(
+			Effect.catch((error) => Effect.succeed<Outcome>({ _tag: "Failed", cause: error.message })),
+			Effect.flatMap((outcome) => client.reply({ call: call.call, outcome })),
+			Effect.ignore,
 		);
 
-		/** Answers one of the service's calls, in this OpenCode; a failure is the answer, not the connection's. */
-		const answer = (client: Client, call: ServiceCall) =>
-			(call._tag === "Session"
-				? Effect.map(options.serve.session(call.sessionID), (session): Outcome => ({ _tag: "Session", session }))
-				: Effect.as(options.serve.prompt(call.prompt), { _tag: "Prompted" } as Outcome)
-			).pipe(
-				Effect.catch((error) => Effect.succeed<Outcome>({ _tag: "Failed", cause: error.message })),
-				Effect.flatMap((outcome) => client.reply({ call: call.call, outcome })),
-				Effect.ignore,
-			);
+	/** Nothing listens: start the service and wait until it does. */
+	const ensure = Effect.gen(function* () {
+		if (yield* answering(options.port)) return;
 
-		/** Nothing listens: start the service and wait until it does. */
-		const ensure = Effect.gen(function* () {
-			if (yield* answering(options.port)) return;
-			yield* options.start;
-			yield* answering(options.port).pipe(
-				Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: (up) => up }),
+		yield* options.start;
+		yield* answering(options.port).pipe(
+			Effect.repeat({ schedule: Schedule.spaced("50 millis"), until: (up) => up }),
+			Effect.timeoutOrElse({
+				duration: options.timeout ?? "10 seconds",
+				orElse: () => Effect.fail(new DeskError({ message: `The desk service didn't start (port ${options.port}).` })),
+			}),
+		);
+	});
+
+	/** One link, for as long as it lasts: hello, then the attachment, answering the calls that come on it. */
+	const link = Effect.fn("link")(
+		function* (emit: (event: Event) => Effect.Effect<void>) {
+			yield* ensure;
+			const client = yield* RpcClient.make(DeskApi);
+			const greeted = yield* client.hello({ protocol }).pipe(
+				// Something that doesn't speak this protocol at all answers nothing: try again later rather than wait for good.
 				Effect.timeoutOrElse({
-					duration: options.timeout ?? "10 seconds",
+					duration: "5 seconds",
 					orElse: () =>
-						Effect.fail(new DeskError({ message: `The desk service didn't start (port ${options.port}).` })),
+						Effect.fail(new DeskError({ message: `The desk service on port ${options.port} doesn't answer hello.` })),
 				}),
-			);
-		});
-
-		/** One link, for as long as it lasts: hello, then the attachment, answering the calls that come on it. */
-		const link = (emit: (event: Event) => Effect.Effect<void>) =>
-			Effect.gen(function* () {
-				yield* ensure;
-				const client = yield* RpcClient.make(DeskApi);
-				const greeted = yield* client.hello({ protocol }).pipe(
-					// Something that doesn't speak this protocol at all answers nothing: try again later rather than wait for good.
-					Effect.timeoutOrElse({
-						duration: "5 seconds",
-						orElse: () =>
-							Effect.fail(new DeskError({ message: `The desk service on port ${options.port} doesn't answer hello.` })),
-					}),
-					Effect.map(({ url }) => Option.some(url)),
-					Effect.catchTag("Outdated", ({ side }) =>
-						side === "plugin"
-							? Effect.as(
-									emit(
-										Event.Outdated({
-											message: "This OpenCode's desk plugin is older than the desk service: run /reload.",
-										}),
-									),
-									Option.none<string>(),
-								)
-							: // It's making way for a new one: start that next time round.
-								Effect.fail(
-									new DeskError({
-										message: "The desk service is older than this plugin; it's making way for a new one.",
+				Effect.map(({ url }) => Option.some(url)),
+				Effect.catchTag("Outdated", ({ side }) =>
+					side === "plugin"
+						? Effect.as(
+								emit(
+									Event.Outdated({
+										message: "This OpenCode's desk plugin is older than the desk service: run /reload.",
 									}),
 								),
-					),
-					// Something listens, but the upgrade was refused. Still refusing two seconds on (not a desk service on its
-					// way up), and still listening (not one on its way out), it isn't the desk's. Otherwise: next time round.
-					Effect.catchTag("RpcClientError", (error) =>
-						refused(error)
-							? Effect.gen(function* () {
-									const opened = yield* Effect.andThen(Effect.sleep("250 millis"), upgrades(url)).pipe(
-										Effect.repeat({ until: (opened) => opened, times: 7 }),
-									);
-									if (opened || !(yield* answering(options.port))) return yield* error;
-									yield* emit(Event.Taken({ message: taken(options.port) }));
-									return Option.none<string>();
-								})
-							: Effect.fail(error),
-					),
-				);
-				if (Option.isNone(greeted)) return;
-
-				yield* emit(Event.Hello({ client, url: greeted.value }));
-				yield* client
-					.attach({ directory: options.directory, sessions: yield* options.modes })
-					.pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
-				yield* emit(Event.Dropped({ message: "The desk service hung up." }));
-			}).pipe(
-				Effect.scoped,
-				Effect.provide(transport),
-				Effect.catchCause((cause) => emit(Event.Dropped({ message: errorMessage(Cause.squash(cause)) }))),
-			);
-
-		const actor = yield* Machine.start<State, Event, R>({
-			initial: options.wanted ? State.Connecting() : State.Off(),
-			reconcile,
-			key,
-			run: (state, emit) =>
-				state._tag === "Connecting"
-					? link(emit)
-					: state._tag === "Backoff"
-						? Effect.andThen(Effect.sleep("250 millis"), emit(Event.Retry()))
-						: Effect.void,
-		});
-
-		/** What a request gets: the link once it's live, or why there's none; nothing yet while it's on its way. */
-		const awaitLink = actor.until(
-			(state): Option.Option<Effect.Effect<{ readonly client: Client; readonly url: string }, DeskError>> =>
-				state._tag === "Live"
-					? Option.some(Effect.succeed(state))
-					: state._tag === "Off" || state._tag === "Refused"
-						? Option.some(Effect.fail(new DeskError({ message: state._tag === "Off" ? off : state.message })))
-						: Option.none(),
-		);
-		const live = Effect.flatten(awaitLink);
-		const connection: Connection = {
-			want: (on) =>
-				actor
-					.send(Event.Want({ on }))
-					.pipe(Effect.andThen(actor.until(Option.liftPredicate(settled(on)))), Effect.asVoid),
-			client: Effect.map(live, (now) => now.client),
-			live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
-			url: Effect.map(live, (now) => now.url),
-			links: actor.changes.pipe(
-				Stream.map(
-					(state): Option.Option<Link> =>
-						state._tag === "Live" ? Option.some({ client: state.client, url: state.url }) : Option.none(),
+								Option.none<string>(),
+							)
+						: // It's making way for a new one: start that next time round.
+							Effect.fail(
+								new DeskError({
+									message: "The desk service is older than this plugin; it's making way for a new one.",
+								}),
+							),
 				),
-				Stream.changesWith(sameLink),
-			),
-		};
-		return connection;
+				// Something listens, but the upgrade was refused. Still refusing two seconds on (not a desk service on its
+				// way up), and still listening (not one on its way out), it isn't the desk's. Otherwise: next time round.
+				Effect.catchTag("RpcClientError", (error) =>
+					refused(error)
+						? Effect.gen(function* () {
+								const opened = yield* Effect.andThen(Effect.sleep("250 millis"), upgrades(url)).pipe(
+									Effect.repeat({ until: (opened) => opened, times: 7 }),
+								);
+								if (opened || !(yield* answering(options.port))) return yield* error;
+
+								yield* emit(Event.Taken({ message: taken(options.port) }));
+								return Option.none<string>();
+							})
+						: Effect.fail(error),
+				),
+			);
+			if (Option.isNone(greeted)) return;
+
+			yield* emit(Event.Hello({ client, url: greeted.value }));
+			yield* client
+				.attach({ directory: options.directory, sessions: yield* options.modes })
+				.pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
+			yield* emit(Event.Dropped({ message: "The desk service hung up." }));
+		},
+		Effect.scoped,
+		Effect.provide(transport),
+		(effect, emit) =>
+			Effect.catchCause(effect, (cause) => emit(Event.Dropped({ message: errorMessage(Cause.squash(cause)) }))),
+	);
+
+	const actor = yield* Machine.start<State, Event, R>({
+		initial: options.wanted ? State.Connecting() : State.Off(),
+		reconcile,
+		key,
+		run: (state, emit) =>
+			state._tag === "Connecting"
+				? link(emit)
+				: state._tag === "Backoff"
+					? Effect.andThen(Effect.sleep("250 millis"), emit(Event.Retry()))
+					: Effect.void,
 	});
+
+	/** What a request gets: the link once it's live, or why there's none; nothing yet while it's on its way. */
+	const awaitLink = actor.until(
+		(state): Option.Option<Effect.Effect<{ readonly client: Client; readonly url: string }, DeskError>> =>
+			state._tag === "Live"
+				? Option.some(Effect.succeed(state))
+				: state._tag === "Off" || state._tag === "Refused"
+					? Option.some(Effect.fail(new DeskError({ message: state._tag === "Off" ? off : state.message })))
+					: Option.none(),
+	);
+	const live = Effect.flatten(awaitLink);
+	const connection: Connection = {
+		want: (on) =>
+			actor
+				.send(Event.Want({ on }))
+				.pipe(Effect.andThen(actor.until(Option.liftPredicate(settled(on)))), Effect.asVoid),
+		client: Effect.map(live, (now) => now.client),
+		live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
+		url: Effect.map(live, (now) => now.url),
+		links: actor.changes.pipe(
+			Stream.map(
+				(state): Option.Option<Link> =>
+					state._tag === "Live" ? Option.some({ client: state.client, url: state.url }) : Option.none(),
+			),
+			Stream.changesWith(sameLink),
+		),
+	};
+	return connection;
+});
 
 /** Where the service runs: its store and port, as the settings give them. */
 export interface Service {

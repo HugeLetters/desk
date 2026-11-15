@@ -21,7 +21,7 @@ import * as Stream from "effect/Stream";
 import { createEffect, createSignal, Show } from "solid-js";
 import { BadgeRpc } from "../plugin/badge-rpc";
 import * as Settings from "../shared/settings";
-import { at, type Report, report, type Statuses, withFirstStatus, withStatus } from "./badge";
+import { type Report, report, type Statuses, statusAt, withFirstStatus, withStatus } from "./badge";
 import { type RpcClient, rpcClient } from "./rpc-client";
 
 /** Opens `url` in the browser with `opener` (`open`, which exits at once, once it has handed over). */
@@ -35,6 +35,7 @@ const open = (opener: string, url: string) =>
 /** The badge for one desk; `report` is undefined to hide it. */
 function Badge(props: { theme: Context["theme"]; report: Report | undefined; open: (page: string) => void }) {
 	const [hovered, setHovered] = createSignal(false);
+
 	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.
 	return (
 		<text
@@ -83,6 +84,7 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 	const client = rpcClient(BadgeRpc, context);
 	const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 	const [statuses, setStatuses] = createSignal<Statuses>({});
+
 	/** The locations asked for so far. */
 	// TODO main | why are we tracking several directories? | by Evgenii Perminov at Sun, 15 Nov 2026 18:40:57 GMT
 	const asked = yield* Ref.make<ReadonlySet<string>>(new Set());
@@ -131,7 +133,7 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 					return (
 						<Badge
 							theme={context.theme}
-							report={report(at(statuses(), location()), desk())}
+							report={report(statusAt(statuses(), location()), desk())}
 							open={(page) => run(open(opener, page))}
 						/>
 					);

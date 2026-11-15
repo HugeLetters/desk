@@ -29,7 +29,6 @@ export const Caller = Schema.TaggedUnion({
 });
 export type Caller = typeof Caller.Type;
 export const Agent = Caller.cases.Agent;
-// TODO main | use interfaces for pretty types. use identity trick to bypass typeof error in ts | by Evgenii Perminov at Sun, 15 Nov 2026 18:10:35 GMT
 export interface Agent extends Identity<typeof Agent.Type> {}
 
 /** The caller as the desk's rules know them: which party. */
@@ -51,7 +50,7 @@ export const Prompt = Schema.Struct({
 	delivery: Delivery,
 	files: Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.String })),
 });
-export type Prompt = typeof Prompt.Type;
+export interface Prompt extends Identity<typeof Prompt.Type> {}
 
 /** What the service asks a plugin to do in its OpenCode; `call` pairs it with the plugin's `reply`. */
 export const ServiceCall = Schema.TaggedUnion({
@@ -81,11 +80,11 @@ export const Question = Schema.Struct({
 	parent: Schema.optional(EntryId),
 	priority: Schema.optional(Priority),
 });
-export type Question = typeof Question.Type;
+export interface Question extends Identity<typeof Question.Type> {}
 
 /** An attachment the page sends: its bytes, base64 on the wire. */
 export const Attachment = Schema.Struct({ id: Schema.String, name: Schema.String, data: Schema.Uint8ArrayFromBase64 });
-export type Attachment = typeof Attachment.Type;
+export interface Attachment extends Identity<typeof Attachment.Type> {}
 
 /**
  * The user's text for an entry: an answer, or (on their own question) a follow-up. `files` holds the attachments the
@@ -96,7 +95,7 @@ export const Draft = Schema.Struct({
 	text: Schema.String,
 	files: Schema.optional(Schema.Array(Attachment)),
 });
-export type Draft = typeof Draft.Type;
+export interface Draft extends Identity<typeof Draft.Type> {}
 
 /** A desk: a top-level session's, named after it (`sessions.ts`). */
 export const DeskName = Schema.Struct({
@@ -107,11 +106,11 @@ export const DeskName = Schema.Struct({
 	/** Whether a connected OpenCode knows the session; one nobody knows may be gone, and its desk can be claimed. */
 	known: Schema.Boolean,
 });
-export type DeskName = typeof DeskName.Type;
+export interface DeskName extends Identity<typeof DeskName.Type> {}
 
 /** A desk with entries, for the list: how many wait on the user, and how many of those are critical. */
 export const DeskSummary = Schema.Struct({ ...DeskName.fields, waiting: Schema.Int, critical: Schema.Int });
-export type DeskSummary = typeof DeskSummary.Type;
+export interface DeskSummary extends Identity<typeof DeskSummary.Type> {}
 
 /** One session's desk, every desk with entries (for switching), and the sessions in desk mode. */
 export const View = Schema.Struct({
@@ -123,7 +122,7 @@ export const View = Schema.Struct({
 	/** Outbox (message id) → why its last delivery failed, for undelivered entries whose try failed. */
 	failures: Schema.Record(Schema.String, DeliveryFailed),
 });
-export type View = typeof View.Type;
+export interface View extends Identity<typeof View.Type> {}
 
 export const DeskApi = RpcGroup.make(
 	// The bridge: a plugin instance and the service's calls into its OpenCode.

@@ -11,7 +11,7 @@ import type { Desk, Status } from "../plugin/badge-rpc";
 export type Statuses = Readonly<Record<string, Status>>;
 
 /** `statuses` with `directory`'s status now `status`. */
-export const withStatus = (statuses: Statuses, directory: string, status: Status): Statuses => ({
+export const withStatus = (statuses: Statuses, directory: string, status: Status) => ({
 	...statuses,
 	[directory]: status,
 });
@@ -20,11 +20,11 @@ export const withStatus = (statuses: Statuses, directory: string, status: Status
  * `statuses` with `directory`'s status `status` unless it has one already: an answer to asking for it may come after
  * an event with a newer one.
  */
-export const withFirstStatus = (statuses: Statuses, directory: string, status: Status): Statuses =>
+export const withFirstStatus = (statuses: Statuses, directory: string, status: Status) =>
 	Object.hasOwn(statuses, directory) ? statuses : withStatus(statuses, directory, status);
 
 /** The status of the plugin instance in `directory`, if known. */
-export const at = (statuses: Statuses, directory: string | undefined): Status | undefined =>
+export const statusAt = (statuses: Statuses, directory: string | undefined) =>
 	directory === undefined || !Object.hasOwn(statuses, directory) ? undefined : statuses[directory];
 
 /** The footer's count for a desk: none when nothing waits on the user, else how many do and how many of those are critical. */

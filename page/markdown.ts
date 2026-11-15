@@ -15,6 +15,7 @@ export type Local = (id: string) => { readonly url: string; readonly type: strin
 /** `base` is where relative paths load from; `local` resolves a draft's `attachment:<id>` references (otherwise left broken). */
 export function render(text: string, base: string, local?: Local): string {
 	const template = document.createElement("template");
+
 	// `attachment:` isn't a scheme DOMPurify keeps, but a fragment is; the object URL goes in after sanitizing.
 	template.innerHTML = DOMPurify.sanitize(
 		marked.parse(text.replaceAll("](attachment:", "](#attachment:"), { async: false }),
@@ -51,6 +52,7 @@ export function render(text: string, base: string, local?: Local): string {
 			className: "mermaid",
 			textContent: code.textContent,
 		});
+
 		// Matched by `pre > code`, so it has its `pre`.
 		code.parentElement?.replaceWith(diagram);
 	}
@@ -63,6 +65,7 @@ let mermaid: Promise<Mermaid> | undefined;
 export async function renderDiagrams(container: HTMLElement): Promise<void> {
 	const diagrams = [...container.querySelectorAll<HTMLElement>(".mermaid:not([data-processed])")];
 	if (diagrams.length === 0) return;
+
 	mermaid ??= import("mermaid").then(({ default: engine }) => {
 		engine.initialize({ startOnLoad: false, securityLevel: "strict" });
 		return engine;

@@ -3,10 +3,9 @@
  * rules are one table and property-tested on their own (`tests/machines.test.ts`).
  *
  * `status` only goes forward (`open → answered → resolved`, or straight to `resolved`; resolving again changes
- * nothing); `pending` (the user's text on
- * its way to the session) is set only by the user's answer and cleared only by its delivery or the user discarding it;
- * `parent` is set once. What takes the other entries to decide (a cycle, what's open below, which desk a parent is on)
- * is the desk's (`desk.ts`), and comes in on the event.
+ * nothing); `pending` (the user's text on its way to the session) is set only by the user's answer and cleared only by
+ * its delivery or the user discarding it; `parent` is set once. What takes the other entries to decide (a cycle, what's
+ * open below, which desk a parent is on) is the desk's (`desk.ts`), and comes in on the event.
  *
  * The desk has no actor for entries: the files are the state, and each change reads them, reconciles and writes, one
  * at a time.
@@ -52,6 +51,7 @@ export const reconcile = (entry: Entry, event: Event): Result.Result<Entry, Refu
 		case "Answer":
 			if (entry.asker === event.by) return Result.fail(new NotTheAnswerer({ id, by: event.by }));
 			if (entry.status === "resolved") return Result.fail(new AlreadyResolved({ id }));
+
 			// An answer says something, whoever gives it: blank text is no answer.
 			if (!event.text.trim()) return Result.fail(new EmptyText({ id }));
 			return ok({ ...entry, answer: event.text, status: "answered", pending: event.pending ?? entry.pending });

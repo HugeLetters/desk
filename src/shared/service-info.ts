@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import type { Identity } from "./type";
 
 export const Info = Schema.Struct({
 	pid: Schema.Int,
@@ -17,7 +18,7 @@ export const Info = Schema.Struct({
 	/** Once the page is up. */
 	url: Schema.optional(Schema.String),
 });
-export type Info = typeof Info.Type;
+export interface Info extends Identity<typeof Info.Type> {}
 
 /** A registration's text, parsed: fails on anything that isn't one (an empty or half-written file, say). */
 export const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(Info));

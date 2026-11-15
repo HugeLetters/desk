@@ -26,9 +26,15 @@ export interface Config {
 	readonly port: number;
 	/** How long the service waits without clients before `Clients.idle` completes. */
 	readonly idle: Duration.Input;
-	/** How often undelivered messages are tried again, besides whenever a plugin instance connects. */
+	/**
+	 * How often undelivered messages are tried again, besides whenever a plugin instance connects.
+	 * @default "30 seconds"
+	 */
 	readonly retry?: Duration.Input | undefined;
-	/** Whether this service is the outdated side when a plugin's protocol differs (default: the code on disk changed since it loaded). */
+	/**
+	 * Whether this service is the outdated side when a plugin's protocol differs.
+	 * @default whether the contract's code on disk changed since it loaded (`changedOnDisk`, `rpc.ts`)
+	 */
 	readonly outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem> | undefined;
 }
 
@@ -38,6 +44,7 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(OpenCode.layer),
 		Layer.provideMerge(Clients.layer(config.idle)),
 	);
+
 	// Once the server is up, the registration says where.
 	const publish = Layer.effectDiscard(
 		Effect.gen(function* () {

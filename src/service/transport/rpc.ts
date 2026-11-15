@@ -64,106 +64,111 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 			const opencode = yield* OpenCode;
 			const sessions = yield* Sessions;
 			const clients = yield* Clients;
+
 			/** By RPC client id, while attached. */
 			const attachments = yield* Ref.make<ReadonlyMap<number, Attached>>(new Map());
 			const lastCall = yield* Ref.make(0);
+
 			/** Work started by a request that outlives it; it ends with the service. */
 			const background = yield* FiberSet.make();
+
 			/** Looks the sessions up, so their desks are named (`Sessions`). */
-			const learn = (inDeskMode: ReadonlyArray<SessionID>, directory: string) =>
+			const nameDesks = (inDeskMode: ReadonlyArray<SessionID>, directory: string) =>
 				Effect.forEach(inDeskMode, (session) => sessions.name(session, directory), { discard: true });
 
-			const attach = (id: number, directory: string, sessions: ReadonlyArray<SessionID>) =>
-				Effect.gen(function* () {
-					const calls = yield* Queue.unbounded<ServiceCall>();
-					const waiting = yield* Ref.make<ReadonlyMap<number, Deferred.Deferred<Outcome>>>(new Map());
-					/** Sends a call on the stream and waits for its reply. */
-					const call = (make: (call: number) => ServiceCall) =>
-						Effect.gen(function* () {
-							const call = yield* Ref.updateAndGet(lastCall, (last) => last + 1);
-							const reply = yield* Deferred.make<Outcome>();
-							yield* Ref.update(waiting, (all) => new Map(all).set(call, reply));
-							yield* Queue.offer(calls, make(call));
-							return yield* Deferred.await(reply).pipe(
-								Effect.timeoutOrElse({
-									duration: callTimeout,
-									orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })),
-								}),
-								Effect.ensuring(Ref.update(waiting, (all) => without(all, call))),
-							);
-						});
-					const failed = (outcome: Outcome) =>
-						outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome);
-					const client: Client = {
-						session: (sessionID) =>
-							Effect.flatMap(
-								call((call) => ({ _tag: "Session", call, sessionID })),
-								failed,
-							).pipe(
-								Effect.map((outcome) => (outcome._tag === "Session" ? (outcome.session ?? undefined) : undefined)),
-							),
-						prompt: (prompt) =>
-							Effect.asVoid(
-								Effect.flatMap(
-									call((call) => ({ _tag: "Prompt", call, prompt })),
-									failed,
-								),
-							),
-					};
-					// All of it for as long as the stream runs: the plugin hanging up (or dying) ends it.
-					yield* clients.hold;
-					yield* Effect.acquireRelease(
-						Ref.update(attachments, (all) => new Map(all).set(id, { client, waiting })),
-						() =>
-							Effect.andThen(
-								Ref.update(attachments, (all) => without(all, id)),
-								Effect.flatMap(Ref.get(waiting), (left) =>
-									Effect.forEach(left.values(), (reply) =>
-										Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" }),
-									),
-								),
-							),
+			const attach = Effect.fn("attach")(function* (id: number, directory: string, sessions: ReadonlyArray<SessionID>) {
+				const calls = yield* Queue.unbounded<ServiceCall>();
+				const waiting = yield* Ref.make<ReadonlyMap<number, Deferred.Deferred<Outcome>>>(new Map());
+
+				/** Sends a call on the stream and waits for its reply. */
+				const call = Effect.fn("call")(function* (make: (call: number) => ServiceCall) {
+					const call = yield* Ref.updateAndGet(lastCall, (last) => last + 1);
+					const reply = yield* Deferred.make<Outcome>();
+					yield* Ref.update(waiting, (all) => new Map(all).set(call, reply));
+					yield* Queue.offer(calls, make(call));
+					return yield* Deferred.await(reply).pipe(
+						Effect.timeoutOrElse({
+							duration: callTimeout,
+							orElse: () => Effect.fail(new Unanswered({ cause: "the plugin didn't answer in time" })),
+						}),
+						Effect.ensuring(Ref.update(waiting, (all) => without(all, call))),
 					);
-					yield* opencode.attach(client);
-					yield* opencode.modes(client, sessions);
-					// Its sessions in desk mode, so their desks are named even with nothing on them yet. In the background: the
-					// lookups go out on the stream this returns.
-					yield* Effect.forkScoped(learn(sessions, directory));
-					yield* Effect.logInfo(`desk: a plugin attached in ${directory}, ${sessions.length} in desk mode`);
-					return Stream.fromQueue(calls);
 				});
 
+				const failed = (outcome: Outcome) =>
+					outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome);
+				const client: Client = {
+					session: (sessionID) =>
+						Effect.flatMap(
+							call((call) => ({ _tag: "Session", call, sessionID })),
+							failed,
+						).pipe(Effect.map((outcome) => (outcome._tag === "Session" ? (outcome.session ?? undefined) : undefined))),
+					prompt: (prompt) =>
+						Effect.asVoid(
+							Effect.flatMap(
+								call((call) => ({ _tag: "Prompt", call, prompt })),
+								failed,
+							),
+						),
+				};
+
+				// All of it for as long as the stream runs: the plugin hanging up (or dying) ends it.
+				yield* clients.hold;
+				yield* Effect.acquireRelease(
+					Ref.update(attachments, (all) => new Map(all).set(id, { client, waiting })),
+					() =>
+						Effect.andThen(
+							Ref.update(attachments, (all) => without(all, id)),
+							Effect.flatMap(Ref.get(waiting), (left) =>
+								Effect.forEach(left.values(), (reply) =>
+									Deferred.succeed(reply, { _tag: "Failed", cause: "the plugin went away" }),
+								),
+							),
+						),
+				);
+
+				yield* opencode.attach(client);
+				yield* opencode.modes(client, sessions);
+
+				// Its sessions in desk mode, so their desks are named even with nothing on them yet. In the background: the
+				// lookups go out on the stream this returns.
+				yield* Effect.forkScoped(nameDesks(sessions, directory));
+				yield* Effect.logInfo(`desk: a plugin attached in ${directory}, ${sessions.length} in desk mode`);
+				return Stream.fromQueue(calls);
+			});
+
 			return DeskApi.of({
-				hello: ({ protocol: theirs }) =>
-					Effect.gen(function* () {
-						if (theirs === protocol) return { url: api.url };
-						const outdatedHere = yield* outdated;
-						yield* Effect.logWarning(
-							`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`,
-						);
-						// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
-						if (outdatedHere) {
-							// The sleep: so the `Outdated` reply is written to the connection before it closes.
-							yield* FiberSet.run(background, Effect.andThen(Effect.sleep("100 millis"), clients.retire));
-							return yield* new Outdated({ side: "service" });
-						}
-						return yield* new Outdated({ side: "plugin" });
-					}),
+				hello: Effect.fnUntraced(function* ({ protocol: theirs }) {
+					if (theirs === protocol) return { url: api.url };
+
+					const outdatedHere = yield* outdated;
+					yield* Effect.logWarning(
+						`desk: a plugin speaks build ${theirs}, this service ${protocol}; ${outdatedHere ? "this service is outdated: making way" : "the plugin is outdated: it's told to reload"}`,
+					);
+
+					// This service is the old side: make way for the one the plugin starts from the code on disk. The reply goes out first.
+					if (outdatedHere) {
+						// The sleep: so the `Outdated` reply is written to the connection before it closes.
+						yield* FiberSet.run(background, Effect.andThen(Effect.sleep("100 millis"), clients.retire));
+						return yield* new Outdated({ side: "service" });
+					}
+					return yield* new Outdated({ side: "plugin" });
+				}),
 				attach: ({ directory, sessions }, { client }) => Stream.unwrap(attach(client.id, directory, sessions)),
-				reply: ({ call, outcome }, { client }) =>
-					Effect.gen(function* () {
-						const attached = (yield* Ref.get(attachments)).get(client.id);
-						const reply = attached && (yield* Ref.get(attached.waiting)).get(call);
-						if (reply) yield* Deferred.succeed(reply, outcome);
-					}),
-				modes: ({ sessions }, { client }) =>
-					Effect.gen(function* () {
-						const attached = (yield* Ref.get(attachments)).get(client.id);
-						if (!attached) return;
-						yield* opencode.modes(attached.client, sessions);
-						// In the background, as on attach: the lookups go out on the attachment's stream.
-						yield* FiberSet.run(background, learn(sessions, ""));
-					}),
+				reply: Effect.fnUntraced(function* ({ call, outcome }, { client }) {
+					const attached = (yield* Ref.get(attachments)).get(client.id);
+					const reply = attached && (yield* Ref.get(attached.waiting)).get(call);
+					if (reply) yield* Deferred.succeed(reply, outcome);
+				}),
+				modes: Effect.fnUntraced(function* ({ sessions }, { client }) {
+					const attached = (yield* Ref.get(attachments)).get(client.id);
+					if (!attached) return;
+
+					yield* opencode.modes(attached.client, sessions);
+
+					// In the background, as on attach: the lookups go out on the attachment's stream.
+					yield* FiberSet.run(background, nameDesks(sessions, ""));
+				}),
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,
 				answer: api.answer,

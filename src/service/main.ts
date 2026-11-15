@@ -2,10 +2,8 @@
  * `bun src/service/main.ts`: runs the desk service until it has had no clients for `$DESK_IDLE` (a duration or ms,
  * default 10 minutes) or a newer one replaces it, or a signal comes, then exits. A plugin instance starts it when none
  * answers on the port; started while another one has the store (`<store>/service.json`), it exits at once, and with
- * the port taken by another program, it exits with an error that says so.
- *
- * - `DESK_HOME`: the store (default `~/.local/share/desk`).
- * - `DESK_PORT`: the port of the page and the API, `/rpc` (default 47400).
+ * the port taken by another program, it exits with an error that says so. Its settings come from the environment
+ * (`settings.ts`: `DESK_HOME`, `DESK_PORT`, `DESK_IDLE`).
  */
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";

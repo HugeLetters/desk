@@ -29,6 +29,7 @@ export interface FakeServer {
 	/** Prompts are refused with this message, while set. */
 	refuse: string | undefined;
 	session(info: Partial<SessionInfo> & { id: SessionID }): void;
+
 	/** The session moves to another folder, and the plugin reports it. */
 	move(sessionID: SessionID, directory: string): void;
 }
@@ -40,6 +41,7 @@ export function fakeOpenCode() {
 	const server = (url: string): FakeServer => {
 		const existing = servers.get(url);
 		if (existing) return existing;
+
 		const created: FakeServer = {
 			url,
 			sessions: new Map(),

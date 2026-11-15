@@ -12,6 +12,7 @@ export const Shell = (props: ParentProps) => {
 	const navigate = useNavigate();
 	const route = useLocation();
 	createEffect(() => setSession(sessionIn(route.pathname)));
+
 	// Desks used to be per project: an old link goes to the list.
 	createEffect(() => {
 		if (route.pathname.startsWith("/projects/")) navigate("/", { replace: true });

@@ -20,9 +20,11 @@ const save = (key: string, drafts: Database.Drafts["drafts"]) =>
 
 export const createDrafts = (desk: Accessor<string | undefined>) => {
 	const [drafts, setDrafts] = createStore<Texts>({});
+
 	/** The desk whose drafts the store holds, once they're loaded: until then nothing's saved (it would overwrite them). */
 	const [held, setHeld] = createSignal<string>();
 	let loading: Promise<void> = Promise.resolve();
+
 	/** Saves, one after another, so the last one wins. */
 	let saving: Promise<unknown> = Promise.resolve();
 

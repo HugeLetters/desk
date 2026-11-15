@@ -48,9 +48,11 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
  */
 export const store = Effect.gen(function* () {
 	const path = yield* Path.Path;
+
 	// Not the setting: `HOME` is the user's home directory, the environment's own, where the default store is and what
 	// `~` stands for. The setting is `home` under `desk`, the desk's home.
 	const userHome = yield* Config.String("HOME");
+
 	// In a terminal the shell replaces `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings
 	// as written: without this, `"home": "~/.local/share/desk"` would be a folder literally named `~` here.
 	const home = Config.map(Config.String("home"), (configured) =>

@@ -137,8 +137,9 @@ export class Desk extends Context.Service<
 				const entry = all.find((candidate) => candidate.id === id);
 				return entry ? Effect.succeed(entry) : Effect.fail(new NoSuchEntry({ id }));
 			};
+
 			/** `event` happens to every one of `entries` (all of them, or, refused, none), and they're written. */
-			const each = (store: Transaction, entries: Entries, event: Event) =>
+			const applyToEach = (store: Transaction, entries: Entries, event: Event) =>
 				Effect.flatMap(
 					Effect.forEach(entries, (entry) => Effect.fromResult(reconcile(entry, event))),
 					(after) => Effect.forEach(after, store.write, { discard: true }),
@@ -158,37 +159,39 @@ export class Desk extends Context.Service<
 				});
 
 			/** The user's draft: the answer when the entry waits on them, otherwise a follow-up question below it. */
-			const replyTo = (all: Entries, draft: Draft, pending: Pending): Effect.Effect<Entry, Refusal> =>
-				Effect.gen(function* () {
-					const entry = yield* find(all, draft.entry);
-					const text = draft.text.trim();
-					if (!text) return yield* new EmptyText({ id: entry.id });
-					if (entry.status === "resolved") return yield* new AlreadyResolved({ id: entry.id });
-					if (entry.asker === "agent" && entry.status === "open")
-						return yield* Effect.fromResult(reconcile(entry, Event.Answer({ by: "user", text, pending })));
-					return {
-						id: newId(),
-						parent: entry.id,
-						asker: "user",
-						status: "open",
-						session: entry.session,
-						directory: entry.directory,
-						labels: entry.labels,
-						priority: entry.priority,
-						created: DateTime.formatIso(yield* DateTime.now),
-						title: text.replace(/\n[\s\S]*$/, "").slice(0, 100),
-						question: text,
-						answer: null,
-						pending,
-					};
-				});
+			const replyTo = Effect.fn("replyTo")(function* (all: Entries, draft: Draft, pending: Pending) {
+				const entry = yield* find(all, draft.entry);
+				const text = draft.text.trim();
+				if (!text) return yield* new EmptyText({ id: entry.id });
+				if (entry.status === "resolved") return yield* new AlreadyResolved({ id: entry.id });
+				if (entry.asker === "agent" && entry.status === "open") {
+					return yield* Effect.fromResult(reconcile(entry, Event.Answer({ by: "user", text, pending })));
+				}
+
+				const followUp: Entry = {
+					id: newId(),
+					parent: entry.id,
+					asker: "user",
+					status: "open",
+					session: entry.session,
+					directory: entry.directory,
+					labels: entry.labels,
+					priority: entry.priority,
+					created: DateTime.formatIso(yield* DateTime.now),
+					title: text.replace(/\n[\s\S]*$/, "").slice(0, 100),
+					question: text,
+					answer: null,
+					pending,
+				};
+				return followUp;
+			});
 
 			return Desk.of({
 				changes: storage.changes,
 				entries: storage.entries,
 				ask: (asker, question) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const parent =
 								question.parent === undefined
 									? reviewRoot(
@@ -197,6 +200,7 @@ export class Desk extends Context.Service<
 										)
 									: yield* find(all, question.parent);
 							if (parent && parent.session !== asker.session) return yield* new OtherDesk({ id: parent.id });
+
 							const entry: Entry = {
 								id: newId(),
 								parent: parent?.id ?? null,
@@ -217,8 +221,8 @@ export class Desk extends Context.Service<
 						}),
 					),
 				adopt: (id, parentID) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const entry = yield* find(all, id);
 							const parent = yield* find(all, parentID);
 							const adopted = yield* Effect.fromResult(reconcile(entry, Event.Adopt({ parent: parentID })));
@@ -230,8 +234,8 @@ export class Desk extends Context.Service<
 						}),
 					),
 				answer: (id, body) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const entry = yield* find(all, id);
 							const answered = yield* Effect.fromResult(
 								reconcile(entry, Event.Answer({ by: "agent", text: body.trim() })),
@@ -241,11 +245,11 @@ export class Desk extends Context.Service<
 						}),
 					),
 				prioritize: (id, priority, subtree) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							yield* find(all, id);
 							const ids = new Set([id, ...(subtree ? descendants(all, { id }).map((entry) => entry.id) : [])]);
-							yield* each(
+							yield* applyToEach(
 								store,
 								all.filter((entry) => ids.has(entry.id)),
 								Event.Prioritize({ priority }),
@@ -253,16 +257,18 @@ export class Desk extends Context.Service<
 						}),
 					),
 				resolve: (id, by) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const entry = yield* find(all, id);
 							const resolved = yield* Effect.fromResult(
 								reconcile(entry, Event.Resolve({ by, openBelow: openUnder(all, entry).map((other) => other.id) })),
 							);
 							yield* store.write(resolved);
+
 							// A resolved entry without follow-ups leaves the desk; then its parent may, and so on up.
 							const { kept, pruned } = prune(replace(all, resolved), resolved);
 							yield* Effect.forEach(pruned, (gone) => store.remove(gone.id), { discard: true });
+
 							// Attachments only the pruned entries pointed at go with them.
 							const texts = (list: Entries) =>
 								list.flatMap((other) =>
@@ -273,53 +279,54 @@ export class Desk extends Context.Service<
 						}),
 					),
 				claim: (session, from) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const theirs = all.filter((entry) => entry.session === from);
 							if (theirs.length === 0) return yield* new NoSuchDesk({ session: from });
-							yield* each(store, theirs, Event.Claim({ session }));
+
+							yield* applyToEach(store, theirs, Event.Claim({ session }));
 							return theirs.length;
 						}),
 					),
-				describe: (id, session) =>
-					Effect.gen(function* () {
-						const all = yield* storage.entries;
-						if (id === undefined) {
-							const mine = all.filter((entry) => entry.session === session);
-							const open = ordered(mine).filter((entry) => entry.status !== "resolved");
-							if (open.length === 0) return "The desk is empty: nothing open or waiting.";
-							// One short line each: [status, whose turn, priority unless normal, "from the user" for the user's own questions].
-							return open
-								.map((entry) => {
-									const tags = [
-										entry.status,
-										`${waitingOn(entry)}'s turn`,
-										...(entry.priority === "normal" ? [] : [entry.priority]),
-										...(entry.asker === "user" ? ["from the user"] : []),
-									];
-									return `- ${entry.id} ${entry.title} [${tags.join(", ")}]${entry.parent === null ? "" : ` under ${entry.parent}`}`;
-								})
-								.join("\n");
-						}
-						// The entry in full; what it hangs under and what hangs under it, one line each (the agent has those bodies, or can ask).
-						const entry = yield* find(all, id);
-						const above = ancestors(all, entry);
-						const line = (other: Entry) => `${other.id} ${other.title} (${other.status})`;
-						const followUps = all.filter((other) => other.parent === id);
-						return [
-							...(above.length ? [`Under: ${above.map(line).join(" › ")}`] : []),
-							[
-								`# ${entry.id} ${entry.title}`,
-								`(${entry.status}; asked by the ${entry.asker}, answered by the ${answerer(entry)})`,
-								entry.question,
-								...(entry.answer === null ? [] : ["## Answer", entry.answer]),
-							].join("\n\n"),
-							...(followUps.length ? [`Follow-ups: ${followUps.map(line).join("; ")}`] : []),
-						].join("\n\n---\n\n");
-					}),
+				describe: Effect.fnUntraced(function* (id, session) {
+					const all = yield* storage.entries;
+					if (id === undefined) {
+						const mine = all.filter((entry) => entry.session === session);
+						const open = ordered(mine).filter((entry) => entry.status !== "resolved");
+						if (open.length === 0) return "The desk is empty: nothing open or waiting.";
+
+						// One short line each: [status, whose turn, priority unless normal, "from the user" for the user's own questions].
+						return open
+							.map((entry) => {
+								const tags = [
+									entry.status,
+									`${waitingOn(entry)}'s turn`,
+									...(entry.priority === "normal" ? [] : [entry.priority]),
+									...(entry.asker === "user" ? ["from the user"] : []),
+								];
+								return `- ${entry.id} ${entry.title} [${tags.join(", ")}]${entry.parent === null ? "" : ` under ${entry.parent}`}`;
+							})
+							.join("\n");
+					}
+					// The entry in full; what it hangs under and what hangs under it, one line each (the agent has those bodies, or can ask).
+					const entry = yield* find(all, id);
+					const above = ancestors(all, entry);
+					const line = (other: Entry) => `${other.id} ${other.title} (${other.status})`;
+					const followUps = all.filter((other) => other.parent === id);
+					return [
+						...(above.length ? [`Under: ${above.map(line).join(" › ")}`] : []),
+						[
+							`# ${entry.id} ${entry.title}`,
+							`(${entry.status}; asked by the ${entry.asker}, answered by the ${answerer(entry)})`,
+							entry.question,
+							...(entry.answer === null ? [] : ["## Answer", entry.answer]),
+						].join("\n\n"),
+						...(followUps.length ? [`Follow-ups: ${followUps.map(line).join("; ")}`] : []),
+					].join("\n\n---\n\n");
+				}),
 				reply: (drafts, delivery) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							// Apply every draft before writing anything, so a refusal leaves the desk (and its attachments) as it was.
 							// One message per session.
 							const plan = yield* Effect.reduce(
@@ -329,19 +336,19 @@ export class Desk extends Context.Service<
 									outboxes: new Map() as ReadonlyMap<SessionID, MessageID>,
 									uploads: [] as ReadonlyArray<Attachment>,
 								}),
-								(plan, draft) =>
-									Effect.gen(function* () {
-										const entry = yield* find(plan.next, draft.entry);
-										const message = plan.outboxes.get(entry.session) ?? SessionMessage.ID.create();
-										const uploads = yield* attachments(draft);
-										const reply = yield* replyTo(plan.next, draft, { message, delivery });
-										return {
-											next: replace(plan.next, reply),
-											outboxes: new Map(plan.outboxes).set(entry.session, message),
-											uploads: [...plan.uploads, ...uploads],
-										};
-									}),
+								Effect.fnUntraced(function* (plan, draft) {
+									const entry = yield* find(plan.next, draft.entry);
+									const message = plan.outboxes.get(entry.session) ?? SessionMessage.ID.create();
+									const uploads = yield* attachments(draft);
+									const reply = yield* replyTo(plan.next, draft, { message, delivery });
+									return {
+										next: replace(plan.next, reply),
+										outboxes: new Map(plan.outboxes).set(entry.session, message),
+										uploads: [...plan.uploads, ...uploads],
+									};
+								}),
 							);
+
 							// Store the files (all of them, or none: a failed transaction takes those already stored with it), then
 							// point the texts at them.
 							const links = new Map(
@@ -372,7 +379,7 @@ export class Desk extends Context.Service<
 					storage.transact((all, store) =>
 						// Delivery is never refused.
 						Effect.orDie(
-							each(
+							applyToEach(
 								store,
 								all.filter((entry) => entry.pending?.message === message),
 								Event.Delivered(),
@@ -380,11 +387,12 @@ export class Desk extends Context.Service<
 						),
 					),
 				discard: (id) =>
-					storage.transact((all, store) =>
-						Effect.gen(function* () {
+					storage.transact(
+						Effect.fnUntraced(function* (all, store) {
 							const { pending } = yield* find(all, id);
 							if (pending === null) return yield* new NothingUndelivered({ id });
-							yield* each(
+
+							yield* applyToEach(
 								store,
 								all.filter((entry) => entry.pending?.message === pending.message),
 								Event.Discard(),

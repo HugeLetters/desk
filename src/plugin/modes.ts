@@ -12,7 +12,7 @@ import { SessionID } from "../model/entry";
 import type { Connection } from "./connection";
 import * as Sessions from "./sessions";
 
-export type Context = Pick<Plugin.Context, "storage" | "session" | "location">;
+export interface Context extends Pick<Plugin.Context, "storage" | "session" | "location"> {}
 
 const prefix = "on/";
 const key = (root: SessionID) => `${prefix}${root}`;

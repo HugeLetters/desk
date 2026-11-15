@@ -19,13 +19,14 @@ export interface Message {
  * The messages to send now: those whose session is in desk mode. Out of it, the session has no desk tools to reply
  * with, so its messages wait as they do for a session no connected OpenCode knows.
  */
-export const due = (entries: ReadonlyArray<Entry>, deskMode: ReadonlySet<SessionID>): Array<Message> =>
+export const due = (entries: ReadonlyArray<Entry>, deskMode: ReadonlySet<SessionID>) =>
 	messages(entries).filter((message) => deskMode.has(message.session));
 
 export function messages(entries: ReadonlyArray<Entry>): Array<Message> {
 	const pending = entries.flatMap((entry) =>
 		entry.pending === null ? [] : [{ entry, message: entry.pending.message }],
 	);
+
 	// A message's entries are all one session's: one message per session per Submit.
 	return Object.values(Arr.groupBy(pending, ({ message }) => message)).map((group) => {
 		const { message: id, entry: first } = group[0];

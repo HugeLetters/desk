@@ -16,7 +16,7 @@ import * as Connection from "./connection";
 import type { Modes } from "./modes";
 import * as Sessions from "./sessions";
 
-export type Context = Pick<Plugin.Context, "tool" | "session">;
+export interface Context extends Pick<Plugin.Context, "tool" | "session"> {}
 
 const media =
 	"Markdown: text, code fences, ```mermaid diagrams, images and GIFs (![alt](path)), video (![alt](clip.mp4)). Link files by path relative to the session's directory, e.g. ![icon](design/icons/01.png).";
@@ -36,7 +36,7 @@ export interface Desk {
 const define = <Input extends Tool.ValueSchema>(info: Tool.Info<Input, undefined>): Tool.Info => info;
 
 /** The tools, for `ctx` and `desk`. */
-const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
+const tools = (ctx: Context, desk: Desk) => {
 	const { service } = desk.calls;
 	const { getRootSessionId } = desk;
 
@@ -192,6 +192,7 @@ export const register = Effect.fn("register")(function* (ctx: Context, desk: Des
 		for (const one of all) editor.add(one);
 	});
 	const names = all.map((one) => one.name);
+
 	// TODO main | shouldnt we instead call transform on each event and add or not add depending on `on`. keep registration dispose in sync ref which you dispose off when new registration happens | by Evgenii Perminov at Sun, 15 Nov 2026 18:12:26 GMT
 	yield* ctx.session.hook("context", (event) =>
 		Effect.map(

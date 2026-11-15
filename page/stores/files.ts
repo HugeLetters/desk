@@ -1,6 +1,5 @@
 /** The drafts' attachments, with object URLs for their previews; the files themselves wait in IndexedDB until sent. */
 import { createStore } from "solid-js/store";
-import type { Draft } from "../../src/api/api";
 import type { EntryId } from "../../src/model/entry";
 import * as Attachments from "../attachments";
 import type { Local } from "../markdown";
@@ -40,7 +39,7 @@ export const createFiles = (drafts: Drafts) => {
 	const local: Local = (id) => files[id];
 
 	/** A draft as sent: its text and the attachments it still references. */
-	const outgoing = async (draft: { entry: EntryId; text: string }): Promise<Draft> => ({
+	const outgoing = async (draft: { entry: EntryId; text: string }) => ({
 		...draft,
 		files: await Attachments.outgoing(draft.text, (id) => files[id]),
 	});

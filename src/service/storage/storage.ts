@@ -7,9 +7,6 @@
  * the entries as they are and nothing writes in between; `changes` says when to read again, whoever changed what;
  * attachments a failed change stored go with it; and nothing is read outside where it may be (an attachment outside
  * `attachments/`, a file outside an entry's directory).
- *
- * The store holds no state in memory beyond what its implementation is: the files implementation reads the files
- * every time, so edits made to them by anyone else are simply what the next read finds.
  */
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
@@ -102,7 +99,8 @@ export class Storage extends Context.Service<
 >()("desk/Storage") {
 	/**
 	 * The store's files in `root`. Takes the store's lock (`registration.ts`) for the layer's lifetime first, or fails
-	 * with `AlreadyRunning`. `rescan`: how often to read again regardless, should a file event get lost.
+	 * with `AlreadyRunning`.
+	 * @param rescan How often to read again regardless, should a file event get lost.
 	 */
 	static layer(root: string, rescan: Duration.Input = "5 seconds") {
 		return Layer.effect(Storage, Effect.flatMap(files(root, rescan), make));
@@ -115,62 +113,63 @@ export class Storage extends Context.Service<
 }
 
 /** Storage over `backend`: the lock, the change signal and the checks on where a read may go. */
-export const make = (backend: Backend) =>
-	Effect.gen(function* () {
-		const path = yield* Path.Path;
-		const lock = yield* Semaphore.make(1);
-		const ours = yield* PubSub.unbounded<void>();
-		/** The transaction's handle: what it attached is kept, to go again if the change fails. */
-		const handle = (attached: Ref.Ref<ReadonlyArray<string>>): Transaction => ({
-			write: backend.write,
-			remove: backend.remove,
-			attach: (name, data) => {
-				const extension = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]?.toLowerCase() ?? "bin";
-				const file = `attachments/${newId()}.${extension}`;
-				return backend
-					.attach(file, data)
-					.pipe(Effect.andThen(Ref.update(attached, (files) => [...files, file])), Effect.as(file));
-			},
-			detach: backend.detach,
-		});
-		/** Only what's directly in `attachments/`. */
-		const attachment = (file: string) => {
-			const normal = path.normalize(file);
-			return path.dirname(normal) === "attachments" ? backend.attachment(normal) : Effect.succeedNone;
-		};
+export const make = Effect.fn("Storage.make")(function* (backend: Backend) {
+	const path = yield* Path.Path;
+	const lock = yield* Semaphore.make(1);
+	const transacted = yield* PubSub.unbounded<void>();
 
-		return Storage.of({
-			entries: backend.load,
-			transact: (change) =>
-				lock
-					.withPermits(1)(
-						Effect.gen(function* () {
-							const attached = yield* Ref.make<ReadonlyArray<string>>([]);
-							const all = yield* backend.load;
-							return yield* change(all, handle(attached)).pipe(
-								Effect.onError(() => Effect.flatMap(Ref.get(attached), backend.detach)),
-							);
-						}),
-					)
-					.pipe(Effect.ensuring(PubSub.publish(ours, undefined))),
-			// Subscribed before the first signal, so a transaction right after it is never missed.
-			changes: Stream.unwrap(
-				Effect.map(PubSub.subscribe(ours), (subscription) =>
-					Stream.concat(
-						Stream.make(undefined),
-						Stream.mergeAll([Stream.fromSubscription(subscription), backend.changed], { concurrency: "unbounded" }),
-					),
+	/** The transaction's handle: what it attached is kept, to go again if the change fails. */
+	const handle = (attached: Ref.Ref<ReadonlyArray<string>>): Transaction => ({
+		write: backend.write,
+		remove: backend.remove,
+		attach: (name, data) => {
+			const extension = /\.([a-z0-9]{1,8})$/i.exec(name)?.[1]?.toLowerCase() ?? "bin";
+			const file = `attachments/${newId()}.${extension}`;
+			return backend
+				.attach(file, data)
+				.pipe(Effect.andThen(Ref.update(attached, (files) => [...files, file])), Effect.as(file));
+		},
+		detach: backend.detach,
+	});
+
+	/** Only what's directly in `attachments/`. */
+	const attachment = (file: string) => {
+		const normal = path.normalize(file);
+		return path.dirname(normal) === "attachments" ? backend.attachment(normal) : Effect.succeedNone;
+	};
+
+	return Storage.of({
+		entries: backend.load,
+		transact: (change) =>
+			lock
+				.withPermits(1)(
+					Effect.gen(function* () {
+						const attached = yield* Ref.make<ReadonlyArray<string>>([]);
+						const all = yield* backend.load;
+						return yield* change(all, handle(attached)).pipe(
+							Effect.onError(() => Effect.flatMap(Ref.get(attached), backend.detach)),
+						);
+					}),
+				)
+				.pipe(Effect.ensuring(PubSub.publish(transacted, undefined))),
+		// Subscribed before the first signal, so a transaction right after it is never missed.
+		changes: Stream.unwrap(
+			Effect.map(PubSub.subscribe(transacted), (subscription) =>
+				Stream.concat(
+					Stream.make(undefined),
+					Stream.mergeAll([Stream.fromSubscription(subscription), backend.changed], { concurrency: "unbounded" }),
 				),
 			),
-			attachment,
-			attachmentUrl: backend.attachmentUrl,
-			file: (directory, below) => {
-				const file = path.resolve(directory, below);
-				const inside = path.relative(directory, file);
-				return inside.startsWith("..") || path.isAbsolute(inside)
-					? Effect.fail(new Outside({ path: file }))
-					: backend.file(file);
-			},
-			publish: backend.publish,
-		});
+		),
+		attachment,
+		attachmentUrl: backend.attachmentUrl,
+		file: (directory, below) => {
+			const file = path.resolve(directory, below);
+			const inside = path.relative(directory, file);
+			return inside.startsWith("..") || path.isAbsolute(inside)
+				? Effect.fail(new Outside({ path: file }))
+				: backend.file(file);
+		},
+		publish: backend.publish,
 	});
+});

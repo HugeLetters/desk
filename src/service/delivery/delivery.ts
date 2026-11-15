@@ -56,6 +56,7 @@ export class Failures extends Context.Service<
 				set: (outbox, reason) =>
 					SubscriptionRef.update(failures, (all) => {
 						if (all.get(outbox) === reason) return all;
+
 						const next = new Map(all);
 						if (reason === undefined) next.delete(outbox);
 						else next.set(outbox, reason);
@@ -119,10 +120,11 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const failures = yield* Failures;
 
 			/** Sends the message with id `id` as the files have it now: what came of it. */
-			const send = (id: MessageID) =>
-				Effect.gen(function* () {
+			const send = Effect.fn("send")(
+				function* (id: MessageID) {
 					const message = messages(yield* desk.entries).find((one) => one.id === id);
 					if (message === undefined) return Event.Delivered();
+
 					const files = yield* Effect.forEach(message.files, ({ file, name }) =>
 						Effect.map(storage.attachmentUrl(file), (uri) => ({ uri, name })),
 					);
@@ -134,11 +136,12 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 						files,
 					});
 					if (!sent) return Event.Unknown();
+
 					yield* desk.delivered(message.id);
 					return Event.Delivered();
-				}).pipe(
-					Effect.catch((failure) => Effect.as(Effect.logWarning(deliveryFailed(failure)), Event.Failed({ failure }))),
-				);
+				},
+				Effect.catch((failure) => Effect.as(Effect.logWarning(deliveryFailed(failure)), Event.Failed({ failure }))),
+			);
 
 			const machine = (id: MessageID): Machine.Machine<State, Event> => ({
 				initial: State.Sending(),
@@ -160,6 +163,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 					}
 				},
 			});
+
 			/** One message's machine, until it's delivered. */
 			const deliver = (id: MessageID) =>
 				Effect.scoped(
@@ -187,6 +191,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 							(id) => FiberMap.remove(running, id),
 							{ discard: true },
 						);
+
 						// Messages that left the outbox (delivered, or their entry went) have nothing to report.
 						yield* failures.retain(new Set(messages(entries).map((message) => message.id)));
 					}),

@@ -31,11 +31,16 @@ const Guard = HttpRouter.middleware(
 			const request = yield* HttpServerRequest.HttpServerRequest;
 			const host = request.headers.host ?? "";
 			const origin = request.headers.origin;
-			if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) return HttpServerResponse.text("wrong host", { status: 421 });
+			if (!/^(127\.0\.0\.1|localhost):\d+$/.test(host)) {
+				return HttpServerResponse.text("wrong host", { status: 421 });
+			}
+
 			// Browsers send an Origin with every write and every WebSocket upgrade; a plugin, not being one, sends none.
 			const upgrade = request.headers.upgrade?.toLowerCase() === "websocket";
-			if ((request.method !== "GET" || upgrade) && origin !== undefined && origin !== `http://${host}`)
+			if ((request.method !== "GET" || upgrade) && origin !== undefined && origin !== `http://${host}`) {
 				return HttpServerResponse.text("forbidden", { status: 403 });
+			}
+
 			return yield* app;
 		}),
 	{ global: true },
@@ -60,13 +65,16 @@ const matches = (ifNoneMatch: string, etag: string) =>
 	});
 
 /** `/files/<entry id>/<path>`: a file below the entry's directory, never outside it. */
-const Files = HttpRouter.add("GET", "/files/:id/*", () =>
+const Files = HttpRouter.add(
+	"GET",
+	"/files/:id/*",
 	Effect.gen(function* () {
 		const desk = yield* Desk;
 		const storage = yield* Storage;
 		const { id, "*": below = "" } = yield* HttpRouter.params;
 		const entry = (yield* desk.entries).find((candidate) => candidate.id === id);
 		if (!entry) return HttpServerResponse.text("no such entry", { status: 404 });
+
 		return yield* storage.file(entry.directory, below).pipe(
 			Effect.map(Option.match({ onNone: () => HttpServerResponse.text("not found", { status: 404 }), onSome: send })),
 			Effect.catchTag("Outside", () =>
@@ -80,13 +88,16 @@ const Files = HttpRouter.add("GET", "/files/:id/*", () =>
  * `/attachments/<file>`: an attachment the user sent, as its entry links it. As static files are served: ranges
  * advertised, and a 304 for a copy the browser already has.
  */
-const Attachments = HttpRouter.add("GET", "/attachments/*", () =>
+const Attachments = HttpRouter.add(
+	"GET",
+	"/attachments/*",
 	Effect.gen(function* () {
 		const storage = yield* Storage;
 		const request = yield* HttpServerRequest.HttpServerRequest;
 		const { "*": file = "" } = yield* HttpRouter.params;
 		const content = yield* storage.attachment(`attachments/${file}`);
 		if (Option.isNone(content)) return HttpServerResponse.empty({ status: 404 });
+
 		const etag = etagOf(content.value);
 		const ifNoneMatch = request.headers["if-none-match"];
 		return ifNoneMatch !== undefined && matches(ifNoneMatch, etag)
@@ -103,7 +114,7 @@ export const layer = (outdated?: Effect.Effect<boolean, never, FileSystem.FileSy
 	Layer.unwrap(
 		Effect.gen(function* () {
 			const path = yield* Path.Path;
-			const page = yield* path.fromFileUrl(new URL("../../../page/dist", import.meta.url));
+			const page = path.resolve(import.meta.dir, "../../../page/dist");
 			return HttpRouter.serve(
 				Layer.mergeAll(
 					Guard,

@@ -31,6 +31,7 @@ import { SessionMessage } from "@opencode/schema/session-message";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type { Identity } from "../shared/type";
 
 /** An entry's id: a random UUID. Parsed where it comes in (a file name, a request), trusted past that. */
 export const EntryId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("EntryId"));
@@ -66,8 +67,10 @@ export function ordered<E extends Pick<Entry, "id" | "parent" | "priority" | "cr
 		entry,
 	];
 	const walked = byCreated.filter((entry) => !entries.some((other) => other.id === entry.parent)).flatMap(postOrder);
+
 	// Entries in a cycle of parents (only a hand-edited file makes one) have no root to be walked from: last.
 	const seen = new Set(walked);
+
 	// The sort is stable: within a priority, the walk's order.
 	return [...walked, ...byCreated.filter((entry) => !seen.has(entry))].sort(
 		(a, b) => rank[a.priority] - rank[b.priority],
@@ -86,7 +89,7 @@ export const Status = Schema.Literals(["open", "answered", "resolved"]);
  * Entries sharing a message go out together, as one.
  */
 export const Pending = Schema.Struct({ message: MessageID, delivery: Delivery });
-export type Pending = typeof Pending.Type;
+export interface Pending extends Identity<typeof Pending.Type> {}
 
 const Fields = {
 	/** An entry's parent, once set, never changes; a top-level entry may be adopted once (never into its own subtree): no cycles, no orphans. */
@@ -117,7 +120,7 @@ export const Entry = Schema.Struct({
 	question: Schema.String,
 	answer: Schema.NullOr(Schema.String),
 });
-export type Entry = typeof Entry.Type;
+export interface Entry extends Identity<typeof Entry.Type> {}
 
 const decodeHeader = Schema.decodeUnknownOption(Header);
 const decodeId = Schema.decodeUnknownOption(EntryId);
@@ -133,7 +136,7 @@ export const waitingOn = (entry: Pick<Entry, "asker" | "status">): Party | null 
 	entry.status === "resolved" ? null : entry.status === "open" ? answerer(entry) : entry.asker;
 
 /** The entries waiting on `party`, in the desk's order: the page's two groups and its project counts. */
-export const waitingFor = (entries: ReadonlyArray<Entry>, party: Party): Array<Entry> =>
+export const waitingFor = (entries: ReadonlyArray<Entry>, party: Party) =>
 	ordered(entries).filter((entry) => waitingOn(entry) === party);
 
 /**
@@ -259,6 +262,7 @@ export function serialize(entry: Entry): string {
 export function parse(id: EntryId, text: string): Option.Option<Entry> {
 	const match = /^---\n([\s\S]*?)\n---\n+# (.*)\n?([\s\S]*)$/.exec(text);
 	if (!match) return Option.none();
+
 	const [, head, title, body] = match as unknown as [string, string, string, string];
 	const [question, answer] = body.split(answerMarker);
 	return Option.map(decodeHeader(Bun.YAML.parse(head)), ({ outbox, delivery, ...header }) => ({

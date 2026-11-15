@@ -8,12 +8,8 @@
  *   connected, so the TUI part never talks to the service itself.
  *
  * For the service, it's also the way into this OpenCode (`sessions.ts`): it looks sessions up and delivers the user's
- * replies here when the service asks, and tells the service about sessions that move.
- *
- * Options (`opencode.json` `plugins: [{ package, options }]`, read by `settings.ts`): `home` (the store, default
- * `$DESK_HOME` or `~/.local/share/desk`), `port` (the service's: the page's and the API's, default `$DESK_PORT` or
- * 47400) and `timeout` (how long a desk call may take before the agent is told the service seems stuck; default 30
- * seconds).
+ * replies here when the service asks, and tells the service about sessions that move. Its options are the settings
+ * (`settings.ts`).
  */
 
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -33,8 +29,8 @@ import * as Tools from "./tools";
 
 export default Plugin.define<Scope.Scope>({
 	id: "desk",
-	effect: (ctx) =>
-		Effect.gen(function* () {
+	effect: Effect.fnUntraced(
+		function* (ctx) {
 			const store = yield* Settings.store;
 			const port = yield* Settings.port;
 			const files = yield* ServiceInfo.files(store);
@@ -67,5 +63,7 @@ export default Plugin.define<Scope.Scope>({
 			yield* Command.register(ctx, { calls, modes, sync });
 			yield* Tools.register(ctx, { calls, modes, getRootSessionId });
 			yield* Badge.register(ctx, connection);
-		}).pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
+		},
+		(effect, ctx) => effect.pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
+	),
 });

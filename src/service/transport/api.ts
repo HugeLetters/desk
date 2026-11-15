@@ -58,48 +58,49 @@ export class Api extends Context.Service<
 				const failures = yield* Failures;
 
 				/** `session`'s desk: `session` is a top-level session's id (the page's URL). */
-				const view = (session: string | undefined, entries: ReadonlyArray<Entry>) =>
-					Effect.gen(function* () {
-						const bySession = Arr.groupBy(entries, (entry): string => entry.session);
-						const name = (id: string, mine: ReadonlyArray<Entry>) =>
-							Effect.map(
-								// The folder its latest entry was asked from, for a session OpenCode doesn't know.
-								sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
-								(name) => ({ session: id, ...name }),
-							);
-						const deskMode = yield* opencode.inDeskMode;
-						// A desk is a session's entries; a session in desk mode has one even before its first entry, so it's
-						// listed from the start (empty), and one with unresolved entries stays listed after it leaves desk mode.
-						const groups: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]> = [
-							...Object.entries(bySession),
-							...deskMode.filter((id) => !(id in bySession)).map((id) => [id, []] as const),
-						];
-						const desks = yield* Effect.forEach(groups, ([id, mine]) =>
-							Effect.map(name(id, mine), (named) => {
-								const waiting = waitingFor(mine, "user");
-								return {
-									...named,
-									waiting: waiting.length,
-									critical: waiting.filter((entry) => entry.priority === "critical").length,
-								};
-							}),
+				const view = Effect.fn("view")(function* (session: string | undefined, entries: ReadonlyArray<Entry>) {
+					const bySession = Arr.groupBy(entries, (entry): string => entry.session);
+					const name = (id: string, mine: ReadonlyArray<Entry>) =>
+						Effect.map(
+							// The folder its latest entry was asked from, for a session OpenCode doesn't know.
+							sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
+							(name) => ({ session: id, ...name }),
 						);
-						const all = {
-							desks: desks.sort((a, b) => a.title.localeCompare(b.title) || a.folder.localeCompare(b.folder)),
-							deskMode,
-							failures: Object.fromEntries(yield* failures.current),
-						};
-						if (session === undefined) return { desk: null, entries: [], ...all } satisfies View;
-						const mine: ReadonlyArray<Entry> = bySession[session] ?? [];
-						const listed = desks.find((other) => other.session === session);
-						return {
-							desk: listed
-								? { session, title: listed.title, folder: listed.folder, known: listed.known }
-								: yield* name(session, mine),
-							entries: mine,
-							...all,
-						} satisfies View;
-					});
+					const deskMode = yield* opencode.inDeskMode;
+
+					// A desk is a session's entries; a session in desk mode has one even before its first entry, so it's
+					// listed from the start (empty), and one with unresolved entries stays listed after it leaves desk mode.
+					const groups: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]> = [
+						...Object.entries(bySession),
+						...deskMode.filter((id) => !(id in bySession)).map((id) => [id, []] as const),
+					];
+					const desks = yield* Effect.forEach(groups, ([id, mine]) =>
+						Effect.map(name(id, mine), (named) => {
+							const waiting = waitingFor(mine, "user");
+							return {
+								...named,
+								waiting: waiting.length,
+								critical: waiting.filter((entry) => entry.priority === "critical").length,
+							};
+						}),
+					);
+					const all = {
+						desks: desks.sort((a, b) => a.title.localeCompare(b.title) || a.folder.localeCompare(b.folder)),
+						deskMode,
+						failures: Object.fromEntries(yield* failures.current),
+					};
+					if (session === undefined) return { desk: null, entries: [], ...all } satisfies View;
+
+					const mine: ReadonlyArray<Entry> = bySession[session] ?? [];
+					const listed = desks.find((other) => other.session === session);
+					return {
+						desk: listed
+							? { session, title: listed.title, folder: listed.folder, known: listed.known }
+							: yield* name(session, mine),
+						entries: mine,
+						...all,
+					} satisfies View;
+				});
 
 				return Api.of({
 					url,
@@ -115,11 +116,10 @@ export class Api extends Context.Service<
 					prioritize: ({ id, priority, subtree }) => Effect.asVoid(desk.prioritize(id, priority, subtree)),
 					list: ({ session, id }) => desk.describe(id, session),
 					page: ({ session }) => Effect.succeed({ url: link(url, deskPath(session)) }),
-					claim: ({ by, from }) =>
-						Effect.gen(function* () {
-							if ((yield* opencode.inDeskMode).includes(from)) return yield* new DeskInUse({ session: from });
-							return yield* desk.claim(by.session, from);
-						}),
+					claim: Effect.fnUntraced(function* ({ by, from }) {
+						if ((yield* opencode.inDeskMode).includes(from)) return yield* new DeskInUse({ session: from });
+						return yield* desk.claim(by.session, from);
+					}),
 					view: (session) =>
 						Stream.mergeAll(
 							[

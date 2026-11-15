@@ -15,7 +15,7 @@ import * as Stream from "effect/Stream";
 import { statuses } from "../src/plugin/badge";
 import { off, type Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
-import { at, count, report, withFirstStatus, withStatus } from "../src/tui/badge";
+import { count, report, statusAt, withFirstStatus, withStatus } from "../src/tui/badge";
 import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, startService } from "./support/service";
@@ -146,20 +146,20 @@ test("statuses per location: a session's badge uses its location's, the latest e
 		live: { url: "http://127.0.0.1:47400/", desks: [{ session: "ses_a", waiting, critical: 0 }], deskMode: ["ses_a"] },
 	});
 	const a = withStatus(withStatus({}, "/work/a", live(1)), "/work/b", off);
-	expect(at(a, "/work/a")).toEqual(live(1));
-	expect(at(a, "/work/b")).toEqual(off);
+	expect(statusAt(a, "/work/a")).toEqual(live(1));
+	expect(statusAt(a, "/work/b")).toEqual(off);
 	// Not asked yet, or not loaded: nothing.
-	expect(at(a, "/work/c")).toBeUndefined();
-	expect(at(a, undefined)).toBeUndefined();
-	expect(at(a, "constructor")).toBeUndefined();
+	expect(statusAt(a, "/work/c")).toBeUndefined();
+	expect(statusAt(a, undefined)).toBeUndefined();
+	expect(statusAt(a, "constructor")).toBeUndefined();
 	// Each location's its own: ses_a's desk shows from /work/a's instance, not /work/b's.
-	expect(report(at(a, "/work/a"), "ses_a")?.count).toEqual({ waiting: 1, critical: 0 });
-	expect(report(at(a, "/work/b"), "ses_a")).toBeUndefined();
+	expect(report(statusAt(a, "/work/a"), "ses_a")?.count).toEqual({ waiting: 1, critical: 0 });
+	expect(report(statusAt(a, "/work/b"), "ses_a")).toBeUndefined();
 	// An event replaces a location's status.
 	const b = withStatus(a, "/work/a", live(2));
-	expect(at(b, "/work/a")).toEqual(live(2));
-	expect(at(a, "/work/a")).toEqual(live(1));
+	expect(statusAt(b, "/work/a")).toEqual(live(2));
+	expect(statusAt(a, "/work/a")).toEqual(live(1));
 	// The first answer for a location counts only if no event came first.
-	expect(at(withFirstStatus(b, "/work/a", off), "/work/a")).toEqual(live(2));
-	expect(at(withFirstStatus(b, "/work/c", live(3)), "/work/c")).toEqual(live(3));
+	expect(statusAt(withFirstStatus(b, "/work/a", off), "/work/a")).toEqual(live(2));
+	expect(statusAt(withFirstStatus(b, "/work/c", live(3)), "/work/c")).toEqual(live(3));
 });

@@ -8,7 +8,7 @@ import * as Option from "effect/Option";
 import type { Calls } from "./calls";
 import type { Modes } from "./modes";
 
-export type Context = Pick<Plugin.Context, "command" | "session">;
+export interface Context extends Pick<Plugin.Context, "command" | "session"> {}
 
 export interface Desk {
 	readonly calls: Calls;

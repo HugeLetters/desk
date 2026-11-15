@@ -26,9 +26,10 @@ import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
 import { OpenCode } from "../../src/service/opencode/opencode";
 import { Api } from "../../src/service/transport/api";
+import type { Identity } from "../../src/shared/type";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 
-export type Service = Awaited<ReturnType<typeof startService>>;
+export interface Service extends Identity<Awaited<ReturnType<typeof startService>>> {}
 
 type Request = Exclude<keyof Connection.Client, "hello" | "attach" | "reply">;
 type Answer<Tag extends Request> = Effect.Success<ReturnType<Connection.Client[Tag]>>;

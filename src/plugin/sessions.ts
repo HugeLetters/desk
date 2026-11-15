@@ -36,7 +36,7 @@ export type Failure = SessionNotFound | OpenCodeError;
 const typed = (error: unknown): Failure =>
 	notFound(error) ? error : new OpenCodeError({ message: errorMessage(error), cause: error });
 
-export type Context = Pick<Plugin.Context, "session">;
+export interface Context extends Pick<Plugin.Context, "session"> {}
 
 /** `ctx.session.get`, failing with a {@link Failure}. */
 export const get = (ctx: Context, sessionID: SessionID) => ctx.session.get({ sessionID }).pipe(Effect.mapError(typed));

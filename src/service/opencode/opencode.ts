@@ -86,12 +86,16 @@ export class OpenCode extends Context.Service<
 				const moved = yield* PubSub.unbounded<SessionID>();
 				const joined = yield* PubSub.unbounded<void>();
 				const count = (all: ReadonlyArray<Attached>) => all.length;
+
 				// Instances of one OpenCode report the same sessions, so they're counted once.
-				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> =>
+				const inDeskMode = (all: ReadonlyArray<Attached>) =>
 					[...new Set(all.flatMap((attached) => attached.deskMode))].sort();
 				const sameSessions = Arr.makeEquivalence(Equivalence.strictEqual<SessionID>());
 
-				type Found = { readonly client: Client | undefined; readonly lookup: Lookup };
+				interface Found {
+					readonly client: Client | undefined;
+					readonly lookup: Lookup;
+				}
 				/** Asks `clients` in turn; `unreachable`: one asked before couldn't answer. */
 				const ask = (
 					sessionID: SessionID,
@@ -111,6 +115,7 @@ export class OpenCode extends Context.Service<
 						}),
 					);
 				};
+
 				/** The first attached client that knows the session. One that can't answer is skipped, and remembered. */
 				const find = (sessionID: SessionID) =>
 					Effect.flatMap(SubscriptionRef.get(state), (all) => ask(sessionID, all, false));

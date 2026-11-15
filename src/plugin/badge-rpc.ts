@@ -8,10 +8,11 @@
  */
 import { Rpc } from "@opencode/schema/rpc";
 import * as Schema from "effect/Schema";
+import type { Identity } from "../shared/type";
 
 /** A desk: how many entries wait on the user, and how many of those are critical. */
 export const Desk = Schema.Struct({ session: Schema.String, waiting: Schema.Int, critical: Schema.Int });
-export type Desk = typeof Desk.Type;
+export interface Desk extends Identity<typeof Desk.Type> {}
 
 /** What a connected plugin instance knows: the service's page and the desks' summary. */
 export const Live = Schema.Struct({
@@ -21,11 +22,11 @@ export const Live = Schema.Struct({
 	/** The top-level sessions in desk mode, in every OpenCode. */
 	deskMode: Schema.Array(Schema.String),
 });
-export type Live = typeof Live.Type;
+export interface Live extends Identity<typeof Live.Type> {}
 
 /** A plugin instance's status: `live` is null while it isn't connected to the service (no badge). */
 export const Status = Schema.Struct({ live: Schema.NullOr(Live) });
-export type Status = typeof Status.Type;
+export interface Status extends Identity<typeof Status.Type> {}
 
 /** Not connected. */
 export const off: Status = { live: null };
