@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { SessionNotFoundError } from "@opencode/protocol/errors";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
@@ -71,7 +72,7 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 					const session = sessions.find((candidate) => candidate.id === sessionID);
 					return session
 						? Effect.succeed(session)
-						: Effect.fail({ _tag: "SessionNotFoundError", sessionID, message: `Session not found: ${sessionID}` });
+						: Effect.fail(new SessionNotFoundError({ sessionID, message: `Session not found: ${sessionID}` }));
 				}),
 			synthetic: (input: { sessionID: string; text: string; description?: string }) =>
 				Effect.sync(() => void synthetic.push(input)),

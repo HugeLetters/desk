@@ -3,26 +3,23 @@
  * desk it asks on), and the service's calls into this OpenCode (`serve`).
  */
 import type { Plugin } from "@opencode/plugin/effect";
+import { SessionNotFoundError } from "@opencode/protocol/errors";
 import * as Cache from "effect/Cache";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { Prompt, SessionInfo } from "../api/api";
 import type { SessionID } from "../model/entry";
-import type { Identity } from "../shared/type";
 import { errorMessage } from "./connection";
 
-// TODO main | why not use (`SessionNotFoundError`, `@opencode/protocol/errors`? | by Evgenii Perminov at Sun, 15 Nov 2026 15:38:08 GMT
 /**
- * OpenCode saying it doesn't know a session. Its own class (`SessionNotFoundError`, `@opencode/protocol/errors`) isn't
- * a dependency of the desk, and `Schema.is` of a class wants an instance of that very class; this matches the error's
- * tag, which holds however it was made.
+ * OpenCode saying it doesn't know a session, as {@link SessionNotFoundError}: decoded rather than checked with
+ * `instanceof`, so one made by OpenCode's own copy of the class (or as a plain object) becomes this one.
  */
-const SessionNotFound = Schema.TaggedStruct("SessionNotFoundError", { message: Schema.String });
-export interface SessionNotFound extends Identity<typeof SessionNotFound.Type> {}
-export const notFound = Schema.is(SessionNotFound);
+const asNotFound = Schema.decodeUnknownOption(SessionNotFoundError);
 
 /** OpenCode failed for another reason than not knowing the session; `cause` is what it failed with. */
 export class OpenCodeError extends Data.TaggedError("OpenCodeError")<{
@@ -31,10 +28,10 @@ export class OpenCodeError extends Data.TaggedError("OpenCodeError")<{
 }> {}
 
 /** What OpenCode's session calls fail with: the plugin API types it `unknown`, this tells its not-found apart. */
-export type Failure = SessionNotFound | OpenCodeError;
+export type Failure = SessionNotFoundError | OpenCodeError;
 
 const typed = (error: unknown): Failure =>
-	notFound(error) ? error : new OpenCodeError({ message: errorMessage(error), cause: error });
+	Option.getOrElse(asNotFound(error), (): Failure => new OpenCodeError({ message: errorMessage(error), cause: error }));
 
 export interface Context extends Pick<Plugin.Context, "session"> {}
 
