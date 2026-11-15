@@ -32,9 +32,11 @@ export class AlreadyRunning extends Data.TaggedError("AlreadyRunning")<{
 	readonly pid: number;
 }> {}
 
-/** Whether a process exists. Effect has no way to ask, so this is `kill(pid, 0)`. */
-// TODO main | why asking whether a process is alive kills it?.. | by Evgenii Perminov at Sun, 15 Nov 2026 18:52:37 GMT
-const alive = (pid: number) => {
+/**
+ * Whether a process exists. Effect has no way to ask, so this is `kill(pid, 0)`: signal 0 delivers nothing, the kernel
+ * only checks that the process is there and may be signalled.
+ */
+const exists = (pid: number) => {
 	try {
 		process.kill(pid, 0);
 		return true;
@@ -132,7 +134,7 @@ export const register = (store: string) => {
 			yield* fs.writeFileString(temp, yield* ServiceInfo.encode(own));
 			yield* fs.link(temp, path).pipe(Effect.ensuring(Effect.ignore(fs.remove(temp))));
 		});
-		const exists = (error: unknown) => {
+		const alreadyExists = (error: unknown) => {
 			return PlatformError.isPlatformError(error) && error.reason?._tag === "AlreadyExists";
 		};
 		/**
@@ -144,7 +146,7 @@ export const register = (store: string) => {
 		const replace = Effect.gen(function* () {
 			const made = yield* fs.makeDirectory(takeover).pipe(
 				Effect.as(true),
-				Effect.catchIf(exists, () => Effect.succeed(false)),
+				Effect.catchIf(alreadyExists, () => Effect.succeed(false)),
 			);
 			if (!made) {
 				const left = yield* fs.stat(takeover).pipe(Effect.option);
@@ -155,7 +157,7 @@ export const register = (store: string) => {
 			}
 			yield* Effect.addFinalizer(() => Effect.ignore(fs.remove(takeover, { recursive: true })));
 			const holder = yield* read;
-			if (holder && alive(holder.pid)) return Event.Held({ pid: holder.pid });
+			if (holder && exists(holder.pid)) return Event.Held({ pid: holder.pid });
 			yield* fs.remove(path, { force: true });
 			yield* create;
 			return Event.Created();
@@ -168,11 +170,11 @@ export const register = (store: string) => {
 					case "Creating":
 						return Effect.andThen(fs.makeDirectory(store, { recursive: true }), create).pipe(
 							Effect.as(Event.Created()),
-							Effect.catchIf(exists, () => Effect.succeed(Event.Exists())),
+							Effect.catchIf(alreadyExists, () => Effect.succeed(Event.Exists())),
 						);
 					case "Checking":
 						return Effect.map(read, (holder) =>
-							holder && alive(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
+							holder && exists(holder.pid) ? Event.Held({ pid: holder.pid }) : Event.Stale(),
 						);
 					case "Replacing":
 						return replace;

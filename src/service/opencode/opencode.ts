@@ -7,9 +7,11 @@
  * the service needs no endpoint or password, and a session is reachable exactly while a plugin instance of an
  * OpenCode that knows it is connected. Tests attach fakes.
  */
+import * as Arr from "effect/Array";
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
+import * as Equivalence from "effect/Equivalence";
 import * as Layer from "effect/Layer";
 import * as PubSub from "effect/PubSub";
 import type * as Scope from "effect/Scope";
@@ -87,9 +89,7 @@ export class OpenCode extends Context.Service<
 				// Instances of one OpenCode report the same sessions, so they're counted once.
 				const inDeskMode = (all: ReadonlyArray<Attached>): ReadonlyArray<SessionID> =>
 					[...new Set(all.flatMap((attached) => attached.deskMode))].sort();
-				// TODO main | Equivalence.Array? | by Evgenii Perminov at Sun, 15 Nov 2026 18:47:31 GMT
-				const sameSessions = (a: ReadonlyArray<SessionID>, b: ReadonlyArray<SessionID>) =>
-					a.length === b.length && a.every((session, index) => session === b[index]);
+				const sameSessions = Arr.makeEquivalence(Equivalence.strictEqual<SessionID>());
 
 				type Found = { readonly client: Client | undefined; readonly lookup: Lookup };
 				/** Asks `clients` in turn; `unreachable`: one asked before couldn't answer. */
