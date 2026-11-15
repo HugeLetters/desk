@@ -47,6 +47,7 @@ import {
 	WouldCycle,
 } from "../model/errors";
 import { Event, reconcile } from "../model/lifecycle";
+import type { AbsolutePath } from "../model/paths";
 import { Storage, type Transaction } from "./storage/storage";
 
 type Entries = ReadonlyArray<Entry>;
@@ -64,7 +65,7 @@ export interface Question {
 /** Who asks: the top-level session (the plugin walks up from a subagent's), and where it works. */
 export interface Asker {
 	readonly session: SessionID;
-	readonly directory: string;
+	readonly directory: AbsolutePath;
 }
 
 /**

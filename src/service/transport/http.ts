@@ -21,7 +21,9 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
 import * as Runtime from "effect/Runtime";
+import * as Schema from "effect/Schema";
 import { host } from "../../api/routes";
+import { type Port, RelativePath } from "../../model/paths";
 import { Desk } from "../desk";
 import { type Content, Storage } from "../storage/storage";
 import * as Rpc from "./rpc";
@@ -68,6 +70,8 @@ const matches = (ifNoneMatch: string, etag: string) =>
 		return trimmed === "*" || trimmed.replace(/^W\//, "") === etag;
 	});
 
+const decodeRelative = Schema.decodeUnknownOption(RelativePath);
+
 /** `/files/<entry id>/<path>`: a file below the entry's directory, never outside it. */
 const Files = HttpRouter.add(
 	"GET",
@@ -75,16 +79,18 @@ const Files = HttpRouter.add(
 	Effect.gen(function* () {
 		const desk = yield* Desk;
 		const storage = yield* Storage;
-		const { id, "*": below = "" } = yield* HttpRouter.params;
+		const { id, "*": path = "" } = yield* HttpRouter.params;
 		const entry = (yield* desk.entries).find((candidate) => candidate.id === id);
 		if (!entry) return HttpServerResponse.text("no such entry", { status: 404 });
 
-		return yield* storage.file(entry.directory, below).pipe(
-			Effect.map(Option.match({ onNone: () => HttpServerResponse.text("not found", { status: 404 }), onSome: send })),
-			Effect.catchTag("Outside", () =>
-				Effect.succeed(HttpServerResponse.text("outside the entry's directory", { status: 403 })),
-			),
-		);
+		// Not a path below the directory (absolute, or climbing out of it): never read.
+		const below = decodeRelative(path);
+		if (Option.isNone(below)) return HttpServerResponse.text("outside the entry's directory", { status: 403 });
+
+		return Option.match(yield* storage.file(entry.directory, below.value), {
+			onNone: () => HttpServerResponse.text("not found", { status: 404 }),
+			onSome: send,
+		});
 	}),
 );
 
@@ -99,7 +105,8 @@ const Attachments = HttpRouter.add(
 		const storage = yield* Storage;
 		const request = yield* HttpServerRequest.HttpServerRequest;
 		const { "*": file = "" } = yield* HttpRouter.params;
-		const content = yield* storage.attachment(`attachments/${file}`);
+		const below = decodeRelative(`attachments/${file}`);
+		const content = Option.isSome(below) ? yield* storage.attachment(below.value) : Option.none();
 		if (Option.isNone(content)) return HttpServerResponse.empty({ status: 404 });
 
 		const etag = etagOf(content.value);
@@ -139,7 +146,7 @@ export const layer = (outdated?: Effect.Effect<boolean, never, FileSystem.FileSy
  * most a second for open requests: an open page's view stream never ends, so otherwise the service couldn't stop while
  * a page is open (it would wait the server's default 20 seconds).
  */
-export const server = (port: number) =>
+export const server = (port: Port | 0) =>
 	Layer.effectContext(
 		Layer.build(BunHttpServer.layer({ port, hostname: host, gracefulShutdownTimeout: "1 second" })).pipe(
 			// Bun throws it as it starts to listen.
@@ -155,6 +162,6 @@ export const server = (port: number) =>
  * Another program listens on the port. The service doesn't take another: the page's address and the plugins' way
  * to the service are the port. Reported by whoever runs the service (`main.ts`), so not by the runtime as well.
  */
-export class PortTaken extends Data.TaggedError("PortTaken")<{ readonly port: number }> {
+export class PortTaken extends Data.TaggedError("PortTaken")<{ readonly port: Port | 0 }> {
 	override readonly [Runtime.errorReported] = false;
 }

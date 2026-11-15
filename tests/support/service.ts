@@ -20,6 +20,7 @@ import * as Scope from "effect/Scope";
 import { DeskApi } from "../../src/api/api";
 import { link, rpcPath } from "../../src/api/routes";
 import { Refusal } from "../../src/model/errors";
+import { Port } from "../../src/model/paths";
 import { refusal } from "../../src/model/wording";
 import * as Connection from "../../src/plugin/connection";
 import * as App from "../../src/service/app";
@@ -28,6 +29,7 @@ import { OpenCode } from "../../src/service/opencode/opencode";
 import { Api } from "../../src/service/transport/api";
 import type { Identity } from "../../src/shared/type";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
+import { D } from "./ids";
 
 export interface Service extends Identity<Awaited<ReturnType<typeof startService>>> {}
 
@@ -40,12 +42,12 @@ export async function startService(
 		store?: string;
 		idle?: number;
 		/** Default: any free one. */
-		port?: number;
+		port?: Port;
 		fake?: ReturnType<typeof fakeOpenCode>;
 		outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
 	} = {},
 ) {
-	const store = options.store ?? (await mkdtemp(join(tmpdir(), "desk-")));
+	const store = D(options.store ?? (await mkdtemp(join(tmpdir(), "desk-"))));
 	const fake = options.fake ?? fakeOpenCode();
 	const scope = Effect.runSync(Scope.make());
 	const services = (await Effect.runPromise(
@@ -60,8 +62,9 @@ export async function startService(
 			scope,
 		),
 	)) as Context.Context<Api | Clients | OpenCode>;
-	const url = Context.get(services, Api).url;
-	const port = Number(new URL(url).port);
+	// As a string: what the tests build their links from.
+	const url = Context.get(services, Api).url.href;
+	const port = Port.make(Number(new URL(url).port));
 	const plugins: Array<Scope.Closeable> = [];
 	const unwatch: Array<() => void> = [];
 	let blank = 0;
@@ -73,7 +76,7 @@ export async function startService(
 		fake,
 		services,
 		/** A plugin instance in the OpenCode `opencode` (default: one that knows no sessions), in `directory`. */
-		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), directory = "/work/default") {
+		plugin(opencode: FakeServer = fake.server(`blank-${++blank}`), directory = D("/work/default")) {
 			const held = Effect.runSync(Scope.make());
 			const live = Effect.runSync(
 				Scope.provide(
@@ -125,7 +128,7 @@ export async function startService(
 const client = RpcClient.make(DeskApi);
 
 /** The desk's API of the service whose page is at `url` (`http://127.0.0.1:<port>/`): its WebSocket, `/rpc`. */
-export const wsUrl = (url: string) => link(url, rpcPath).replace(/^http/, "ws");
+export const wsUrl = (url: string) => link(new URL(url), rpcPath).href.replace(/^http/, "ws");
 
 /**
  * Calls the API of the service at `url` (`http://127.0.0.1:<port>/`) over a WebSocket of its own, as the page does;

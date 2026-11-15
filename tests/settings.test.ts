@@ -5,7 +5,9 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import { Port } from "../src/model/paths";
 import * as Settings from "../src/shared/settings";
+import { D } from "./support/ids";
 
 /** What `Settings.layer` reads, with `env` as the whole environment: `options` over `DESK_<NAME>`. */
 const provider = (options: Record<string, unknown>, env: Record<string, string>) =>
@@ -24,27 +26,29 @@ const read = (options: Record<string, unknown>, env: Record<string, string>) =>
 
 test("options first, then DESK_HOME, DESK_PORT and DESK_TIMEOUT, then ~/.local/share/desk, 47400 and 30 seconds", async () => {
 	expect(await read({}, { HOME: "/home/me" })).toEqual({
-		store: "/home/me/.local/share/desk",
-		port: 47400,
+		store: D("/home/me/.local/share/desk"),
+		port: Port.make(47400),
 		timeout: Duration.seconds(30),
 	});
 	expect(
 		await read({}, { HOME: "/home/me", DESK_HOME: "/store", DESK_PORT: "47401", DESK_TIMEOUT: "2 seconds" }),
-	).toEqual({ store: "/store", port: 47401, timeout: Duration.seconds(2) });
+	).toEqual({ store: D("/store"), port: Port.make(47401), timeout: Duration.seconds(2) });
 	expect(
 		await read({ home: "/mine", port: 47402, timeout: "5 seconds" }, { HOME: "/home/me", DESK_HOME: "/store" }),
-	).toEqual({ store: "/mine", port: 47402, timeout: Duration.seconds(5) });
+	).toEqual({ store: D("/mine"), port: Port.make(47402), timeout: Duration.seconds(5) });
 	expect((await read({ timeout: 1500 }, { HOME: "/home/me" })).timeout).toEqual(Duration.millis(1500));
 });
 
-test("a leading ~ in the store is the user's home; a setting that isn't valid gives way to the default", async () => {
-	expect((await read({ home: "~/desk" }, { HOME: "/home/me" })).store).toBe("/home/me/desk");
-	expect((await read({ home: "~" }, { HOME: "/home/me" })).store).toBe("/home/me");
-	expect((await read({ home: "a/~b" }, { HOME: "/home/me" })).store).toBe("a/~b");
-	expect((await read({}, { HOME: "/home/me", DESK_HOME: "~/env" })).store).toBe("/home/me/env");
-	for (const port of [0, -1, 65536, 1.5]) expect((await read({ port }, { HOME: "/home/me" })).port).toBe(47400);
+test("a leading ~ in the store is the user's home; a setting that isn't valid (a relative store, say) gives way to the default", async () => {
+	expect((await read({ home: "~/desk" }, { HOME: "/home/me" })).store).toBe(D("/home/me/desk"));
+	expect((await read({ home: "~" }, { HOME: "/home/me" })).store).toBe(D("/home/me"));
+	expect((await read({ home: "/a/~b" }, { HOME: "/home/me" })).store).toBe(D("/a/~b"));
+	expect((await read({ home: "a/~b" }, { HOME: "/home/me" })).store).toBe(D("/home/me/.local/share/desk"));
+	expect((await read({}, { HOME: "/home/me", DESK_HOME: "~/env" })).store).toBe(D("/home/me/env"));
+	for (const port of [0, -1, 65536, 1.5])
+		expect((await read({ port }, { HOME: "/home/me" })).port).toBe(Port.make(47400));
 	expect(await read({ port: "nope", timeout: "soon" }, { HOME: "/home/me" })).toMatchObject({
-		port: 47400,
+		port: Port.make(47400),
 		timeout: Duration.seconds(30),
 	});
 });
@@ -56,7 +60,7 @@ test("an entry's layer puts the options and the environment in front of a provid
 			Effect.provide(Layer.provide(Settings.layer({ port: 2 }), outer)),
 		),
 	);
-	expect(settings.port).toBe(2);
+	expect(settings.port).toBe(Port.make(2));
 	if (process.env.DESK_TIMEOUT === undefined) expect(settings.timeout).toEqual(Duration.seconds(2));
 });
 

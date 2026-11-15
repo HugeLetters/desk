@@ -15,7 +15,7 @@ import {
 	waitingFor,
 	waitingOn,
 } from "../src/model/entry";
-import { E, M, S } from "./support/ids";
+import { D, E, M, S } from "./support/ids";
 import { present } from "./support/present";
 
 const id = E("5c0f9a1e-2b3d-4e5f-8a9b-0c1d2e00a7a7");
@@ -26,7 +26,7 @@ const entry: Entry = {
 	asker: "agent",
 	status: "answered",
 	session: S("ses_1"),
-	directory: "/work/phantom",
+	directory: D("/work/phantom"),
 	labels: ["design", "icons"],
 	priority: "normal",
 	created: "2026-11-07T16:30:00.000Z",
@@ -62,6 +62,22 @@ test("text still pending is in the header as its message (`outbox`) and delivery
 		`created: "2026-11-07T16:30:00.000Z"\noutbox: msg_01JX\ndelivery: steer\n---`,
 	);
 	expect<unknown>(parse(id, serialize(pending))).toEqual(Option.some(pending));
+});
+
+test("a file written before directories were checked still parses: its directory, quoted or not, is absolute", () => {
+	const header = (directory: string) =>
+		`---\nparent:\nasker: agent\nstatus: open\nsession: ses_1\ndirectory: ${directory}\nlabels: []\ncreated: "2026-11-07T16:30:00.000Z"\n---\n\n# Which icon?\n\nPick one.\n`;
+	for (const written of [
+		'"/Users/me/projects/phantom"',
+		"/Users/me/projects/phantom",
+		'"/Users/me/My Projects/fantôme"',
+	])
+		expect<unknown>(Option.map(parse(id, header(written)), (parsed) => parsed.directory)).toEqual(
+			Option.some(JSON.parse(written.startsWith('"') ? written : JSON.stringify(written))),
+		);
+
+	// Only a hand-edited file has a relative one: not an entry.
+	expect<unknown>(parse(id, header("projects/phantom"))).toEqual(Option.none());
 });
 
 test("files that aren't entries parse to None", () => {

@@ -22,6 +22,7 @@ import { DeskApi, type Outcome, Outdated, type ServiceCall } from "../../api/api
 import { build, protocol } from "../../api/protocol";
 import { rpcPath } from "../../api/routes";
 import type { SessionID } from "../../model/entry";
+import type { AbsolutePath } from "../../model/paths";
 import { Clients } from "../clients";
 import { type Client, OpenCode, Unanswered } from "../opencode/opencode";
 import { Sessions } from "../opencode/sessions";
@@ -73,10 +74,14 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 			const background = yield* FiberSet.make();
 
 			/** Looks the sessions up, so their desks are named (`Sessions`). */
-			const nameDesks = (inDeskMode: ReadonlyArray<SessionID>, directory: string) =>
+			const nameDesks = (inDeskMode: ReadonlyArray<SessionID>, directory: AbsolutePath | undefined) =>
 				Effect.forEach(inDeskMode, (session) => sessions.name(session, directory), { discard: true });
 
-			const attach = Effect.fn("attach")(function* (id: number, directory: string, sessions: ReadonlyArray<SessionID>) {
+			const attach = Effect.fn("attach")(function* (
+				id: number,
+				directory: AbsolutePath,
+				sessions: ReadonlyArray<SessionID>,
+			) {
 				const calls = yield* Queue.unbounded<ServiceCall>();
 				const waiting = yield* Ref.make<ReadonlyMap<number, Deferred.Deferred<Outcome>>>(new Map());
 
@@ -167,7 +172,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 					yield* opencode.modes(attached.client, sessions);
 
 					// In the background, as on attach: the lookups go out on the attachment's stream.
-					yield* FiberSet.run(background, nameDesks(sessions, ""));
+					yield* FiberSet.run(background, nameDesks(sessions, undefined));
 				}),
 				moved: ({ session }) => opencode.move(session),
 				ask: api.ask,

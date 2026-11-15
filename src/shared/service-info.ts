@@ -10,13 +10,14 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { AbsolutePath } from "../model/paths";
 import type { Identity } from "./type";
 
 export const Info = Schema.Struct({
 	pid: Schema.Int,
 	protocol: Schema.String,
 	/** Once the page is up. */
-	url: Schema.optional(Schema.String),
+	url: Schema.optional(Schema.URLFromString),
 });
 export interface Info extends Identity<typeof Info.Type> {}
 
@@ -27,17 +28,17 @@ export const encode = Schema.encodeEffect(Schema.fromJsonString(Info));
 
 /** Where the service's files are in `store`. */
 // TODO main | is that good that we have to pass store values from settings through so many layers instead of just reading config here? feels like it can backfire since you can just pass any string here so easy to mess up. shouldnt we just read config here instead? | by Evgenii Perminov at Sun, 15 Nov 2026 14:48:45 GMT
-export const files = (store: string) =>
+export const files = (store: AbsolutePath) =>
 	Effect.map(Path.Path, (path) => ({
 		/** The registration. */
-		registration: path.join(store, "service.json"),
+		registration: AbsolutePath.make(path.join(store, "service.json")),
 		/** The service's stdout and stderr, when a plugin started it. */
-		log: path.join(store, "service.log"),
+		log: AbsolutePath.make(path.join(store, "service.log")),
 	}));
 
 /** The registration in `store` now; none when there's no file or it isn't one. */
 // TODO main | same thin about reading store from config | by Evgenii Perminov at Sun, 15 Nov 2026 15:01:52 GMT
-export const read = Effect.fnUntraced(function* (store: string) {
+export const read = Effect.fnUntraced(function* (store: AbsolutePath) {
 	const fs = yield* FileSystem.FileSystem;
 	const { registration } = yield* files(store);
 	return yield* fs.readFileString(registration).pipe(Effect.flatMap(decode), Effect.option);

@@ -34,11 +34,11 @@ import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo 
 import { protocol } from "../api/protocol";
 import { host, rpcUrl } from "../api/routes";
 import type { SessionID } from "../model/entry";
+import type { AbsolutePath, Port } from "../model/paths";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
 import * as Process from "../shared/process";
 import * as ServiceInfo from "../shared/service-info";
-import type * as Settings from "../shared/settings";
 import type { Failure, OpenCodeError } from "./sessions";
 
 /** The service can't be reached, or won't take this plugin (the message says why). */
@@ -48,12 +48,12 @@ export interface Client extends RpcClient.FromGroup<typeof DeskApi, RpcClientErr
 
 /** `R`: what starting the service needs. */
 export interface Options<R = never> {
-	/** The service's port, on 127.0.0.1. */
-	readonly port: number;
+	/** The service's port, on {@link host}. */
+	readonly port: Port;
 	/** Starts the service; run when nothing listens on the port. */
 	readonly start: Effect.Effect<void, PlatformError.PlatformError, R>;
 	/** This plugin instance's directory. */
-	readonly directory: string;
+	readonly directory: AbsolutePath;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
 	readonly modes: Effect.Effect<ReadonlyArray<SessionID>>;
 	/** Answers the service's calls, in this OpenCode. */
@@ -77,7 +77,7 @@ export interface Options<R = never> {
 /** A live link: the service's API, and its page's URL from its answer to `hello`. */
 export interface Link {
 	readonly client: Client;
-	readonly url: string;
+	readonly url: URL;
 }
 
 export interface Connection {
@@ -91,8 +91,7 @@ export interface Connection {
 	/** The service's API if connected right now. */
 	readonly live: Effect.Effect<Option.Option<Client>>;
 	/** The page's URL, from the service's answer to `hello`. */
-	// TODO main | would be nice to stop using plain strings everywhere for stuff which isnt just a string semantically - urls/paths etc | by Evgenii Perminov at Sun, 15 Nov 2026 16:47:46 GMT
-	readonly url: Effect.Effect<string, DeskError>;
+	readonly url: Effect.Effect<URL, DeskError>;
 	/** The live link now (none while not connected), then each new one, and none whenever it drops. */
 	readonly links: Stream.Stream<Option.Option<Link>>;
 }
@@ -105,7 +104,7 @@ const sameLink = Option.makeEquivalence(
 export type State = Data.TaggedEnum<{
 	Off: Empty;
 	Connecting: Empty;
-	Live: { readonly client: Client; readonly url: string };
+	Live: { readonly client: Client; readonly url: URL };
 	/** Why the link dropped. */
 	Backoff: { readonly message: string };
 	Refused: { readonly message: string };
@@ -116,7 +115,7 @@ export type Event = Data.TaggedEnum<{
 	/** Whether this plugin instance needs the service ({@link Connection.needsConnection}). */
 	Need: { readonly needed: boolean };
 	/** The service answered `hello`. */
-	Hello: { readonly client: Client; readonly url: string };
+	Hello: { readonly client: Client; readonly url: URL };
 	/** The link ended: the service went, or couldn't be started or greeted. */
 	Dropped: { readonly message: string };
 	/** The service won't take this plugin: it's older. */
@@ -161,7 +160,7 @@ export const errorMessage = (error: unknown) =>
 			: String(error);
 
 /** What the agents are told while another program has `port`. */
-export const taken = (port: number) =>
+export const taken = (port: Port) =>
 	`Port ${port} is taken by another program, so the desk service can't run there. The user sets the desk plugin's port option (or DESK_PORT) to a free port and runs /reload; if it's an older desk service, they stop it instead.`;
 
 /**
@@ -183,7 +182,7 @@ const upgrades = (url: string) =>
 	);
 
 /** Whether something listens on `port` (on {@link host}): connects, and hangs up at once. */
-export const answering = (port: number) =>
+export const answering = (port: Port) =>
 	BunSocket.makeNet({ host, port }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
@@ -245,7 +244,7 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 										message: "This OpenCode's desk plugin is older than the desk service: run /reload.",
 									}),
 								),
-								Option.none<string>(),
+								Option.none<URL>(),
 							)
 						: // It's making way for a new one: start that next time round.
 							Effect.fail(
@@ -265,7 +264,7 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 								if (opened || !(yield* answering(options.port))) return yield* error;
 
 								yield* emit(Event.Taken({ message: taken(options.port) }));
-								return Option.none<string>();
+								return Option.none<URL>();
 							})
 						: Effect.fail(error),
 				),
@@ -298,7 +297,7 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 
 	/** What a request gets: the link once it's live, or why there's none; nothing yet while it's on its way. */
 	const awaitLink = actor.until(
-		(state): Option.Option<Effect.Effect<{ readonly client: Client; readonly url: string }, DeskError>> =>
+		(state): Option.Option<Effect.Effect<Link, DeskError>> =>
 			state._tag === "Live"
 				? Option.some(Effect.succeed(state))
 				: state._tag === "Off" || state._tag === "Refused"
@@ -325,10 +324,10 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 	return connection;
 });
 
-/** Where the service runs: its store and port, as the settings give them. */
+/** Where the service runs: its store and port, as the settings give them (`settings.ts`). */
 export interface Service {
-	readonly store: Effect.Success<typeof Settings.store>;
-	readonly port: Effect.Success<typeof Settings.port>;
+	readonly store: AbsolutePath;
+	readonly port: Port;
 }
 
 /**

@@ -4,6 +4,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
+import { AbsolutePath, Port } from "../model/paths";
 
 /** Untyped options record */
 export type Options = Readonly<Record<string, unknown>>;
@@ -42,8 +44,7 @@ const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 	);
 
 /**
- * Location of desk storage.
- * `~` is expanded
+ * Location of desk storage: an absolute path, or one from `~`, which is expanded.
  * @default `~/.local/share/desk`
  */
 export const store = Effect.gen(function* () {
@@ -55,18 +56,28 @@ export const store = Effect.gen(function* () {
 
 	// In a terminal the shell replaces `~` before a program sees it, but OpenCode hands over `opencode.json`'s strings
 	// as written: without this, `"home": "~/.local/share/desk"` would be a folder literally named `~` here.
-	const home = Config.map(Config.String("home"), (configured) =>
-		configured === "~" || configured.startsWith("~/") ? path.join(userHome, configured.slice(1)) : configured,
+	const Home = Schema.String.pipe(
+		Schema.decodeTo(
+			AbsolutePath,
+			SchemaTransformation.transform({
+				decode: (configured) =>
+					configured === "~" || configured.startsWith("~/") ? path.join(userHome, configured.slice(1)) : configured,
+				encode: (home) => home,
+			}),
+		),
 	);
-	return yield* setting("home", home, path.join(userHome, ".local", "share", "desk"));
+	return yield* setting(
+		"home",
+		Config.schema(Home, "home"),
+		AbsolutePath.make(path.join(userHome, ".local", "share", "desk")),
+	);
 });
 
 /**
- * Service port.
- * `0` is not allowed
+ * Service port, 1 to 65535.
  * @default 47400
  */
-export const port = setting("port", Config.Port("port"), 47400);
+export const port = setting("port", Config.schema(Port, "port"), Port.make(47400));
 
 /** Duration config */
 const duration = (name: string) =>

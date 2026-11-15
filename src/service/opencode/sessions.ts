@@ -14,6 +14,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { SessionID } from "../../model/entry";
+import type { AbsolutePath } from "../../model/paths";
 import { OpenCode, type SessionInfo } from "./opencode";
 
 /** A desk's name. */
@@ -42,7 +43,7 @@ export class Sessions extends Context.Service<
 	Sessions,
 	{
 		/** The name of `session`'s desk; `directory` is where its entries were asked from, for when OpenCode doesn't know it. */
-		readonly name: (session: SessionID, directory: string) => Effect.Effect<Name>;
+		readonly name: (session: SessionID, directory: AbsolutePath | undefined) => Effect.Effect<Name>;
 		/** Whenever a name may have changed. */
 		readonly changes: Stream.Stream<void>;
 	}
@@ -66,10 +67,18 @@ export class Sessions extends Context.Service<
 					Effect.forkScoped,
 				);
 
-				const named = (info: SessionInfo | null | undefined, directory: string): Name =>
-					info
-						? { title: info.title || path.basename(info.directory), folder: path.basename(info.directory), known: true }
-						: { title: path.basename(directory), folder: path.basename(directory), known: false };
+				const named = (info: SessionInfo | null | undefined, directory: AbsolutePath | undefined): Name => {
+					if (info) {
+						return {
+							title: info.title || path.basename(info.directory),
+							folder: path.basename(info.directory),
+							known: true,
+						};
+					}
+
+					const folder = directory === undefined ? "" : path.basename(directory);
+					return { title: folder, folder, known: false };
+				};
 
 				return Sessions.of({
 					name: Effect.fnUntraced(function* (session, directory) {

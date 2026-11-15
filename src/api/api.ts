@@ -20,11 +20,12 @@ import * as RpcGroup from "effect/rpc/RpcGroup";
 import * as Schema from "effect/Schema";
 import { Delivery, Entry, EntryId, MessageID, type Party, Priority, SessionID } from "../model/entry";
 import { DeliveryFailed, Refusal } from "../model/errors";
+import { AbsolutePath } from "../model/paths";
 import type { Identity } from "../shared/type";
 
 /** Who's calling: an agent, in its top-level session (a subagent's is the one above it) and where that works, or the user. */
 export const Caller = Schema.TaggedUnion({
-	Agent: { session: SessionID, directory: Schema.String },
+	Agent: { session: SessionID, directory: AbsolutePath },
 	User: {},
 });
 export type Caller = typeof Caller.Type;
@@ -38,7 +39,7 @@ export const SessionInfo = Schema.Struct({
 	id: SessionID,
 	parentID: Schema.optional(SessionID),
 	title: Schema.String,
-	directory: Schema.String,
+	directory: AbsolutePath,
 });
 export interface SessionInfo extends Identity<typeof SessionInfo.Type> {}
 
@@ -48,7 +49,7 @@ export const Prompt = Schema.Struct({
 	id: MessageID,
 	text: Schema.String,
 	delivery: Delivery,
-	files: Schema.Array(Schema.Struct({ uri: Schema.String, name: Schema.String })),
+	files: Schema.Array(Schema.Struct({ uri: Schema.URLFromString, name: Schema.String })),
 });
 export interface Prompt extends Identity<typeof Prompt.Type> {}
 
@@ -128,12 +129,12 @@ export const DeskApi = RpcGroup.make(
 	// The bridge: a plugin instance and the service's calls into its OpenCode.
 	Rpc.make("hello", {
 		payload: { protocol: Schema.String },
-		success: Schema.Struct({ url: Schema.String }),
+		success: Schema.Struct({ url: Schema.URLFromString }),
 		error: Outdated,
 	}),
 	/** The plugin instance's directory (for the log) and the sessions in desk mode there. */
 	Rpc.make("attach", {
-		payload: { directory: Schema.String, sessions: Schema.Array(SessionID) },
+		payload: { directory: AbsolutePath, sessions: Schema.Array(SessionID) },
 		success: ServiceCall,
 		stream: true,
 	}),
@@ -147,7 +148,7 @@ export const DeskApi = RpcGroup.make(
 	/** An agent asks, on its session's desk. */
 	Rpc.make("ask", {
 		payload: { by: Agent, question: Question },
-		success: Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.String }),
+		success: Schema.Struct({ id: EntryId, parent: Schema.NullOr(EntryId), url: Schema.URLFromString }),
 		error: Refusal,
 	}),
 	/** An agent answers the user's question; the user answers with their drafts (`submit`, `send`). */
@@ -165,7 +166,7 @@ export const DeskApi = RpcGroup.make(
 		error: Refusal,
 	}),
 	/** The page of `session`'s desk. */
-	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.String }) }),
+	Rpc.make("page", { payload: { session: SessionID }, success: Schema.Struct({ url: Schema.URLFromString }) }),
 	/** `session`'s desk now, then after every change; without one, only the list of desks. */
 	Rpc.make("view", { payload: { session: Schema.optional(Schema.String) }, success: View, stream: true }),
 	/** The user's drafts, all or nothing; one queued message per session. Returns how many went. */

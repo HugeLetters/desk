@@ -17,7 +17,7 @@ import * as Clients from "../src/service/clients";
 import * as Delivery from "../src/service/delivery/delivery";
 import * as Registration from "../src/service/storage/registration";
 import * as Machine from "../src/shared/machine";
-import { E, M, S } from "./support/ids";
+import { D, E, M, S } from "./support/ids";
 import { check } from "./support/property";
 
 /** Every state `reconcile` goes through from `initial` on `events`, `initial` first. */
@@ -135,7 +135,7 @@ const connectionEvents = events(
 			case "Off":
 				return Connection.Event.Need({ needed: tag === "On" });
 			case "Hello":
-				return Connection.Event.Hello({ client, url: `http://127.0.0.1:${n}/` });
+				return Connection.Event.Hello({ client, url: new URL(`http://127.0.0.1:47400/${n}`) });
 			case "Dropped":
 			case "Outdated":
 			case "Taken":
@@ -344,7 +344,7 @@ const entryOf = (asker: "user" | "agent"): Entry => ({
 	asker,
 	status: "open",
 	session: S("ses_a"),
-	directory: "/w",
+	directory: D("/w"),
 	labels: [],
 	priority: "normal",
 	created: "0001",

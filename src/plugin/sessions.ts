@@ -78,7 +78,7 @@ export const serve = (ctx: Context) => ({
 				id: prompt.id,
 				text: prompt.text,
 				delivery: prompt.delivery,
-				files: prompt.files.map((file) => ({ uri: file.uri, name: file.name })),
+				files: prompt.files.map((file) => ({ uri: file.uri.href, name: file.name })),
 			})
 			.pipe(Effect.asVoid, Effect.mapError(typed)),
 });

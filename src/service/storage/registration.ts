@@ -23,6 +23,7 @@ import type * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Unify from "effect/Unify";
 import { protocol } from "../../api/protocol";
+import type { AbsolutePath } from "../../model/paths";
 import type { Empty } from "../../shared/empty";
 import * as Machine from "../../shared/machine";
 import * as ServiceInfo from "../../shared/service-info";
@@ -114,14 +115,14 @@ export const reconcile = (state: State, event: Event): State => {
 
 /** Where the page is, once it's up: what `publish` records. */
 export interface Where {
-	readonly url: string;
+	readonly url: URL;
 }
 
 /**
  * Takes the store's lock for the scope's lifetime, or fails with `AlreadyRunning`; returns `publish`, which records
  * where the page is.
  */
-export const register = Effect.fn("register")(function* (store: string) {
+export const register = Effect.fn("register")(function* (store: AbsolutePath) {
 	const own: ServiceInfo.Info = { pid: process.pid, protocol };
 	const fs = yield* FileSystem.FileSystem;
 	const path = (yield* ServiceInfo.files(store)).registration;

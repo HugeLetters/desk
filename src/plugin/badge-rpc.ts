@@ -23,7 +23,7 @@ export interface Desk extends Identity<typeof Desk.Type> {}
 /** What a connected plugin instance knows: the service's page and the desks' summary. */
 export const Live = Schema.Struct({
 	/** The page, e.g. `http://127.0.0.1:47400/`. */
-	url: Schema.String,
+	url: Schema.URLFromString,
 	desks: Schema.Array(Desk),
 	/** The top-level sessions in desk mode, in every OpenCode. */
 	deskMode: Schema.Array(Schema.String),

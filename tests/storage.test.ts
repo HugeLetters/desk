@@ -14,10 +14,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { type Entry, fileName, serialize } from "../src/model/entry";
+import { type AbsolutePath, RelativePath } from "../src/model/paths";
 import { type Content, Storage } from "../src/service/storage/storage";
-import { E, S } from "./support/ids";
+import { D, E, R, S } from "./support/ids";
+
+const isRelative = Schema.is(RelativePath);
+
 import { present } from "./support/present";
 import { eventually } from "./support/service";
 
@@ -29,7 +34,7 @@ const entry = (name: string, created: string, title = name): Entry => ({
 	asker: "agent",
 	status: "open",
 	session: S("ses_a"),
-	directory: "/w",
+	directory: D("/w"),
 	labels: ["design"],
 	priority: "high",
 	created,
@@ -59,16 +64,16 @@ const temp = async () => {
 /** A store, and a directory (an entry's) holding `files` (path below it → text). */
 interface Fixture {
 	readonly layer: Layer.Layer<Storage, unknown>;
-	readonly directory: string;
+	readonly directory: AbsolutePath;
 }
 const implementations: ReadonlyArray<readonly [string, (files: Record<string, string>) => Promise<Fixture>]> = [
 	[
 		"memory",
 		async (files) => ({
 			layer: Storage.layerMemory({
-				files: Object.fromEntries(Object.entries(files).map(([below, data]) => [join("/work", below), data])),
+				files: Object.fromEntries(Object.entries(files).map(([below, data]) => [D(join("/work", below)), data])),
 			}),
-			directory: "/work",
+			directory: D("/work"),
 		}),
 	],
 	[
@@ -79,7 +84,7 @@ const implementations: ReadonlyArray<readonly [string, (files: Record<string, st
 				await mkdir(join(directory, below, ".."), { recursive: true });
 				await writeFile(join(directory, below), data);
 			}
-			return { layer: Storage.layer(await temp()).pipe(Layer.provide(BunServices.layer)), directory };
+			return { layer: Storage.layer(D(await temp())).pipe(Layer.provide(BunServices.layer)), directory: D(directory) };
 		},
 	],
 ];
@@ -170,7 +175,7 @@ for (const [name, open] of implementations) {
 						const bytes = new TextEncoder().encode("PNGDATA");
 						const file = yield* storage.transact((_, store) => store.attach("Shot.PNG", bytes));
 						const stored = yield* text(yield* storage.attachment(file));
-						const failed = yield* Ref.make("");
+						const failed = yield* Ref.make(R(""));
 						yield* Effect.exit(
 							storage.transact((_, store) =>
 								Effect.andThen(
@@ -181,10 +186,10 @@ for (const [name, open] of implementations) {
 						);
 						const afterFailure = yield* storage.attachment(yield* Ref.get(failed));
 						const outside = yield* Effect.forEach(
-							["attachments/../service.json", `../${file}`, "service.json", "attachments"],
-							(path) => Effect.map(storage.attachment(path), Option.isSome),
+							["attachments/../service.json", "service.json", "attachments"],
+							(path) => Effect.map(storage.attachment(R(path)), Option.isSome),
 						);
-						yield* storage.transact((_, store) => store.detach([file, "attachments/missing.png"]));
+						yield* storage.transact((_, store) => store.detach([file, R("attachments/missing.png")]));
 						return { file, stored, afterFailure, outside, deleted: yield* storage.attachment(file) };
 					}),
 				),
@@ -192,35 +197,37 @@ for (const [name, open] of implementations) {
 			expect(result.file).toMatch(/^attachments\/[0-9a-f-]{36}\.png$/);
 			expect(result.stored).toBe("PNGDATA");
 			expect(Option.isNone(result.afterFailure)).toBe(true);
-			expect(result.outside).toEqual([false, false, false, false]);
+			expect(result.outside).toEqual([false, false, false]);
+			// Above the store can't even be asked for: not a path below it.
+			expect(isRelative(`../${result.file}`)).toBe(false);
 			expect(Option.isNone(result.deleted)).toBe(true);
 		});
 
-		test("files below an entry's directory are read; missing ones are none; one outside it is refused", async () => {
+		test("files below an entry's directory are read; missing ones are none; one outside it can't be named", async () => {
 			const fixture = await open({ "media/a.txt": "inside" });
 			const result = await run(
 				fixture,
 				Storage.use((storage) =>
 					Effect.gen(function* () {
 						return {
-							inside: yield* text(yield* storage.file(fixture.directory, "media/a.txt")),
-							missing: Option.isNone(yield* storage.file(fixture.directory, "media/b.txt")),
-							outside: yield* Effect.flip(storage.file(fixture.directory, "../etc/hosts")),
-							absolute: yield* Effect.flip(storage.file(fixture.directory, "/etc/hosts")),
+							inside: yield* text(yield* storage.file(fixture.directory, R("media/a.txt"))),
+							missing: Option.isNone(yield* storage.file(fixture.directory, R("media/b.txt"))),
+							climbing: yield* text(yield* storage.file(fixture.directory, R("media/../media/a.txt"))),
 						};
 					}),
 				),
 			);
 			expect(result.inside).toBe("inside");
 			expect(result.missing).toBe(true);
-			expect(result.outside._tag).toBe("Outside");
-			expect(result.absolute._tag).toBe("Outside");
+			expect(result.climbing).toBe("inside");
+			for (const outside of ["../etc/hosts", "media/../../etc/hosts", "/etc/hosts"])
+				expect(isRelative(outside)).toBe(false);
 		});
 	});
 }
 
 describe("on files only", () => {
-	const onDisk = (root: string) => Storage.layer(root).pipe(Layer.provide(BunServices.layer));
+	const onDisk = (root: string) => Storage.layer(D(root)).pipe(Layer.provide(BunServices.layer));
 
 	test("an entry is a whole file, <id>.md; other files and unparseable ones aren't entries", async () => {
 		const root = await temp();
@@ -251,7 +258,7 @@ describe("on files only", () => {
 					storage.transact((_, store) => store.write(one)),
 					storage.changes.pipe(Stream.runForEach(() => Effect.sync(() => signals.push(Date.now())))),
 				),
-			).pipe(Effect.provide(Storage.layer(root, "1 hour").pipe(Layer.provide(BunServices.layer)))),
+			).pipe(Effect.provide(Storage.layer(D(root), "1 hour").pipe(Layer.provide(BunServices.layer)))),
 		);
 		await eventually(() => signals.length >= 1);
 		await Bun.sleep(100);
@@ -266,7 +273,7 @@ describe("on files only", () => {
 		const result = await Effect.runPromise(
 			Storage.use((storage) =>
 				Effect.gen(function* () {
-					yield* storage.publish({ url: "http://127.0.0.1:1/" });
+					yield* storage.publish({ url: new URL("http://127.0.0.1:1/") });
 					const second = yield* Effect.exit(Effect.scoped(Layer.build(onDisk(root))));
 					return {
 						second,
@@ -289,6 +296,6 @@ describe("on files only", () => {
 				}),
 			).pipe(Effect.provide(onDisk(root))),
 		);
-		expect(url).toBe(`file://${root}/${file}`);
+		expect(url.href).toBe(`file://${root}/${file}`);
 	});
 });

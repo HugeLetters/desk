@@ -10,6 +10,7 @@ import type { Prompt, SessionInfo } from "../../src/api/api";
 import type { SessionID } from "../../src/model/entry";
 import type { Options } from "../../src/plugin/connection";
 import { OpenCodeError } from "../../src/plugin/sessions";
+import { D } from "./ids";
 import { present } from "./present";
 
 /** What the fake OpenCode fails with: down, refusing, or losing a reply; `message` is what the plugin passes on. */
@@ -51,11 +52,11 @@ export function fakeOpenCode() {
 			loseNextReply: false,
 			refuse: undefined,
 			session(info) {
-				this.sessions.set(info.id, { title: "", directory: "/work/default", ...info });
+				this.sessions.set(info.id, { title: "", directory: D("/work/default"), ...info });
 			},
 			move(sessionID, directory) {
 				const session = present(this.sessions.get(sessionID));
-				this.sessions.set(sessionID, { ...session, directory });
+				this.sessions.set(sessionID, { ...session, directory: D(directory) });
 				for (const notify of watchers.get(url) ?? []) notify(sessionID);
 			},
 		};

@@ -15,11 +15,12 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { type EntryId, fileName, idOf, newId, parse, serialize } from "../../model/entry";
+import type { AbsolutePath } from "../../model/paths";
 import { register } from "./registration";
 import type { Backend, Content } from "./storage";
 
 /** The files in `root` as the storage's backend ({@link Backend.files}). */
-export const files = Effect.fn("Storage.files")(function* (root: string, rescan: Duration.Input) {
+export const files = Effect.fn("Storage.files")(function* (root: AbsolutePath, rescan: Duration.Input) {
 	// The lock first: nothing else touches the store while another service has it.
 	const { publish } = yield* register(root);
 	const fs = yield* FileSystem.FileSystem;
@@ -89,7 +90,7 @@ export const files = Effect.fn("Storage.files")(function* (root: string, rescan:
 			}),
 		attachment: (relative) => content(path.join(root, relative)),
 		// A path below the store always makes a file URL.
-		attachmentUrl: (relative) => Effect.map(io(path.toFileUrl(path.join(root, relative))), (url) => url.href),
+		attachmentUrl: (relative) => io(path.toFileUrl(path.join(root, relative))),
 		file: content,
 		changed: Stream.merge(
 			fs.watch(root).pipe(

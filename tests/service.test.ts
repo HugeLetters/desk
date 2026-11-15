@@ -25,9 +25,10 @@ import { Outdated, type View } from "../src/api/api";
 import { build, protocol } from "../src/api/protocol";
 import { type EntryId, parse } from "../src/model/entry";
 import { Refusal } from "../src/model/errors";
+import { type AbsolutePath, Port } from "../src/model/paths";
 import * as App from "../src/service/app";
 import { changedOnDisk, outdatedBy } from "../src/service/transport/rpc";
-import { E, S } from "./support/ids";
+import { D, E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
 import { eventually, rpc, type Service, startService, wsUrl } from "./support/service";
@@ -46,7 +47,7 @@ const read = async (id: string) =>
 		),
 	);
 /** An agent in `session`, as the plugin names its caller. */
-const agent = (session: string, directory = "/w") => ({ _tag: "Agent" as const, session: S(session), directory });
+const agent = (session: string, directory = D("/w")) => ({ _tag: "Agent" as const, session: S(session), directory });
 const user = { _tag: "User" as const };
 const question = (title: string, extra: { parent?: EntryId; labels?: Array<string> } = {}) => ({
 	title,
@@ -63,25 +64,25 @@ describe("entries", () => {
 	test("an agent's question is a file in the flat store, with its root session and directory", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: D("/work/phantom") },
 			question: question("Which icon?"),
 		});
 		expect(await entryFiles()).toEqual([`${asked.id}.md`]);
 		expect(await read(asked.id)).toMatchObject({
 			session: S("ses_a"),
-			directory: "/work/phantom",
+			directory: D("/work/phantom"),
 			asker: "agent",
 			status: "open",
 			title: "Which icon?",
 			pending: null,
 		});
-		expect(asked.url).toBe(`${service.url}sessions/ses_a/questions/${asked.id}`);
+		expect(asked.url.href).toBe(`${service.url}sessions/ses_a/questions/${asked.id}`);
 	});
 
 	test("the service reads the store again on restart, and takes in edits made by others", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Kept?"),
 		});
 		await service.close(false);
@@ -96,7 +97,7 @@ describe("entries", () => {
 
 	test("the rules: answerer answers, asker resolves, nothing resolves over open follow-ups, resolved leaves leave", async () => {
 		const plugin = service.plugin();
-		const asker = { session: S("ses_a"), directory: "/w" };
+		const asker = { session: S("ses_a"), directory: D("/w") };
 		const root = await plugin.request("ask", { by: asker, question: question("Root") });
 		const child = await plugin.request("ask", { by: asker, question: question("Child", { parent: root.id }) });
 		expect(child.parent).toBe(root.id);
@@ -149,7 +150,7 @@ describe("entries", () => {
 
 	test("a PR's question goes under that project's review entry", async () => {
 		const plugin = service.plugin();
-		const asker = { session: S("ses_a"), directory: "/w" };
+		const asker = { session: S("ses_a"), directory: D("/w") };
 		const review = await plugin.request("ask", {
 			by: asker,
 			question: question("Review PR #7", { labels: ["pr:7", "review"] }),
@@ -170,11 +171,11 @@ describe("delivery", () => {
 		const plugin = service.plugin(refusing);
 		service.plugin(fine);
 		const a = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("A?"),
 		});
 		const b = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: D("/w") },
 			question: question("B?"),
 		});
 		await service.rpc((client) =>
@@ -195,19 +196,19 @@ describe("delivery", () => {
 
 	test("the user's answer reaches its session once, as one message per session, and leaves the outbox", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_a"), directory: "/work/phantom" });
-		server.session({ id: S("ses_b"), directory: "/work/phantom" });
+		server.session({ id: S("ses_a"), directory: D("/work/phantom") });
+		server.session({ id: S("ses_b"), directory: D("/work/phantom") });
 		const plugin = service.plugin(server);
 		const a = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: D("/work/phantom") },
 			question: question("A?"),
 		});
 		const a2 = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/work/phantom" },
+			by: { session: S("ses_a"), directory: D("/work/phantom") },
 			question: question("A2?"),
 		});
 		const b = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/work/phantom" },
+			by: { session: S("ses_b"), directory: D("/work/phantom") },
 			question: question("B?"),
 		});
 		const sent = await service.rpc((client) =>
@@ -241,7 +242,7 @@ describe("delivery", () => {
 	test("the user can discard a delivery that can't happen (its session is gone): the text stays, the entry can be resolved, nothing goes out later", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_gone"), directory: "/w" },
+			by: { session: S("ses_gone"), directory: D("/w") },
 			question: question("Gone?"),
 		});
 		await service.rpc((client) => client.send({ entry: asked.id, text: "Too late" }));
@@ -265,7 +266,7 @@ describe("delivery", () => {
 	test("with no OpenCode that knows the session, it stays answered, not delivered, and goes out once one connects", async () => {
 		const plugin = service.plugin();
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Later?"),
 		});
 		await service.rpc((client) => client.send({ entry: asked.id, text: "now" }));
@@ -295,7 +296,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a"), title: "Asked" });
 		server.session({ id: S("ses_b"), title: "Empty" });
 		const plugin = service.plugin(server);
-		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Q") });
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Q") });
 		await plugin.request("modes", { sessions: [S("ses_b")] });
 		await eventually(async () => (await view()).desks.length === 2);
 		expect((await view()).desks.map((desk) => [desk.session, desk.waiting])).toEqual([
@@ -313,7 +314,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Off?"),
 		});
 		await plugin.request("modes", { sessions: [] });
@@ -335,7 +336,7 @@ describe("delivery", () => {
 		server.loseNextReply = true;
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Once?"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "once" }] }));
@@ -348,7 +349,7 @@ describe("delivery", () => {
 	test("an undelivered message survives a restart of the service", async () => {
 		const asked = await service
 			.plugin()
-			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Restart?") });
+			.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Restart?") });
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "kept" }] }));
 		const message = await eventually(async () => (await read(asked.id))?.pending?.message);
 		await service.close(false);
@@ -365,7 +366,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const plugin = service.plugin(server);
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Agents'"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "Answer." }] }));
@@ -377,7 +378,7 @@ describe("delivery", () => {
 		expect(followUp).toMatchObject({
 			parent: asked.id,
 			session: S("ses_a"),
-			directory: "/w",
+			directory: D("/w"),
 			title: "A question back?",
 		});
 		// Two messages, one per Submit; in whichever order they went out.
@@ -395,7 +396,7 @@ describe("delivery", () => {
 		server.session({ id: S("ses_a") });
 		const asked = await service
 			.plugin(server)
-			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Picture?") });
+			.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Picture?") });
 		const local = crypto.randomUUID();
 		const data = new TextEncoder().encode("PNGDATA");
 		await service.rpc((client) =>
@@ -412,7 +413,9 @@ describe("delivery", () => {
 		await eventually(() => server.admitted.length === 1);
 		const answer = present(present(await read(asked.id)).answer);
 		const file = present(present(/\/(attachments\/[0-9a-f-]{36}\.png)/.exec(answer))[1]);
-		expect(present(server.admitted[0]).files).toEqual([{ uri: `file://${service.store}/${file}`, name: "shot" }]);
+		expect(present(server.admitted[0]).files.map(({ uri, name }) => ({ uri: uri.href, name }))).toEqual([
+			{ uri: `file://${service.store}/${file}`, name: "shot" },
+		]);
 		expect(await (await fetch(`${service.url}${file}`)).text()).toBe("PNGDATA");
 	});
 });
@@ -420,18 +423,18 @@ describe("delivery", () => {
 describe("desks", () => {
 	test("each top-level session has its own desk, named after its title and folder; it follows the session that moves", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
-		server.session({ id: S("ses_q"), title: "Persona", directory: "/work/phantom-p5" });
-		const plugin = service.plugin(server, "/work/phantom");
+		server.session({ id: S("ses_p"), title: "Phantom", directory: D("/work/phantom") });
+		server.session({ id: S("ses_q"), title: "Persona", directory: D("/work/phantom-p5") });
+		const plugin = service.plugin(server, D("/work/phantom"));
 		const p = await plugin.request("ask", {
-			by: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: D("/work/phantom") },
 			question: question("P?"),
 		});
 		await plugin.request("ask", {
-			by: { session: S("ses_q"), directory: "/work/phantom-p5" },
+			by: { session: S("ses_q"), directory: D("/work/phantom-p5") },
 			question: question("Q?"),
 		});
-		expect(p.url).toBe(`${service.url}sessions/ses_p/questions/${p.id}`);
+		expect(p.url.href).toBe(`${service.url}sessions/ses_p/questions/${p.id}`);
 		const desk = await view("ses_p");
 		expect(desk.desk).toEqual({ session: "ses_p", title: "Phantom", folder: "phantom", known: true });
 		expect(desk.entries.map((entry) => entry.title)).toEqual(["P?"]);
@@ -449,24 +452,24 @@ describe("desks", () => {
 	test("a desk whose session no connected OpenCode knows is unknown, named after its entries' folder, until one does", async () => {
 		await service
 			.plugin()
-			.request("ask", { by: { session: S("ses_p"), directory: "/work/phantom/app" }, question: question("Where?") });
+			.request("ask", { by: { session: S("ses_p"), directory: D("/work/phantom/app") }, question: question("Where?") });
 		expect((await view()).desks.map((desk) => [desk.session, desk.title, desk.known])).toEqual([
 			["ses_p", "app", false],
 		]);
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), title: "App work", directory: "/work/phantom/app" });
+		server.session({ id: S("ses_p"), title: "App work", directory: D("/work/phantom/app") });
 		service.plugin(server);
 		await eventually(async () => (await view()).desks[0]?.title === "App work");
 	});
 
 	test("a lookup that fails isn't taken for an unknown session: the name comes once the plugin answers, with no reconnect", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
+		server.session({ id: S("ses_p"), title: "Phantom", directory: D("/work/phantom") });
 		const plugin = service.plugin(server);
 		await plugin.url();
 		server.down = true;
 		await plugin.request("ask", {
-			by: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: D("/work/phantom") },
 			question: question("Where?"),
 		});
 		expect((await view()).desks.map((desk) => desk.known)).toEqual([false]);
@@ -476,10 +479,10 @@ describe("desks", () => {
 
 	test("a known name stays while OpenCode is away; the next connect catches a rename missed meanwhile", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), title: "Phantom", directory: "/work/phantom" });
+		server.session({ id: S("ses_p"), title: "Phantom", directory: D("/work/phantom") });
 		const first = service.plugin(server);
 		await first.request("ask", {
-			by: { session: S("ses_p"), directory: "/work/phantom" },
+			by: { session: S("ses_p"), directory: D("/work/phantom") },
 			question: question("Where?"),
 		});
 		await eventually(async () => (await view()).desks[0]?.title === "Phantom");
@@ -495,26 +498,26 @@ describe("desks", () => {
 
 	test("a desk with nothing on it yet is named, from its session in desk mode", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_p"), title: "Fresh", directory: "/work/desk" });
+		server.session({ id: S("ses_p"), title: "Fresh", directory: D("/work/desk") });
 		const plugin = service.plugin(server);
-		expect(await plugin.request("page", { session: S("ses_p") })).toEqual({ url: `${service.url}sessions/ses_p` });
+		expect((await plugin.request("page", { session: S("ses_p") })).url.href).toBe(`${service.url}sessions/ses_p`);
 		await eventually(async () => (await view("ses_p")).desk?.title === "Fresh");
 	});
 
 	test("a parent on another session's desk is refused, asking and adopting: a thread stays on one desk", async () => {
 		const plugin = service.plugin();
 		const theirs = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Theirs?"),
 		});
 		await expect(
 			plugin.request("ask", {
-				by: { session: S("ses_b"), directory: "/w" },
+				by: { session: S("ses_b"), directory: D("/w") },
 				question: question("Mine?", { parent: theirs.id }),
 			}),
 		).rejects.toThrow("another session's desk");
 		const mine = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: D("/w") },
 			question: question("Mine?"),
 		});
 		await expect(plugin.request("adopt", { id: mine.id, parent: theirs.id })).rejects.toThrow("another session's desk");
@@ -523,20 +526,20 @@ describe("desks", () => {
 	test("a PR's question is filed under its review entry on the asker's desk only", async () => {
 		const plugin = service.plugin();
 		const elsewhere = await plugin.request("ask", {
-			by: { session: S("ses_a"), directory: "/w" },
+			by: { session: S("ses_a"), directory: D("/w") },
 			question: question("Review PR #7", { labels: ["review", "pr:7"] }),
 		});
 		const asked = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: D("/w") },
 			question: question("About #7?", { labels: ["pr:7"] }),
 		});
 		expect(asked.parent).toBeNull();
 		const own = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: D("/w") },
 			question: question("Review PR #7 here", { labels: ["review", "pr:7"] }),
 		});
 		const filed = await plugin.request("ask", {
-			by: { session: S("ses_b"), directory: "/w" },
+			by: { session: S("ses_b"), directory: D("/w") },
 			question: question("And now?", { labels: ["pr:7"] }),
 		});
 		expect(filed.parent).toBe(own.id);
@@ -545,10 +548,10 @@ describe("desks", () => {
 
 	test("a session claims another's desk: its entries and their undelivered answers become the claimer's; refused while that session is in desk mode", async () => {
 		const server = service.fake.server("http://opencode-1");
-		server.session({ id: S("ses_new"), title: "New", directory: "/w" });
+		server.session({ id: S("ses_new"), title: "New", directory: D("/w") });
 		const plugin = service.plugin(server);
 		const old = await plugin.request("ask", {
-			by: { session: S("ses_old"), directory: "/w" },
+			by: { session: S("ses_old"), directory: D("/w") },
 			question: question("Old?"),
 		});
 		await service.rpc((client) => client.submit({ drafts: [{ entry: old.id, text: "The answer" }] }));
@@ -568,7 +571,7 @@ describe("desks", () => {
 	test("without a session, the page lists the desks only", async () => {
 		await service
 			.plugin()
-			.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Somewhere?") });
+			.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Somewhere?") });
 		const all = await view();
 		expect(all.desk).toBeNull();
 		expect(all.entries).toEqual([]);
@@ -577,10 +580,10 @@ describe("desks", () => {
 
 	test("a live view follows changes", async () => {
 		const plugin = service.plugin();
-		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("First") });
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("First") });
 		const views = service.rpc((client) => client.view({ session: "ses_a" }).pipe(Stream.take(2), Stream.runCollect));
 		await Bun.sleep(200);
-		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Second") });
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Second") });
 		expect(Array.from(await views).map((one: View) => one.entries.length)).toEqual([1, 2]);
 	});
 });
@@ -601,7 +604,7 @@ describe("the page server", () => {
 	});
 
 	test("serves an entry's media from below its folder, and nothing outside it", async () => {
-		const work = await mkdtemp(join(tmpdir(), "desk-work-"));
+		const work = D(await mkdtemp(join(tmpdir(), "desk-work-")));
 		await mkdir(join(work, "shots"));
 		await writeFile(join(work, "shots", "a b.png"), "PNG");
 		await writeFile(join(tmpdir(), "desk-outside.txt"), "secret");
@@ -632,7 +635,7 @@ describe("the page server", () => {
 	});
 
 	test("serves files relative to an entry's directory, nothing outside it", async () => {
-		const directory = join(service.store, "work");
+		const directory = D(join(service.store, "work"));
 		await mkdir(join(directory, "media"), { recursive: true });
 		await writeFile(join(directory, "media", "a.txt"), "inside");
 		const asked = await service
@@ -661,7 +664,7 @@ describe("the page server", () => {
 
 describe("the service's life", () => {
 	/** Builds another service on `store`, on `port`; closes it again unless kept. */
-	const another = async (store: string, port: number) => {
+	const another = async (store: AbsolutePath, port: Port | 0) => {
 		const scope = Effect.runSync(Scope.make());
 		const exit = await Effect.runPromiseExit(
 			Layer.buildWithScope(App.layer({ store, port, idle: 60_000 }).pipe(Layer.provideMerge(BunServices.layer)), scope),
@@ -680,7 +683,7 @@ describe("the service's life", () => {
 	});
 
 	test("a registration whose process is gone is stale and replaced; a stopped service removes its own", async () => {
-		const store = await mkdtemp(join(tmpdir(), "desk-"));
+		const store = D(await mkdtemp(join(tmpdir(), "desk-")));
 		await writeFile(join(store, "service.json"), JSON.stringify({ pid: 2 ** 22 + 12345, protocol }));
 		const started = await another(store, 0);
 		expect(Exit.isSuccess(started.exit)).toBe(true);
@@ -692,8 +695,8 @@ describe("the service's life", () => {
 
 	test("the service listens on its port and no other: taken by another program, it doesn't start, and leaves the store free", async () => {
 		const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("someone else") });
-		const store = await mkdtemp(join(tmpdir(), "desk-"));
-		const started = await another(store, present(taken.port));
+		const store = D(await mkdtemp(join(tmpdir(), "desk-")));
+		const started = await another(store, Port.make(present(taken.port)));
 		await started.close();
 		expect(Exit.isFailure(started.exit) && String(started.exit.cause)).toContain("PortTaken");
 		// The registration went with it: the next service on this store takes it.

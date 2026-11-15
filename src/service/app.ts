@@ -7,6 +7,7 @@ import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import type { AbsolutePath, Port } from "../model/paths";
 import { Clients } from "./clients";
 import * as Delivery from "./delivery/delivery";
 import { Desk } from "./desk";
@@ -18,12 +19,12 @@ import * as Http from "./transport/http";
 
 export interface Config {
 	/** The store: entries, attachments, the registration and the log. */
-	readonly store: string;
+	readonly store: AbsolutePath;
 	/**
 	 * The server's port; taken by another program, the service doesn't start (`Http.PortTaken`). 0 (tests only): any
 	 * free one.
 	 */
-	readonly port: number;
+	readonly port: Port | 0;
 	/** How long the service waits without clients before `Clients.idle` completes. */
 	readonly idle: Duration.Input;
 	/**

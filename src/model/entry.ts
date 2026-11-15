@@ -32,6 +32,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { Identity } from "../shared/type";
+import { AbsolutePath, RelativePath } from "./paths";
 
 /** An entry's id: a random UUID. Parsed where it comes in (a file name, a request), trusted past that. */
 export const EntryId = Schema.String.check(Schema.isUUID()).pipe(Schema.brand("EntryId"));
@@ -99,7 +100,7 @@ const Fields = {
 	/** The top-level OpenCode session that asked, or that the user's reply belongs to; it hears about the entry. */
 	session: Session.ID,
 	/** Where the asking session works: relative paths in the entry's Markdown resolve against it. */
-	directory: Schema.String,
+	directory: AbsolutePath,
 	labels: Schema.Array(Schema.String),
 	priority: Priority.pipe(Schema.withDecodingDefaultKey(Effect.succeed("normal" as const))),
 	created: Schema.String,
@@ -229,7 +230,7 @@ export const pointAttachments = (text: string, to: (id: string) => string | unde
 
 export const attachmentsIn = (text: string) =>
 	[...text.matchAll(/\[([^\]]*)\]\(\/(attachments\/[0-9a-f-]{36}\.[a-z0-9]{1,8})\)/g)].flatMap(([, name, file]) =>
-		file === undefined ? [] : [{ name: name || file, file }],
+		file === undefined ? [] : [{ name: name || file, file: RelativePath.make(file) }],
 	);
 
 /** The last six hex digits: enough to tell entries apart where the full id is too long to show. */

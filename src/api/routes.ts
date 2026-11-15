@@ -38,4 +38,4 @@ export const serviceUrl = (port: number) => new URL(`http://${host}:${port}/`);
 export const rpcUrl = (port: number) => new URL(rpcPath, `ws://${host}:${port}/`);
 
 /** A path as a link on the page at `page` (the service's URL, e.g. `http://127.0.0.1:47400/`). */
-export const link = (page: string, path: string) => `${page.replace(/\/$/, "")}${path}`;
+export const link = (page: URL, path: string) => new URL(path, page);

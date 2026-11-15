@@ -4,6 +4,7 @@
  */
 import * as Arr from "effect/Array";
 import { attachmentsIn, type Delivery, type Entry, type MessageID, type SessionID } from "../../model/entry";
+import type { RelativePath } from "../../model/paths";
 
 export interface Message {
 	/** The OpenCode message id: OpenCode admits a message id once, however often it's sent. */
@@ -12,7 +13,7 @@ export interface Message {
 	readonly delivery: Delivery;
 	readonly text: string;
 	/** Attachments by their path below the store, with the name the user gave them. */
-	readonly files: ReadonlyArray<{ readonly file: string; readonly name: string }>;
+	readonly files: ReadonlyArray<{ readonly file: RelativePath; readonly name: string }>;
 }
 
 /**

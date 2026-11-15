@@ -14,12 +14,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { View } from "../src/api/api";
+import { Port } from "../src/model/paths";
 import { fromView, statuses } from "../src/plugin/badge";
 import { BadgeRpc, off, Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
-import { count, report, statusAt, withFirstStatus, withStatus } from "../src/tui/badge";
+import { count, type Report, report, statusAt, withFirstStatus, withStatus } from "../src/tui/badge";
 import { rpcClient } from "../src/tui/rpc-client";
-import { S } from "./support/ids";
+import { D, S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, startService } from "./support/service";
 
@@ -29,13 +30,13 @@ afterEach(async () => {
 });
 
 /** The page on `port`. */
-const page = (port: number) => `http://127.0.0.1:${port}/`;
+const page = (port: number) => new URL(`http://127.0.0.1:${port}/`);
 
 /**
  * Every status a plugin instance on `port` gives the badge, as they come: its connection is needed from the start, with
  * ses_a in desk mode, and doesn't start a service (the test does).
  */
-const watching = (port: number) => {
+const watching = (port: Port) => {
 	const seen: Array<Status> = [];
 	const scope = Effect.runSync(Scope.make());
 	const connection = Effect.runSync(
@@ -43,7 +44,7 @@ const watching = (port: number) => {
 			Connection.make({
 				port,
 				start: Effect.void,
-				directory: "/work/a",
+				directory: D("/work/a"),
 				modes: Effect.succeed([S("ses_a")]),
 				serve: { session: () => Effect.succeed(null), prompt: () => Effect.void },
 				timeout: 200,
@@ -65,7 +66,7 @@ const watching = (port: number) => {
 /** A port nothing listens on now. */
 const freePort = async () => {
 	const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
-	const port = present(probe.port);
+	const port = Port.make(present(probe.port));
 	await probe.stop(true);
 	return port;
 };
@@ -83,7 +84,7 @@ test("the plugin gives the badge the desks of the service it's connected to: a d
 	const opencode = first.fake.server("http://opencode");
 	opencode.session({ id: S("ses_a") });
 	const plugin = first.plugin(opencode);
-	const asked = { session: S("ses_a"), directory: "/work/a" };
+	const asked = { session: S("ses_a"), directory: D("/work/a") };
 	await plugin.request("ask", { by: asked, question: { title: "One?", body: "" } });
 	await plugin.request("ask", { by: asked, question: { title: "Two?", body: "", priority: "critical" } });
 	const counted = await eventually(() =>
@@ -91,10 +92,8 @@ test("the plugin gives the badge the desks of the service it's connected to: a d
 	);
 	expect(present(latest()?.live)).toMatchObject({ url: page(port), deskMode: ["ses_a"] });
 	expect(count(counted)).toEqual({ waiting: 2, critical: 1 });
-	expect(report(latest(), "ses_a")).toEqual({
-		page: `${page(port)}sessions/ses_a`,
-		count: { waiting: 2, critical: 1 },
-	});
+	expect(report(latest(), "ses_a")?.page.href).toBe(`${page(port).href}sessions/ses_a`);
+	expect(report(latest(), "ses_a")?.count).toEqual({ waiting: 2, critical: 1 });
 
 	// The service goes: not connected, so the badge hides; then the connection finds the next one on the same port.
 	await first.close(false);
@@ -134,7 +133,7 @@ test("of the service's desk summaries, only a desk's session and counts reach th
 	const sent = await Effect.runPromise(Schema.encodeEffect(Status)(fromView(page(1), view)));
 	const context = {
 		client: { rpc: () => ({ status: () => Promise.resolve(sent), events: { on: () => () => {} } }) },
-		location: { directory: "/work/a" },
+		location: { directory: D("/work/a") },
 	} as never;
 	const received = await Effect.runPromise(rpcClient(BadgeRpc, context).status({}));
 	expect(received.live?.desks).toEqual([{ session: "ses_a", waiting: 2, critical: 1 }]);
@@ -148,12 +147,13 @@ test("the count: none when nothing waits on the user, else how many and how many
 
 test("the report for a desk: its page and count while its session is in desk mode and the plugin connected, else nothing", () => {
 	const summary = { session: "ses_a", waiting: 2, critical: 0 };
-	const live = { url: "http://127.0.0.1:47400/", desks: [summary], deskMode: ["ses_a"] };
-	expect(report({ live }, "ses_a")).toEqual({
+	const live = { url: new URL("http://127.0.0.1:47400/"), desks: [summary], deskMode: ["ses_a"] };
+	const shown = (report: Report | undefined) => report && { page: report.page.href, count: report.count };
+	expect(shown(report({ live }, "ses_a"))).toEqual({
 		page: "http://127.0.0.1:47400/sessions/ses_a",
 		count: { waiting: 2, critical: 0 },
 	});
-	expect(report({ live: { ...live, desks: [] } }, "ses_a")).toEqual({
+	expect(shown(report({ live: { ...live, desks: [] } }, "ses_a"))).toEqual({
 		page: "http://127.0.0.1:47400/sessions/ses_a",
 		count: undefined,
 	});
@@ -165,7 +165,11 @@ test("the report for a desk: its page and count while its session is in desk mod
 
 test("statuses per location: a session's badge uses its location's, the latest event wins, and a late first answer doesn't undo one", () => {
 	const live = (waiting: number): Status => ({
-		live: { url: "http://127.0.0.1:47400/", desks: [{ session: "ses_a", waiting, critical: 0 }], deskMode: ["ses_a"] },
+		live: {
+			url: new URL("http://127.0.0.1:47400/"),
+			desks: [{ session: "ses_a", waiting, critical: 0 }],
+			deskMode: ["ses_a"],
+		},
 	});
 	const a = withStatus(withStatus({}, "/work/a", live(1)), "/work/b", off);
 	expect(statusAt(a, "/work/a")).toEqual(live(1));

@@ -14,7 +14,7 @@ import { chromium, type Page } from "playwright-core";
 import { deskPath, entryPath, link } from "../src/api/routes";
 import type { EntryId } from "../src/model/entry";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
-import { S } from "../tests/support/ids";
+import { D, S } from "../tests/support/ids";
 import { present } from "../tests/support/present";
 import { eventually, startService } from "../tests/support/service";
 
@@ -37,8 +37,8 @@ async function settle(page: Page) {
 }
 
 const temp = await mkdtemp(join(tmpdir(), "desk-demo-"));
-const phantom = join(temp, "phantom");
-const deskDir = join(temp, "desk");
+const phantom = D(join(temp, "phantom"));
+const deskDir = D(join(temp, "desk"));
 const store = join(temp, "store");
 await mkdir(join(phantom, "design"), { recursive: true });
 await mkdir(deskDir, { recursive: true });
@@ -115,9 +115,9 @@ try {
 	console.log(`sample desk at ${service.url}`);
 	const page = (session?: string, entry?: string) =>
 		link(
-			service.url,
+			new URL(service.url),
 			session === undefined ? "/" : entry === undefined ? deskPath(session) : entryPath(session, entry),
-		);
+		).href;
 
 	// Every link stays on the page: across desks, into an entry and back, and through the desk picker.
 	{

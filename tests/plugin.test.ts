@@ -10,13 +10,15 @@ import { SessionNotFoundError } from "@opencode/protocol/errors";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import type { EntryId } from "../src/model/entry";
-import { off, type Status } from "../src/plugin/badge-rpc";
+import { Port } from "../src/model/paths";
+import { off, Status } from "../src/plugin/badge-rpc";
 import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
-import { P, S } from "./support/ids";
+import { D, P, S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, rpc } from "./support/service";
 
@@ -30,6 +32,11 @@ interface Session {
 
 type Event = { type: string; data: { sessionID: string } };
 type Run<A = unknown> = Effect.Effect<A, unknown>;
+
+/** A status as it goes over OpenCode's plugin RPC. */
+const encodeStatus = Schema.encodeUnknownEffect(Status);
+/** Not connected, as it goes over the RPC. */
+const offOnTheWire = Schema.encodeSync(Status)(off);
 
 /** The parts of the plugin context the desk uses, recording what the plugin registers and says. */
 function fakeContext(home: string, sessions: Array<Session>, options: Record<string, unknown> = {}) {
@@ -56,7 +63,7 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 	>();
 	const ctx = {
 		options: { home, port, ...options },
-		location: { directory: "/work/phantom", project: { id: P("prj_phantom"), directory: "/work/phantom" } },
+		location: { directory: D("/work/phantom"), project: { id: P("prj_phantom"), directory: D("/work/phantom") } },
 		storage: {
 			get: (key: string) => Effect.sync(() => storage.get(key)),
 			set: (key: string, value: unknown) => Effect.sync(() => void storage.set(key, value)),
@@ -119,13 +126,14 @@ function fakeContext(home: string, sessions: Array<Session>, options: Record<str
 		command: (name: string, sessionID: string) => Effect.runPromise(present(commands.get(name)).execute({ sessionID })),
 		tool: (name: string, sessionID: string, input: unknown) =>
 			Effect.runPromise(present(tools.get(name)).execute(input, { sessionID })),
-		/** The badge's status, as the TUI asks this plugin instance for it. */
-		status: () => Effect.runPromise(present(present(rpcs.get("desk")).handlers.status)({}, {})) as Promise<Status>,
-		/** The badge's `changed` events so far. */
+		/** The badge's status, as the TUI asks this plugin instance for it: encoded, as OpenCode's plugin RPC sends it. */
+		status: () =>
+			Effect.runPromise(Effect.flatMap(present(present(rpcs.get("desk")).handlers.status)({}, {}), encodeStatus)),
+		/** The badge's `changed` events so far, encoded. */
 		changed: () =>
 			present(rpcs.get("desk"))
 				.emitted.filter((event) => event.name === "changed")
-				.map((event) => event.data as Status),
+				.map((event) => Schema.encodeUnknownSync(Status)(event.data)),
 	};
 }
 
@@ -137,15 +145,20 @@ async function load(context: ReturnType<typeof fakeContext>) {
 }
 
 const sessions: Array<Session> = [
-	{ id: S("ses_main"), title: "Main", projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
-	{ id: S("ses_sub"), parentID: S("ses_main"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
-	{ id: S("ses_other"), projectID: P("prj_phantom"), location: { directory: "/work/phantom" } },
+	{ id: S("ses_main"), title: "Main", projectID: P("prj_phantom"), location: { directory: D("/work/phantom") } },
+	{
+		id: S("ses_sub"),
+		parentID: S("ses_main"),
+		projectID: P("prj_phantom"),
+		location: { directory: D("/work/phantom") },
+	},
+	{ id: S("ses_other"), projectID: P("prj_phantom"), location: { directory: D("/work/phantom") } },
 ];
 const desk = ["desk_adopt", "desk_answer", "desk_ask", "desk_claim", "desk_list", "desk_prioritize", "desk_resolve"];
 
 let home: string;
 /** A free port for the service the plugin starts: the port setting is never 0. */
-let port: number;
+let port: Port;
 let first: ReturnType<typeof fakeContext>;
 /** Another OpenCode's instance, from "a second plugin instance" on. */
 let second: ReturnType<typeof fakeContext>;
@@ -155,7 +168,7 @@ const previousIdle = process.env.DESK_IDLE;
 beforeAll(async () => {
 	home = await mkdtemp(join(tmpdir(), "desk-plugin-"));
 	const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
-	port = present(probe.port);
+	port = Port.make(present(probe.port));
 	await probe.stop(true);
 	// The service the plugin starts exits 1 s after its last client, or after starting with none: a plugin that loaded
 	// it under load (the whole suite running) may take a few hundred ms to attach.
@@ -179,7 +192,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	expect(await first.visible("ses_main")).toEqual(["read"]);
 	// With no session in desk mode, the plugin doesn't connect, so nothing has started the service; nor is there a badge.
 	expect(await Effect.runPromise(answering(port))).toBe(false);
-	expect(await first.status()).toEqual(off);
+	expect(await first.status()).toEqual(offOnTheWire);
 	await first.command("desk-mode", "ses_main");
 	expect(first.storage.get("on/ses_main")).toBe(true);
 	expect(present(first.synthetic.at(-1)).text).toMatch(
@@ -217,7 +230,7 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 });
 
 test("the TUI badge's data, over the plugin's RPC: while connected, the service's desks and the sessions in desk mode; each change emitted", async () => {
-	const ofMain = (status: Status) => status.live?.desks.find((desk) => desk.session === "ses_main");
+	const ofMain = (status: typeof Status.Encoded) => status.live?.desks.find((desk) => desk.session === "ses_main");
 	const live = await eventually(async () => {
 		const status = await first.status();
 		return ofMain(status)?.waiting === 1 && status.live;
@@ -287,7 +300,7 @@ test("/desk-mode again turns it off", async () => {
 	expect(await view()).toMatchObject({ deskMode: ["ses_main"] });
 	// Hung up: no badge from the first instance, and the TUI is told; the second's still has the desk.
 	await eventually(async () => (await first.status()).live === null);
-	expect(first.changed().at(-1)).toEqual(off);
+	expect(first.changed().at(-1)).toEqual(offOnTheWire);
 	expect((await second.status()).live).toMatchObject({ deskMode: ["ses_main"] });
 });
 

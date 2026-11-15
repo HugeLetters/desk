@@ -30,7 +30,8 @@ type Handler<Tag extends string, R = Rpc.ExtractTag<RpcGroup.Rpcs<typeof DeskApi
 export class Api extends Context.Service<
 	Api,
 	{
-		readonly url: string;
+		/** The service's page. */
+		readonly url: URL;
 		readonly ask: Handler<"ask">;
 		readonly adopt: Handler<"adopt">;
 		readonly answer: Handler<"answer">;
@@ -51,7 +52,10 @@ export class Api extends Context.Service<
 			Api,
 			Effect.gen(function* () {
 				const server = yield* HttpServer.HttpServer;
-				const url = server.address._tag === "UnixPathAddress" ? "" : serviceUrl(server.address.port).href;
+				if (server.address._tag === "UnixPathAddress")
+					return yield* Effect.die("the desk service listens on a TCP port");
+
+				const url = serviceUrl(server.address.port);
 				const desk = yield* Desk;
 				const sessions = yield* Sessions;
 				const opencode = yield* OpenCode;
@@ -63,7 +67,7 @@ export class Api extends Context.Service<
 					const name = (id: string, mine: ReadonlyArray<Entry>) =>
 						Effect.map(
 							// The folder its latest entry was asked from, for a session OpenCode doesn't know.
-							sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
+							sessions.name(SessionID.make(id), mine.at(-1)?.directory),
 							(name) => ({ session: id, ...name }),
 						);
 					const deskMode = yield* opencode.inDeskMode;

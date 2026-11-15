@@ -13,7 +13,7 @@ import { answerer, type Entry, next, ordered, Party, Priority, Status, waitingOn
 import { due } from "../src/service/delivery/outbox";
 import { Desk } from "../src/service/desk";
 import { Storage } from "../src/service/storage/storage";
-import { E, M, S } from "./support/ids";
+import { D, E, M, S } from "./support/ids";
 import { present } from "./support/present";
 import { check } from "./support/property";
 
@@ -48,7 +48,7 @@ const desks = Arbitrary.array(
 				asker: shape.asker,
 				status: shape.status,
 				session: S("ses_a"),
-				directory: "/w",
+				directory: D("/w"),
 				labels: [],
 				priority: shape.priority,
 				created: String(index).padStart(4, "0"),
@@ -171,7 +171,7 @@ test(
 							switch (change.do) {
 								case "ask":
 									return yield* desk.ask(
-										{ session: S("ses_a"), directory: "/w" },
+										{ session: S("ses_a"), directory: D("/w") },
 										{ title: "q", body: "", parent: change.parent === null ? undefined : nth(change.parent)?.id },
 									);
 								case "adopt":

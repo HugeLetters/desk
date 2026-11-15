@@ -33,7 +33,7 @@ export const count = (summary: Desk | undefined) =>
 
 /** What the badge shows for one desk: where its page is, and its count. */
 export interface Report {
-	readonly page: string;
+	readonly page: URL;
 	readonly count: ReturnType<typeof count>;
 }
 

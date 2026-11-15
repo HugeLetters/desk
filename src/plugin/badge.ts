@@ -13,7 +13,7 @@ import { BadgeRpc, off, sameStatus } from "./badge-rpc";
 import type { Connection, Link } from "./connection";
 
 /** The badge's status out of the service's `view`. */
-export const fromView = (url: string, view: View) => ({
+export const fromView = (url: URL, view: View) => ({
 	live: {
 		url,
 		// As they are: the RPC's encoding keeps only what a badge `Desk` has.

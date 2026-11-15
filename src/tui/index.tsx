@@ -25,15 +25,15 @@ import { type Report, report, type Statuses, statusAt, withFirstStatus, withStat
 import { type RpcClient, rpcClient } from "./rpc-client";
 
 /** Opens `url` in the browser with `opener` (`open`, which exits at once, once it has handed over). */
-const open = (opener: string, url: string) =>
-	ChildProcess.make(opener, [url], { stdout: "ignore", stderr: "ignore" }).pipe(
+const open = (opener: string, url: URL) =>
+	ChildProcess.make(opener, [url.href], { stdout: "ignore", stderr: "ignore" }).pipe(
 		Effect.flatMap((handle) => handle.exitCode),
 		Effect.scoped,
 		Effect.ignore,
 	);
 
 /** The badge for one desk; `report` is undefined to hide it. */
-function Badge(props: { theme: Context["theme"]; report: Report | undefined; open: (page: string) => void }) {
+function Badge(props: { theme: Context["theme"]; report: Report | undefined; open: (page: URL) => void }) {
 	const [hovered, setHovered] = createSignal(false);
 
 	// Like the footer's location: muted, base under the mouse (it's clickable); the count always bright, critical ones in the error color.

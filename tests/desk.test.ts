@@ -19,10 +19,11 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Refusal } from "../src/model/errors";
+import type { RelativePath } from "../src/model/paths";
 import { refusal } from "../src/model/wording";
 import { Desk, type Question } from "../src/service/desk";
 import { Backend, Storage } from "../src/service/storage/storage";
-import { E, S } from "./support/ids";
+import { D, E, S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually } from "./support/service";
 
@@ -35,7 +36,7 @@ async function open(storage: Layer.Layer<Storage, unknown> = Storage.layerMemory
 		Layer.buildWithScope(Desk.layer.pipe(Layer.provideMerge(storage), Layer.provideMerge(BunServices.layer)), scope),
 	)) as typeof services;
 }
-const onDisk = (root: string) => Storage.layer(root).pipe(Layer.provide(BunServices.layer));
+const onDisk = (root: string) => Storage.layer(D(root)).pipe(Layer.provide(BunServices.layer));
 const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
 const desk = <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) =>
 	Effect.runPromise(Effect.provideContext(Desk.use(f), services));
@@ -48,10 +49,10 @@ const failure = async <A, E>(f: (desk: Desk["Service"]) => Effect.Effect<A, E>) 
 };
 const entries = () => desk((d) => d.entries);
 const ask = (title: string, extra: Partial<Question> = {}) =>
-	desk((d) => d.ask({ session: S("ses_a"), directory: "/w" }, { title, body: "", ...extra }));
+	desk((d) => d.ask({ session: S("ses_a"), directory: D("/w") }, { title, body: "", ...extra }));
 const bytes = (text: string) => new TextEncoder().encode(text);
 /** Whether the store has the attachment `file` (its path below the store). */
-const stored = (file: string) =>
+const stored = (file: RelativePath) =>
 	Effect.runPromise(
 		Effect.provideContext(
 			Storage.use((storage) => Effect.map(storage.attachment(file), Option.isSome)),
@@ -63,7 +64,7 @@ const stored = (file: string) =>
  * Memory storage that records the path of every attachment it stores, in `files`; the `failing`th one (counting from 1)
  * can't be stored. Its own backend: the memory one, wrapped.
  */
-const recording = (files: Array<string>, failing?: number) => {
+const recording = (files: Array<RelativePath>, failing?: number) => {
 	let tries = 0;
 	const backend = Layer.effect(
 		Backend,
@@ -135,7 +136,7 @@ describe("the rules, on memory storage", () => {
 		const first = await ask("Root", { body: "Details" });
 		await Bun.sleep(2);
 		const second = await ask("Child", { body: "More", parent: first.id });
-		await desk((d) => d.ask({ session: S("ses_elsewhere"), directory: "/x" }, { title: "Elsewhere", body: "" }));
+		await desk((d) => d.ask({ session: S("ses_elsewhere"), directory: D("/x") }, { title: "Elsewhere", body: "" }));
 		expect(await desk((d) => d.describe(undefined, S("ses_a")))).toBe(
 			`- ${second.id} Child [open, user's turn] under ${first.id}\n- ${first.id} Root [open, user's turn]`,
 		);
@@ -152,7 +153,7 @@ describe("the rules, on memory storage", () => {
 
 	test("replies are all or nothing, and a refused one stores no attachments", async () => {
 		await close();
-		const files: Array<string> = [];
+		const files: Array<RelativePath> = [];
 		await open(recording(files));
 		const entry = await ask("A?");
 		const local = crypto.randomUUID();
@@ -177,7 +178,7 @@ describe("the rules, on memory storage", () => {
 	test("an attachment that can't be stored takes the ones stored before it with it", async () => {
 		await close();
 		// The second attachment fails to store.
-		const files: Array<string> = [];
+		const files: Array<RelativePath> = [];
 		await open(recording(files, 2));
 		const entry = await ask("A?");
 		const [a, b] = [crypto.randomUUID(), crypto.randomUUID()];
@@ -194,7 +195,7 @@ describe("the rules, on memory storage", () => {
 
 	test("only referenced attachments are stored, and they go with the last entry pointing at them", async () => {
 		await close();
-		const files: Array<string> = [];
+		const files: Array<RelativePath> = [];
 		await open(recording(files));
 		const entry = await ask("A?");
 		const [kept, dropped] = [crypto.randomUUID(), crypto.randomUUID()];
@@ -226,7 +227,7 @@ describe("the rules, on memory storage", () => {
 
 	test("a reply's entries share one pending message per session; delivered clears it", async () => {
 		const a = await ask("A?");
-		const b = await desk((d) => d.ask({ session: S("ses_b"), directory: "/w" }, { title: "B?", body: "" }));
+		const b = await desk((d) => d.ask({ session: S("ses_b"), directory: D("/w") }, { title: "B?", body: "" }));
 		const c = await ask("C?");
 		await desk((d) =>
 			d.reply(

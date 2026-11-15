@@ -1,11 +1,14 @@
 /** The TUI's plugin RPC client (`src/tui/rpc-client.ts`), over a fake of the TUI's OpenCode client. */
 import { expect, test } from "bun:test";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import { BadgeRpc, off, type Status } from "../src/plugin/badge-rpc";
+import { BadgeRpc, off, Status } from "../src/plugin/badge-rpc";
 import { rpcClient } from "../src/tui/rpc-client";
 
-const live: Status = { live: { url: "http://127.0.0.1:1/", desks: [], deskMode: ["ses_a"] } };
+const live: Status = { live: { url: new URL("http://127.0.0.1:1/"), desks: [], deskMode: ["ses_a"] } };
+/** `live` as it comes over the plugin RPC: encoded. */
+const wire = Schema.encodeSync(Status)(live);
 
 /** The TUI client's `rpc`, answering `status` with `answers` in turn and emitting `changed` to its listeners. */
 const fakeClient = (answers: Array<() => Promise<unknown>>) => {
@@ -33,7 +36,7 @@ const fakeClient = (answers: Array<() => Promise<unknown>>) => {
 
 test("a call decodes its output, at the TUI's location unless told another; rpc.unavailable is tried once more", async () => {
 	const unavailable = { type: "rpc.unavailable", message: "not yet" };
-	const fake = fakeClient([() => Promise.reject(unavailable), () => Promise.resolve(live)]);
+	const fake = fakeClient([() => Promise.reject(unavailable), () => Promise.resolve(wire)]);
 	const client = rpcClient(BadgeRpc, fake.context);
 	expect(await Effect.runPromise(client.status({}))).toEqual(live);
 	expect(fake.calls).toEqual([
@@ -48,7 +51,7 @@ test("a call decodes its output, at the TUI's location unless told another; rpc.
 });
 
 test("a call that fails on the way fails, not retried unless unavailable; output that doesn't fit fails too", async () => {
-	const fake = fakeClient([() => Promise.reject(new Error("socket closed")), () => Promise.resolve(live)]);
+	const fake = fakeClient([() => Promise.reject(new Error("socket closed")), () => Promise.resolve(wire)]);
 	const client = rpcClient(BadgeRpc, fake.context);
 	const failed = await Effect.runPromise(Effect.flip(client.status({})));
 	expect(failed._tag).toBe("UnknownError");
@@ -63,7 +66,7 @@ test("an event is a stream of its payloads, their data decoded; one that doesn't
 	const client = rpcClient(BadgeRpc, fake.context);
 	const received = Effect.runPromise(Stream.runCollect(Stream.take(client.events("changed"), 2)));
 	await Bun.sleep(10);
-	fake.emit({ type: "rpc.desk.changed", location: { directory: "/work/a" }, data: live });
+	fake.emit({ type: "rpc.desk.changed", location: { directory: "/work/a" }, data: wire });
 	fake.emit({ type: "rpc.desk.changed", location: { directory: "/work/b" }, data: off });
 	expect(Array.from(await received).map((event) => [event.location.directory, event.data])).toEqual([
 		["/work/a", live],

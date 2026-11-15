@@ -9,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import { type EntryId, parse, serialize } from "../../model/entry";
+import type { AbsolutePath, RelativePath } from "../../model/paths";
 import type { Backend } from "./storage";
 
 interface Stored {
@@ -22,14 +23,16 @@ const content = (stored: Stored | undefined) =>
 		: Option.some({ data: new Blob([stored.data.slice()]), modified: stored.modified });
 
 /** A store in memory as the storage's backend ({@link Backend.memory}). */
-export const memory = Effect.fn("Storage.memory")(function* (files: Readonly<Record<string, string | Uint8Array>>) {
+export const memory = Effect.fn("Storage.memory")(function* (
+	files: Readonly<Record<AbsolutePath, string | Uint8Array>>,
+) {
 	/** Entry id → its file's text. */
 	const entries = yield* Ref.make<ReadonlyMap<EntryId, string>>(new Map());
 
 	/** Path below the store → the attachment. */
-	const attachments = yield* Ref.make<ReadonlyMap<string, Stored>>(new Map());
+	const attachments = yield* Ref.make<ReadonlyMap<RelativePath, Stored>>(new Map());
 	const encoder = new TextEncoder();
-	const directories: ReadonlyMap<string, Stored> = new Map(
+	const directories: ReadonlyMap<string, Stored> = new Map<string, Stored>(
 		Object.entries(files).map(([path, data]) => [
 			path,
 			{ data: typeof data === "string" ? encoder.encode(data) : data, modified: 0 },
@@ -52,7 +55,7 @@ export const memory = Effect.fn("Storage.memory")(function* (files: Readonly<Rec
 			),
 		detach: (files) => Ref.update(attachments, (all) => without(all, new Set(files))),
 		attachment: (relative) => Effect.map(Ref.get(attachments), (all) => content(all.get(relative))),
-		attachmentUrl: (relative) => Effect.succeed(`memory:${relative}`),
+		attachmentUrl: (relative) => Effect.succeed(new URL(`memory:${relative}`)),
 		file: (path) => Effect.succeed(content(directories.get(path))),
 		changed: Stream.never,
 		publish: () => Effect.void,
