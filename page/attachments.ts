@@ -3,15 +3,12 @@
  * draft's Markdown names one `attachment:<id>`; sending uploads only those the text still references.
  */
 
+import * as Effect from "effect/Effect";
 import type { Attachment } from "../src/api/api";
 import { referencedAttachments } from "../src/model/entry";
+import * as Database from "./database";
 
-export interface Local {
-	readonly id: string;
-	readonly name: string;
-	readonly type: string;
-	readonly blob: Blob;
-}
+export type Local = Database.Attachment;
 
 /** `![name](attachment:<id>)` for images and video (rendered inline), `[name](attachment:<id>)` otherwise. */
 export const link = (file: Local) =>
@@ -20,37 +17,16 @@ export const link = (file: Local) =>
 /** The attachment ids a draft's text references. */
 export const referenced = referencedAttachments;
 
-// TODO main | effect-browser has api for idb i think | by Evgenii Perminov at Sun, 15 Nov 2026 14:35:28 GMT
-const database = new Promise<IDBDatabase>((resolve, reject) => {
-	const request = indexedDB.open("desk", 1);
-	request.onupgradeneeded = () => request.result.createObjectStore("attachments", { keyPath: "id" });
-	request.onsuccess = () => resolve(request.result);
-	request.onerror = () => reject(request.error);
-});
+export const all = () => Database.run((query) => query.from("attachments").select());
 
-async function transact<A>(
-	mode: IDBTransactionMode,
-	f: (store: IDBObjectStore) => IDBRequest<A> | undefined,
-): Promise<A | undefined> {
-	const transaction = (await database).transaction("attachments", mode);
-	const request = f(transaction.objectStore("attachments"));
-	return new Promise((resolve, reject) => {
-		transaction.oncomplete = () => resolve(request?.result);
-		transaction.onerror = () => reject(transaction.error);
-	});
-}
+export const save = (file: Local) => Database.run((query) => Effect.asVoid(query.from("attachments").upsert(file)));
 
-export const all = async () => (await transact<Array<Local>>("readonly", (store) => store.getAll())) ?? [];
-export const save = (file: Local) =>
-	transact("readwrite", (store) => {
-		store.put(file);
-		return undefined;
-	});
 export const remove = (ids: Iterable<string>) =>
-	transact("readwrite", (store) => {
-		for (const id of ids) store.delete(id);
-		return undefined;
-	});
+	Database.run((query) =>
+		Effect.forEach(ids, (id) => query.from("attachments").delete().equals(id), { discard: true }).pipe(
+			query.withTransaction({ tables: ["attachments"], mode: "readwrite" }),
+		),
+	);
 
 /** The files a draft's text references, ready to send. Ids it can't find are left to the desk to refuse. */
 export async function outgoing(text: string, files: (id: string) => Local | undefined): Promise<Array<Attachment>> {
@@ -58,6 +34,7 @@ export async function outgoing(text: string, files: (id: string) => Local | unde
 		[...referenced(text)].flatMap((id) => {
 			const file = files(id);
 			if (!file) return [];
+
 			return [file.blob.bytes().then((data) => ({ id, name: file.name, data }))];
 		}),
 	);

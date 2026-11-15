@@ -3,7 +3,7 @@
  * What every view of the page shares: the desk shown (`stores/view.ts`), the drafts (`stores/drafts.ts`) and their
  * attachments (`stores/files.ts`), the toast, and what the user does with them, through `useDesk`.
  */
-import { createContext, type ParentProps, useContext } from "solid-js";
+import { createContext, createEffect, on, type ParentProps, useContext } from "solid-js";
 import { reconcile } from "solid-js/store";
 import type { View } from "../src/api/api";
 import { type Entry, newId, waitingOn } from "../src/model/entry";
@@ -32,6 +32,14 @@ export const createDesk = () => {
 	};
 
 	const view = createView(session, dropGone);
+
+	// The drafts may load after the desk's first view.
+	createEffect(
+		on(drafts.loaded, (loaded) => {
+			const now = view.state.view;
+			if (loaded && now && (now.desk?.session ?? undefined) === session()) dropGone(now);
+		}),
+	);
 
 	/** Waiting on you, and you've started an answer: shown instead of the plain status. */
 	const drafted = (entry: Entry) => yours(entry) && !!drafts.drafts[entry.id]?.trim();
