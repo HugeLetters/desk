@@ -290,6 +290,24 @@ describe("delivery", () => {
 		await eventually(async () => (await read(asked.id))?.pending === null);
 	});
 
+	test("the desks are the sessions with entries and those in desk mode, an empty one included", async () => {
+		const server = service.fake.server("http://opencode-1");
+		server.session({ id: S("ses_a"), title: "Asked" });
+		server.session({ id: S("ses_b"), title: "Empty" });
+		const plugin = service.plugin(server);
+		await plugin.request("ask", { by: { session: S("ses_a"), directory: "/w" }, question: question("Q") });
+		await plugin.request("modes", { sessions: [S("ses_b")] });
+		await eventually(async () => (await view()).desks.length === 2);
+		expect((await view()).desks.map((desk) => [desk.session, desk.waiting])).toEqual([
+			[S("ses_a"), 1],
+			[S("ses_b"), 0],
+		]);
+		// Out of desk mode with nothing on it: gone; with an unresolved entry: still there.
+		await plugin.request("modes", { sessions: [] });
+		await eventually(async () => (await view()).desks.length === 1);
+		expect((await view()).desks.map((desk) => desk.session)).toEqual([S("ses_a")]);
+	});
+
 	test("while its session is out of desk mode, a reply waits, not delivered; it goes out once, when desk mode is on", async () => {
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a") });

@@ -322,7 +322,10 @@ function App() {
 	/** No desk picked: every session's desk with entries. */
 	function Desks() {
 		return (
-			<Show when={(state.view?.desks.length ?? 0) > 0} fallback={<div class="empty">No desk has entries yet.</div>}>
+			<Show
+				when={(state.view?.desks.length ?? 0) > 0}
+				fallback={<div class="empty">No desks yet: a session has one once it turns desk mode on or asks.</div>}
+			>
 				<div class="section">Desks</div>
 				<div class="list">
 					<For each={state.view?.desks ?? []}>

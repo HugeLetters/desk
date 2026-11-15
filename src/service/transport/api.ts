@@ -67,7 +67,14 @@ export class Api extends Context.Service<
 								sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? ""),
 								(name) => ({ session: id, ...name }),
 							);
-						const desks = yield* Effect.forEach(Object.entries(bySession), ([id, mine]) =>
+						const deskMode = yield* opencode.inDeskMode;
+						// A desk is a session's entries; a session in desk mode has one even before its first entry, so it's
+						// listed from the start (empty), and one with unresolved entries stays listed after it leaves desk mode.
+						const groups: ReadonlyArray<readonly [string, ReadonlyArray<Entry>]> = [
+							...Object.entries(bySession),
+							...deskMode.filter((id) => !(id in bySession)).map((id) => [id, []] as const),
+						];
+						const desks = yield* Effect.forEach(groups, ([id, mine]) =>
 							Effect.map(name(id, mine), (named) => {
 								const waiting = waitingFor(mine, "user");
 								return {
@@ -79,7 +86,7 @@ export class Api extends Context.Service<
 						);
 						const all = {
 							desks: desks.sort((a, b) => a.title.localeCompare(b.title) || a.folder.localeCompare(b.folder)),
-							deskMode: yield* opencode.inDeskMode,
+							deskMode,
 							failures: Object.fromEntries(yield* failures.current),
 						};
 						if (session === undefined) return { desk: null, entries: [], ...all } satisfies View;
