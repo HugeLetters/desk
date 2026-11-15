@@ -90,8 +90,6 @@ const home = () => {
 	const id = session();
 	return id === undefined ? "/" : deskPath(id);
 };
-/** An entry on the current desk. */
-const entryOnDesk = (id: string) => entryPath(session(), id);
 
 function Markdown(props: { text: string; entry: string; local?: Local }) {
 	let container: HTMLDivElement | undefined;
@@ -277,7 +275,7 @@ function App() {
 	);
 
 	function List() {
-		const Section = (props: { title: string; entries: ReadonlyArray<Entry>; note?: string }) => (
+		const Section = (props: { desk: string; title: string; entries: ReadonlyArray<Entry>; note?: string }) => (
 			<Show when={props.entries.length > 0}>
 				<div class="section">
 					{props.title}
@@ -288,7 +286,7 @@ function App() {
 						{(entry) => (
 							<A
 								class={`item${yours(entry) ? " turn" : ""}${entry.priority === "low" ? " low" : ""}${entry.priority === "critical" ? " critical" : ""}`}
-								href={entryOnDesk(entry.id)}
+								href={entryPath(props.desk, entry.id)}
 							>
 								<span class="id">#{shortId(entry.id)}</span>
 								<Show when={entry.priority === "critical"}>
@@ -310,16 +308,23 @@ function App() {
 			</Show>
 		);
 		return (
-			<Show when={session() !== undefined} fallback={<Desks />}>
-				<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
-					<Section
-						title="Waiting on you"
-						entries={mine()}
-						note={`${mine().filter(drafted).length} of ${mine().length} drafted`}
-					/>
-					<Section title="Waiting on the agents" entries={theirs()} />
-					<Section title="Resolved" entries={ordered(entries()).filter((entry) => entry.status === "resolved")} />
-				</Show>
+			<Show when={session()} fallback={<Desks />}>
+				{(desk) => (
+					<Show when={entries().length > 0} fallback={<div class="empty">The desk is empty.</div>}>
+						<Section
+							desk={desk()}
+							title="Waiting on you"
+							entries={mine()}
+							note={`${mine().filter(drafted).length} of ${mine().length} drafted`}
+						/>
+						<Section desk={desk()} title="Waiting on the agents" entries={theirs()} />
+						<Section
+							desk={desk()}
+							title="Resolved"
+							entries={ordered(entries()).filter((entry) => entry.status === "resolved")}
+						/>
+					</Show>
+				)}
 			</Show>
 		);
 	}
@@ -357,8 +362,10 @@ function App() {
 	}
 
 	function EntryView() {
-		const params = useParams<{ id: string }>();
+		const params = useParams<{ session: string; id: string }>();
 		const navigate = useNavigate();
+		/** An entry on this entry's desk (the route's session, decoded as `sessionIn` does). */
+		const entryOnDesk = (id: string) => entryPath(decodeURIComponent(params.session), id);
 		const entry = () => byId(params.id);
 		/** Where this entry sat in the order; still known after it leaves the desk, so Next goes on from here. */
 		const place = createMemo<Pick<Entry, "parent" | "created" | "priority">>(

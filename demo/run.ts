@@ -114,7 +114,10 @@ try {
 	});
 	console.log(`sample desk at ${service.url}`);
 	const page = (session?: string, entry?: string) =>
-		link(service.url, entry ? entryPath(session, entry) : session ? deskPath(session) : "/");
+		link(
+			service.url,
+			session === undefined ? "/" : entry === undefined ? deskPath(session) : entryPath(session, entry),
+		);
 
 	// Every link stays on the page: across desks, into an entry and back, and through the desk picker.
 	{
