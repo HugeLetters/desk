@@ -196,7 +196,7 @@ export const register = (store: string) => {
 				),
 		};
 		const actor = yield* Machine.start(machine);
-		const taken = yield* actor.when((state) =>
+		const taken = yield* actor.until((state) =>
 			state._tag === "Registered"
 				? Option.some(Option.none<number>())
 				: state._tag === "Taken"

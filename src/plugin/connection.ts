@@ -284,7 +284,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 		});
 
 		/** What a request gets: the link once it's live, or why there's none; nothing yet while it's on its way. */
-		const settled = actor.when(
+		const settled = actor.until(
 			(state): Option.Option<Effect.Effect<{ readonly client: Client; readonly url: string }, DeskError>> =>
 				state._tag === "Live"
 					? Option.some(Effect.succeed(state))
@@ -298,7 +298,7 @@ export const make = <R = never>(options: Options<R>): Effect.Effect<Connection, 
 				Effect.andThen(
 					actor.send(Event.Want({ on })),
 					// TODO main | this reads a bit weird - like we wait til state connection is the same as on? | by Evgenii Perminov at Sun, 15 Nov 2026 17:52:29 GMT
-					actor.when((state) => ((state._tag === "Off") === !on ? Option.some(undefined) : Option.none())),
+					actor.until((state) => ((state._tag === "Off") === !on ? Option.some(undefined) : Option.none())),
 				),
 			client: Effect.map(live, (now) => now.client),
 			live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),

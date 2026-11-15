@@ -72,7 +72,7 @@ test("a state's run starts on entering it and is interrupted on leaving; what it
 				const afterStale = yield* actor.state;
 				yield* actor.send("toggle");
 				const fired = yield* Effect.timeoutOption(
-					actor.when((state) => (state === "fired" ? Option.some(state) : Option.none())),
+					actor.until((state) => (state === "fired" ? Option.some(state) : Option.none())),
 					"200 millis",
 				);
 				return { afterStale, fired: Option.isSome(fired) };
@@ -93,7 +93,7 @@ test("an event that changes nothing leaves the state's run going", async () => {
 					run: (state) => Effect.sync(() => started.push(state)),
 				});
 				yield* Effect.forEach(["same", "same", "next", "same"] as const, actor.send, { discard: true });
-				yield* actor.when((state) => (state === 1 ? Option.some(state) : Option.none()));
+				yield* actor.until((state) => (state === 1 ? Option.some(state) : Option.none()));
 				yield* Effect.sleep("10 millis");
 				return started;
 			}),
@@ -115,7 +115,7 @@ test("states with the same key share one run, started in the first of them; anot
 					run: (state) => Effect.sync(() => started.push(state)),
 				});
 				yield* Effect.forEach([1, 2, 3], () => actor.send("next"), { discard: true });
-				yield* actor.when((state) => (state === 3 ? Option.some(state) : Option.none()));
+				yield* actor.until((state) => (state === 3 ? Option.some(state) : Option.none()));
 				yield* Effect.sleep("10 millis");
 				return started;
 			}),

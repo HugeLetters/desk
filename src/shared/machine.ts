@@ -10,10 +10,11 @@
  *   for a resource that lasts through several (one connection, connecting and then live). By default, the state.
  *
  * The actor is one fiber with a mailbox: it alone holds the state, and takes events one at a time. Others `send` it
- * events and watch its state (`changes`, `when`); nobody sets it.
+ * events and watch its state (`changes`, `until`); nobody sets it.
  */
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Filter from "effect/Filter";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import type * as Scope from "effect/Scope";
@@ -24,7 +25,11 @@ export interface Machine<S, E, R = never> {
 	readonly initial: S;
 	readonly reconcile: (state: S, event: E) => S;
 	readonly run: (state: S, emit: (event: E) => Effect.Effect<void>) => Effect.Effect<void, never, R>;
-	// TODO main | whats key for? | by Evgenii Perminov at Sun, 15 Nov 2026 17:50:39 GMT
+	/**
+	 * States with the same key share one `run`: moving between them doesn't restart it (Connection's `Connecting` and
+	 * `Live` keep one WebSocket). Keys are compared with `Equal.equals`.
+	 * @default the state itself
+	 */
 	readonly key?: (state: S) => unknown;
 }
 
@@ -33,8 +38,8 @@ export interface Actor<S, E> {
 	readonly state: Effect.Effect<S>;
 	/** The state now, then every new one. */
 	readonly changes: Stream.Stream<S>;
-	/** The first state, now or later, that `pick` takes. */
-	readonly when: <A>(pick: (state: S) => Option.Option<A>) => Effect.Effect<A>;
+	/** Waits for the first state, now or later, for which `select` returns some; then its value. */
+	readonly until: <A>(select: (state: S) => Option.Option<A>) => Effect.Effect<A>;
 }
 
 /** An event, and where it came from: `undefined` from `send`, else the number of the `run` that emitted it. */
@@ -63,7 +68,9 @@ export const start = <S, E, R>(machine: Machine<S, E, R>): Effect.Effect<Actor<S
 		/** The `n`th run, from `state` until an event changes the key; then the next, for good. */
 		const enter = (state: S, n: number): Effect.Effect<never, never, R> =>
 			Effect.andThen(SubscriptionRef.set(states, state), () =>
-				// TODO main | can you elaborate a bit what this race does? | by Evgenii Perminov at Sun, 15 Nov 2026 17:47:52 GMT
+				// One side is the state's `run`, then `never` (a run that's done isn't a reason to leave the state); the other
+				// takes events until one changes the key, and gives the state then. That side is the one that finishes: the
+				// race then interrupts the run, so nothing the state started outlives it, and the next state is entered.
 				Effect.raceFirst(
 					Effect.andThen(
 						machine.run(state, (event) => Effect.asVoid(Queue.offer(mailbox, { event, from: n }))),
@@ -78,17 +85,12 @@ export const start = <S, E, R>(machine: Machine<S, E, R>): Effect.Effect<Actor<S
 			send: (event) => Effect.asVoid(Queue.offer(mailbox, { event, from: undefined })),
 			state: SubscriptionRef.get(states),
 			changes: SubscriptionRef.changes(states),
-			when: (pick) =>
+			until: (select) =>
 				SubscriptionRef.changes(states).pipe(
-					// TODO main | pick is filter? or more like until? | by Evgenii Perminov at Sun, 15 Nov 2026 17:49:16 GMT
-					Stream.map(pick),
-					// TODO main | why not just filterMap? | by Evgenii Perminov at Sun, 15 Nov 2026 17:49:41 GMT
-					Stream.filter(Option.isSome),
+					Stream.filterMap(Filter.fromPredicateOption(select)),
 					Stream.runHead,
 					// `changes` never ends: without a head, it was interrupted.
-					Effect.flatMap((head) =>
-						Option.match(Option.flatten(head), { onNone: () => Effect.never, onSome: Effect.succeed }),
-					),
+					Effect.flatMap(Option.match({ onNone: () => Effect.never, onSome: Effect.succeed })),
 				),
 		};
 		return actor;

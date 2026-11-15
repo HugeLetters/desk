@@ -73,7 +73,7 @@ export class Clients extends Context.Service<
 				return Clients.of({
 					hold: Effect.acquireRelease(actor.send(Event.Joined()), () => actor.send(Event.Left())),
 					count: Effect.map(actor.state, (state) => (state._tag === "Busy" ? state.clients : 0)),
-					idle: actor.when((state) => (state._tag === "Done" ? Option.some(undefined) : Option.none())),
+					idle: actor.until((state) => (state._tag === "Done" ? Option.some(undefined) : Option.none())),
 					retire: actor.send(Event.Retire()),
 				});
 			}),

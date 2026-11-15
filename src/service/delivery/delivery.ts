@@ -164,7 +164,7 @@ export const layer = (retry: Duration.Input = "30 seconds") =>
 			const deliver = (id: MessageID) =>
 				Effect.scoped(
 					Effect.flatMap(Machine.start(machine(id)), (actor) =>
-						actor.when((state) => (state._tag === "Delivered" ? Option.some(undefined) : Option.none())),
+						actor.until((state) => (state._tag === "Delivered" ? Option.some(undefined) : Option.none())),
 					),
 				);
 
