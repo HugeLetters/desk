@@ -11,15 +11,17 @@ import type { Desk, Status } from "../plugin/badge-rpc";
 export type Statuses = Readonly<Record<string, Status>>;
 
 /** `statuses` with `directory`'s status now `status`. */
-// TODO main | learn/first are super unclear function names | by Evgenii Perminov at Sun, 15 Nov 2026 18:34:19 GMT
-export const learn = (statuses: Statuses, directory: string, status: Status): Statuses => ({
+export const withStatus = (statuses: Statuses, directory: string, status: Status): Statuses => ({
 	...statuses,
 	[directory]: status,
 });
 
-/** `statuses` with `directory`'s first status, unless an event has already told it (an answer may come after one). */
-export const first = (statuses: Statuses, directory: string, status: Status): Statuses =>
-	Object.hasOwn(statuses, directory) ? statuses : learn(statuses, directory, status);
+/**
+ * `statuses` with `directory`'s status `status` unless it has one already: an answer to asking for it may come after
+ * an event with a newer one.
+ */
+export const withFirstStatus = (statuses: Statuses, directory: string, status: Status): Statuses =>
+	Object.hasOwn(statuses, directory) ? statuses : withStatus(statuses, directory, status);
 
 /** The status of the plugin instance in `directory`, if known. */
 export const at = (statuses: Statuses, directory: string | undefined): Status | undefined =>

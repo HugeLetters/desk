@@ -15,14 +15,14 @@ import * as Fiber from "effect/Fiber";
 import * as FiberSet from "effect/FiberSet";
 import * as ChildProcess from "effect/process/ChildProcess";
 import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { createEffect, createSignal, Show } from "solid-js";
-import { BadgeRpc, type Status } from "../plugin/badge-rpc";
+import { BadgeRpc } from "../plugin/badge-rpc";
 import * as Settings from "../shared/settings";
-import { at, first, learn, type Report, report, type Statuses } from "./badge";
+import { at, type Report, report, type Statuses, withFirstStatus, withStatus } from "./badge";
+import { type RpcClient, rpcClient } from "./rpc-client";
 
 /** Opens `url` in the browser with `opener` (`open`, which exits at once, once it has handed over). */
 const open = (opener: string, url: string) =>
@@ -70,29 +70,9 @@ function Badge(props: { theme: Context["theme"]; report: Report | undefined; ope
 	);
 }
 
-/** The plugin's RPC client, as the TUI's OpenCode client gives it. */
-type Client = ReturnType<typeof clientOf>;
-const clientOf = (context: Context) => context.client.rpc(BadgeRpc);
-
-/** The `changed` events of every location's plugin instance, for as long as the stream runs. */
-const changes = (client: Client) =>
-	Stream.callback<{ readonly directory: string; readonly status: Status }>((queue) =>
-		Effect.acquireRelease(
-			Effect.sync(() =>
-				client.events.on(
-					"changed",
-					(event) => void Queue.offerUnsafe(queue, { directory: event.location.directory, status: event.data }),
-				),
-			),
-			(unsubscribe) => Effect.sync(unsubscribe),
-		),
-	);
-
 /** The status of `directory`'s plugin instance, asking again every couple of seconds while OpenCode's server can't answer. */
-const ask = (client: Client, directory: string) =>
-	Effect.tryPromise(() => client.status({}, { location: { directory } })).pipe(
-		Effect.retry(Schedule.spaced("2 seconds")),
-	);
+const ask = (client: RpcClient<typeof BadgeRpc>, directory: string) =>
+	client.status({}, { location: { directory } }).pipe(Effect.retry(Schedule.spaced("2 seconds")));
 
 /**
  * The badge in the footer, for as long as it runs: the settings, the slot, and the statuses of the plugin's instances
@@ -100,7 +80,7 @@ const ask = (client: Client, directory: string) =>
  */
 const badge = Effect.fn("badge")(function* (context: Context) {
 	const opener = yield* Settings.opener;
-	const client = clientOf(context);
+	const client = rpcClient(BadgeRpc, context);
 	const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 	const [statuses, setStatuses] = createSignal<Statuses>({});
 	/** The locations asked for so far. */
@@ -108,13 +88,12 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 	const asked = yield* Ref.make<ReadonlySet<string>>(new Set());
 
 	/** Asks `directory`'s instance, the first time only; its events tell the rest. */
-	// TODO main | names watched - actually does something once | by Evgenii Perminov at Sun, 15 Nov 2026 18:39:41 GMT
-	const watch = Effect.fn("watch")(function* (directory: string) {
+	const askOnce = Effect.fn("askOnce")(function* (directory: string) {
 		const known = yield* Ref.getAndUpdate(asked, (seen) => new Set([...seen, directory]));
 		if (known.has(directory)) return;
 
 		const status = yield* ask(client, directory);
-		yield* Effect.sync(() => setStatuses((now) => first(now, directory, status)));
+		yield* Effect.sync(() => setStatuses((now) => withFirstStatus(now, directory, status)));
 	});
 
 	/** Asks every location asked before again: after OpenCode's server reconnects, its events since are lost. */
@@ -123,7 +102,7 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 			seen,
 			(directory) =>
 				Effect.flatMap(ask(client, directory), (status) =>
-					Effect.sync(() => setStatuses((now) => learn(now, directory, status))),
+					Effect.sync(() => setStatuses((now) => withStatus(now, directory, status))),
 				),
 			{ concurrency: "unbounded", discard: true },
 		),
@@ -147,7 +126,7 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 					const location = () => locationOf(slot.sessionID, desk());
 					createEffect(() => {
 						const directory = location();
-						if (directory !== undefined) run(watch(directory));
+						if (directory !== undefined) run(askOnce(directory));
 					});
 					return (
 						<Badge
@@ -167,8 +146,12 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 		(unsubscribe) => Effect.sync(unsubscribe),
 	);
 
-	yield* Stream.runForEach(changes(client), ({ directory, status }) =>
-		Effect.sync(() => setStatuses((now) => learn(now, directory, status))),
+	// Every location's `changed` events; one that doesn't decode ends the subscription, so it's taken out again.
+	yield* client.events("changed").pipe(
+		Stream.retry(Schedule.forever),
+		Stream.runForEach((event) =>
+			Effect.sync(() => setStatuses((now) => withStatus(now, event.location.directory, event.data))),
+		),
 	);
 }, Effect.scoped);
 

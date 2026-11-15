@@ -4,8 +4,7 @@
  * each location's and tells their events apart by `location`.
  *
  * Between the desk's own two parts, in one OpenCode: not the desk service's contract (`api.ts`), nor its version. Only
- * schemas here, so the TUI imports nothing else of the plugin's. Standard Schema too (`toStandardSchemaV1`), which
- * the TUI's Promise client needs.
+ * schemas here, so the TUI imports nothing else of the plugin's; its client (`tui/rpc-client.ts`) makes them portable.
  */
 import { Rpc } from "@opencode/schema/rpc";
 import * as Schema from "effect/Schema";
@@ -33,17 +32,14 @@ export const off: Status = { live: null };
 
 export const sameStatus = Schema.toEquivalence(Status);
 
-const status = Schema.toStandardSchemaV1(Status);
-
-// TODO main | look up rpcClient helper from /Users/evperminov/.config/opencode/src/lib/rpc-client.ts . it doesnt have event support but you can copy it here and extend to return a stream/callback | by Evgenii Perminov at Sun, 15 Nov 2026 16:26:42 GMT
 export const BadgeRpc = Rpc.define({
 	id: "desk",
 	methods: {
 		/** This plugin instance's status now. */
-		status: { input: Schema.toStandardSchemaV1(Schema.Struct({})), output: status },
+		status: { input: Schema.Struct({}), output: Status },
 	},
 	events: {
 		/** The status, whenever it changes. */
-		changed: { schema: status },
+		changed: { schema: Status },
 	},
 });

@@ -15,7 +15,7 @@ import * as Stream from "effect/Stream";
 import { statuses } from "../src/plugin/badge";
 import { off, type Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
-import { at, count, first, learn, report } from "../src/tui/badge";
+import { at, count, report, withFirstStatus, withStatus } from "../src/tui/badge";
 import { S } from "./support/ids";
 import { present } from "./support/present";
 import { eventually, startService } from "./support/service";
@@ -145,7 +145,7 @@ test("statuses per location: a session's badge uses its location's, the latest e
 	const live = (waiting: number): Status => ({
 		live: { url: "http://127.0.0.1:47400/", desks: [{ session: "ses_a", waiting, critical: 0 }], deskMode: ["ses_a"] },
 	});
-	const a = learn(learn({}, "/work/a", live(1)), "/work/b", off);
+	const a = withStatus(withStatus({}, "/work/a", live(1)), "/work/b", off);
 	expect(at(a, "/work/a")).toEqual(live(1));
 	expect(at(a, "/work/b")).toEqual(off);
 	// Not asked yet, or not loaded: nothing.
@@ -156,10 +156,10 @@ test("statuses per location: a session's badge uses its location's, the latest e
 	expect(report(at(a, "/work/a"), "ses_a")?.count).toEqual({ waiting: 1, critical: 0 });
 	expect(report(at(a, "/work/b"), "ses_a")).toBeUndefined();
 	// An event replaces a location's status.
-	const b = learn(a, "/work/a", live(2));
+	const b = withStatus(a, "/work/a", live(2));
 	expect(at(b, "/work/a")).toEqual(live(2));
 	expect(at(a, "/work/a")).toEqual(live(1));
 	// The first answer for a location counts only if no event came first.
-	expect(at(first(b, "/work/a", off), "/work/a")).toEqual(live(2));
-	expect(at(first(b, "/work/c", live(3)), "/work/c")).toEqual(live(3));
+	expect(at(withFirstStatus(b, "/work/a", off), "/work/a")).toEqual(live(2));
+	expect(at(withFirstStatus(b, "/work/c", live(3)), "/work/c")).toEqual(live(3));
 });
