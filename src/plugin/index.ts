@@ -53,19 +53,19 @@ export default Plugin.define<Scope.Scope>({
 
 			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name. A session
 			// moving in or out of this directory may connect or hang up this instance, too.
+			// One failed `moved` doesn't end the subscription (the inner `ignore`); a failure of OpenCode's event stream
+			// does, and a forked fiber's failure goes nowhere, so there's nothing more to ignore.
 			yield* ctx.event.subscribe({ types: ["session.moved"] }).pipe(
 				Stream.runForEach((event) =>
 					calls
 						.service((client) => client.moved({ session: event.data.sessionID }))
 						.pipe(Effect.ignore, Effect.andThen(sync)),
 				),
-				// TODO main | isnt this ignore useless? stream processing would stil abort if run for each fails and forked fiber errors dont propagate  | by Evgenii Perminov at Sun, 15 Nov 2026 16:22:51 GMT
-				Effect.ignore,
 				Effect.forkScoped,
 			);
 
-			yield* Command.register(ctx, { ...calls, modes, sync });
-			yield* Tools.register(ctx, { ...calls, modes, getRootSessionId });
+			yield* Command.register(ctx, { calls, modes, sync });
+			yield* Tools.register(ctx, { calls, modes, getRootSessionId });
 			yield* Badge.register(ctx, connection);
 		}).pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
 });

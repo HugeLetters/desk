@@ -25,8 +25,9 @@ const described = <S extends Schema.Top>(schema: S, description: string) => sche
 
 const isRefusal = Schema.is(Refusal);
 
-/** What the tools use: desk mode, a session's top-level session, and the service. */
-export interface Desk extends Calls {
+/** What the tools use: the service, desk mode, and a session's top-level session. */
+export interface Desk {
+	readonly calls: Calls;
 	readonly modes: Modes;
 	readonly getRootSessionId: (sessionID: SessionID) => Effect.Effect<SessionID, Sessions.Failure>;
 }
@@ -36,19 +37,20 @@ const define = <Input extends Tool.ValueSchema>(info: Tool.Info<Input, undefined
 
 /** The tools, for `ctx` and `desk`. */
 const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
-	const { service, getRootSessionId } = desk;
+	const { service } = desk.calls;
+	const { getRootSessionId } = desk;
+
 	/** The calling agent, as the service is told: its top-level session (whose desk it is), and where that works. */
-	const agent = (sessionID: SessionID) =>
-		Effect.gen(function* () {
-			const session = yield* Sessions.get(ctx, yield* getRootSessionId(sessionID));
-			const out: Agent = { _tag: "Agent", session: session.id, directory: session.location.directory };
-			return out;
-		});
+	const agent = Effect.fnUntraced(function* (sessionID: SessionID) {
+		const session = yield* Sessions.get(ctx, yield* getRootSessionId(sessionID));
+		const out: Agent = { _tag: "Agent", session: session.id, directory: session.location.directory };
+		return out;
+	});
+
 	/** Runs a tool for a session with the desk on; any failure reaches the model as the tool's error. */
-	const tool =
-		<I, E>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, E>) =>
-		(input: I, context: Tool.Context) =>
-			Effect.gen(function* () {
+	const tool = <I, E>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, E>) =>
+		Effect.fnUntraced(
+			function* (input: I, context: Tool.Context) {
 				if (!(yield* desk.modes.on(context.sessionID))) {
 					return yield* new Tool.Error({
 						message: "The desk is off for this session; the user turns it on with /desk-mode.",
@@ -56,16 +58,15 @@ const tools = (ctx: Context, desk: Desk): ReadonlyArray<Tool.Info> => {
 				}
 
 				return { content: yield* run(input, context.sessionID) };
-			}).pipe(
-				desk.within,
-				Effect.mapError((error) =>
-					error instanceof Tool.Error
-						? error
-						: new Tool.Error({
-								message: isRefusal(error) ? refusal(error) : Connection.errorMessage(error),
-							}),
-				),
-			);
+			},
+			Effect.mapError((error) =>
+				error instanceof Tool.Error
+					? error
+					: new Tool.Error({
+							message: isRefusal(error) ? refusal(error) : Connection.errorMessage(error),
+						}),
+			),
+		);
 
 	return [
 		define({
