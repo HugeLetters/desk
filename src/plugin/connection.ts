@@ -52,7 +52,7 @@ export interface Options<R = never> {
 	/** The service's port, on {@link host}. */
 	readonly port: Port;
 	/** Starts the service; run when nothing listens on the port. */
-	readonly start: Effect.Effect<void, PlatformError.PlatformError | Config.ConfigError, R>;
+	readonly start: Effect.Effect<void, PlatformError.PlatformError | Config.ConfigError | Settings.InvalidSetting, R>;
 	/** This plugin instance's directory. */
 	readonly directory: AbsolutePath;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
@@ -326,29 +326,23 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 });
 
 /**
- * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), on the store and port
- * the settings name, logging to the store's log (`Settings.files`), which it gets as its own stdout and stderr.
+ * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), with this plugin's
+ * `options` as it got them (`--options '<json>'`: the service reads them as the plugin does, before the environment),
+ * logging to the store's log (`Settings.files`), which it gets as its own stdout and stderr.
  */
-export const startService = Effect.fn("startService")(function* () {
+export const startService = Effect.fn("startService")(function* (options: Settings.Options) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const main = path.resolve(import.meta.dir, "../service/main.ts");
 	const { store, log } = yield* Settings.files;
-	const port = yield* Settings.port;
 	yield* fs.makeDirectory(store, { recursive: true });
 
 	// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
 	const bun = yield* Process.which("bun");
 	yield* Process.spawnDetached({
 		command: Option.getOrElse(bun, () => process.execPath),
-		args: [main],
+		args: [main, "--options", JSON.stringify(options)],
 		output: yield* Process.openForAppend(log),
-		env: {
-			...process.env,
-			// TODO main | kinda dont like this would silently use default if this is passed in wrong | by Evgenii Perminov at Sun, 15 Nov 2026 16:41:04 GMT
-			DESK_HOME: store,
-			DESK_PORT: String(port),
-			...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }),
-		},
+		env: { ...process.env, ...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }) },
 	});
 }, Effect.scoped);

@@ -5,6 +5,7 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Result from "effect/Result";
 import { Port } from "../src/model/paths";
 import * as Settings from "../src/shared/settings";
 import { D } from "./support/ids";
@@ -62,6 +63,21 @@ test("an entry's layer puts the options and the environment in front of a provid
 	);
 	expect(settings.port).toBe(Port.make(2));
 	if (process.env.DESK_TIMEOUT === undefined) expect(settings.timeout).toEqual(Duration.seconds(2));
+});
+
+test("strict (the service): a setting given but not valid fails, saying which; one not given is still its default", async () => {
+	const strictly = (options: Record<string, unknown>) =>
+		Effect.runPromise(
+			Effect.result(
+				Effect.all({ port: Settings.port, idle: Settings.idle }).pipe(
+					Effect.provide(Settings.layer(options, { strict: true })),
+				),
+			),
+		);
+	const failed = await strictly({ port: "nope" });
+	expect(Result.isFailure(failed) && failed.failure).toMatchObject({ _tag: "InvalidSetting", name: "port" });
+	if (process.env.DESK_PORT === undefined && process.env.DESK_IDLE === undefined)
+		expect(await strictly({})).toEqual(Result.succeed({ port: Port.make(47400), idle: Duration.minutes(10) }));
 });
 
 test("idle is a duration, as text or ms, else 10 minutes", async () => {

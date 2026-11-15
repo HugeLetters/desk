@@ -33,6 +33,9 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 
    Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "~/.local/share/desk" } }`.
    Each option can be set in the environment instead, as `DESK_` and its name (`DESK_HOME`, `DESK_PORT`, `DESK_TIMEOUT`); the options win.
+   The plugin starts the service with its own options (`main.ts --options '<json>'`), read the same way, but where
+   the plugin warns about a setting that isn't valid and uses the default, the service doesn't start: its log
+   (`<store>/service.log`) says which setting.
    Edits here apply when OpenCode reloads its plugins; there's no release step.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
@@ -77,7 +80,7 @@ flowchart LR
   (plugin connection or open page) goes, or on a signal, within about a second even with pages open.
 - **A plugin instance** (`src/plugin/`, an Effect plugin: `@opencode/plugin/effect`) is a thin, stateless client, one per
   directory OpenCode works in. While a session in its directory is in desk mode, it connects to
-  `ws://127.0.0.1:<port>/rpc`, starting the service detached if nothing listens on the port (log:
+  `ws://127.0.0.1:<port>/rpc`, starting the service detached if nothing listens on the port, with this plugin's options (log:
   `<store>/service.log`), says `hello`, and holds `attach` open with those
   sessions (later changes as `modes`); it hangs up when the last one turns desk mode off. Connected, it reconnects
   (restarting the service) if the connection drops. It is also the service's only way into OpenCode: the service's

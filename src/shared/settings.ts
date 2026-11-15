@@ -1,8 +1,12 @@
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Context from "effect/Context";
+import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { AbsolutePath, Port } from "../model/paths";
@@ -18,28 +22,52 @@ export const optionsProvider = (options: Options) => {
 	return ConfigProvider.fromUnknown({ desk: options });
 };
 
+/** A setting given but not valid, where the settings are strict ({@link layer}'s `strict`: the service). */
+export class InvalidSetting extends Data.TaggedError("InvalidSetting")<{
+	readonly name: string;
+	readonly message: string;
+}> {
+	// Reported by whoever reads the settings (the service's `main.ts`), so not by the runtime as well.
+	override readonly [Runtime.errorReported] = false;
+}
+
+/**
+ * Whether a setting given but not valid fails ({@link InvalidSetting}) instead of giving way to its default with a
+ * warning.
+ * @default false
+ */
+const Strict = Context.Reference<boolean>("desk/Settings/Strict", { defaultValue: () => false });
+
 /**
  * Default ConfigProvider layer for configuration:
  * - {@link Options} provider
  * - Constant-case env provider
  * - Any other providers setup
+ *
+ * `strict`: a setting given but not valid fails instead of giving way to its default (the service; the plugin and the
+ * TUI warn and go on).
  */
-export const layer = (options: Options = {}) => {
+export const layer = (options: Options = {}, { strict = false }: { readonly strict?: boolean } = {}) => {
 	const provider = ConfigProvider.orElse(
 		optionsProvider(options),
 		ConfigProvider.fromEnv().pipe(ConfigProvider.constantCase),
 	);
 
-	return ConfigProvider.layerAdd(provider, { asPrimary: true });
+	return Layer.merge(ConfigProvider.layerAdd(provider, { asPrimary: true }), Layer.succeed(Strict, strict));
 };
 
-/** Desk Setting config w/ a fallback */
+/** Desk Setting config w/ a fallback: missing, the fallback; not valid, the fallback with a warning, or, strict, a failure. */
 const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 	config.pipe(
 		Config.nested("desk"),
 		Config.withDefault(fallback),
-		Effect.catch((error) =>
-			Effect.as(Effect.logWarning(`desk: ignoring the ${name} setting, using its default: ${error.message}`), fallback),
+		Effect.catch(
+			Effect.fnUntraced(function* (error) {
+				if (yield* Strict) return yield* new InvalidSetting({ name, message: error.message });
+
+				yield* Effect.logWarning(`desk: ignoring the ${name} setting, using its default: ${error.message}`);
+				return fallback;
+			}),
 		),
 	);
 

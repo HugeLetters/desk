@@ -722,6 +722,74 @@ describe("the service's life", () => {
 		await rm(store, { recursive: true, force: true });
 	});
 
+	/** `bun src/service/main.ts`, as the plugin starts it with its `options`, in `env`; what it said and how it exited. */
+	const runMain = (options: Record<string, unknown> | undefined, env: Record<string, string> = {}) => {
+		const main = Bun.spawn(
+			[
+				"bun",
+				join(import.meta.dir, "../src/service/main.ts"),
+				...(options ? ["--options", JSON.stringify(options)] : []),
+			],
+			{ env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" },
+		);
+		const said = Promise.all([new Response(main.stdout).text(), new Response(main.stderr).text()]).then(
+			([out, err]) => out + err,
+		);
+		return { main, said };
+	};
+	/** A port nothing listens on, just now. */
+	const freePort = () => {
+		const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+		const port = present(probe.port);
+		probe.stop(true);
+		return port;
+	};
+
+	test("started with the plugin's options, it uses exactly those, ahead of the environment", async () => {
+		const [mine, env] = [await mkdtemp(join(tmpdir(), "desk-")), await mkdtemp(join(tmpdir(), "desk-"))];
+		const [port, envPort] = [freePort(), freePort()];
+		const { main } = runMain({ home: mine, port }, { DESK_HOME: env, DESK_PORT: String(envPort) });
+		const registered = await eventually(
+			async () => JSON.parse(await readFile(join(mine, "service.json"), "utf8").catch(() => "{}")).url,
+			5000,
+		);
+		expect(registered).toBe(`http://127.0.0.1:${port}/`);
+		expect((await fetch(registered)).status).toBe(200);
+		expect(existsSync(join(env, "service.json"))).toBe(false);
+		await expect(fetch(`http://127.0.0.1:${envPort}/`)).rejects.toThrow();
+		main.kill("SIGTERM");
+		await main.exited;
+		for (const store of [mine, env]) await rm(store, { recursive: true, force: true });
+	});
+
+	test("a setting given but not valid stops it, saying which, whether in its options or the environment", async () => {
+		const store = await mkdtemp(join(tmpdir(), "desk-"));
+		const invalid = [
+			[runMain({ home: store, port: "nope" }), "desk: the port setting isn't valid"],
+			[runMain({ home: store, port: freePort() }, { DESK_IDLE: "soon" }), "desk: the idle setting isn't valid"],
+			[
+				runMain(undefined, { DESK_HOME: "relative/store", DESK_PORT: String(freePort()) }),
+				"desk: the home setting isn't valid",
+			],
+		] as const;
+		for (const [{ main, said }, why] of invalid) {
+			expect(await main.exited).toBe(1);
+			expect(await said).toContain(why);
+		}
+
+		const notJson = Bun.spawn(["bun", join(import.meta.dir, "../src/service/main.ts"), "--options", "{home"], {
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		expect(await notJson.exited).toBe(1);
+		expect(await new Response(notJson.stdout).text()).toContain(
+			"--options (the plugin's options, as JSON) isn't valid",
+		);
+		// Stopped before it took the store.
+		expect(existsSync(join(store, "service.json"))).toBe(false);
+		await rm(store, { recursive: true, force: true });
+	});
+
 	test("the protocol version is the build id: a hash of the code on disk; the service is outdated once that changes", async () => {
 		expect(protocol).toMatch(/^[0-9a-z]+$/);
 		expect(await Effect.runPromise(Effect.provide(build, BunServices.layer))).toBe(protocol);
