@@ -5,7 +5,6 @@ import { entryPath } from "../../src/api/routes";
 import { type Entry, ordered, shortId } from "../../src/model/entry";
 import { Pills, Priority } from "../components/pills";
 import { useDesk, yours } from "../desk";
-import { session } from "../session";
 import { Desks } from "./desks";
 
 /** Entries of `desk`, under a title, linked; none: nothing shown. */
@@ -37,7 +36,7 @@ function Section(props: { desk: string; title: string; entries: ReadonlyArray<En
 
 /** The desk's entries: waiting on you, on the agents, resolved. Without a desk, the desks. */
 export function List() {
-	const { view, drafted } = useDesk();
+	const { session, view, drafted } = useDesk();
 	return (
 		<Show when={session()} fallback={<Desks />}>
 			{(desk) => (

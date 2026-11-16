@@ -1,16 +1,17 @@
 /** @jsxImportSource solid-js */
 /**
- * What every view of the page shares: the desk shown (`stores/view.ts`), the drafts (`stores/drafts.ts`) and their
- * attachments (`stores/files.ts`), the toast, and what the user does with them, through `useDesk`.
+ * What every view of the page shares: the desk shown (`session`, the route's: the shell reads it from the URL), its view
+ * (`stores/view.ts`), the drafts (`stores/drafts.ts`) and their attachments (`stores/files.ts`), the toast, and what
+ * the user does with them, through `useDesk`.
  */
-import { createContext, createEffect, on, type ParentProps, useContext } from "solid-js";
+import { type Accessor, createContext, createEffect, on, type ParentProps, useContext } from "solid-js";
 import { reconcile } from "solid-js/store";
 import type { View } from "../src/api/api";
+import { deskPath } from "../src/api/routes";
 import { type Entry, newId, waitingOn } from "../src/model/entry";
 import type { Identity } from "../src/shared/type";
 import * as Attachments from "./attachments";
 import * as Rpc from "./rpc";
-import { session } from "./session";
 import { createDrafts } from "./stores/drafts";
 import { createFiles } from "./stores/files";
 import { createToast } from "./stores/toast";
@@ -19,7 +20,8 @@ import { createView } from "./stores/view";
 /** Whether the entry waits on the user. */
 export const yours = (entry: Entry) => waitingOn(entry) === "user";
 
-export const createDesk = () => {
+/** `session`: the desk the route shows, none on the list of desks. */
+export const createDesk = (session: Accessor<string | undefined>) => {
 	const toast = createToast();
 	const drafts = createDrafts(session);
 	const files = createFiles(drafts);
@@ -40,6 +42,12 @@ export const createDesk = () => {
 			if (loaded && now && (now.desk?.session ?? undefined) === session()) dropGone(now);
 		}),
 	);
+
+	/** The desk's list of entries, or the list of desks. */
+	const home = () => {
+		const id = session();
+		return id === undefined ? "/" : deskPath(id);
+	};
 
 	/** Waiting on you, and you've started an answer: shown instead of the plain status. */
 	const drafted = (entry: Entry) => yours(entry) && !!drafts.drafts[entry.id]?.trim();
@@ -87,7 +95,7 @@ export const createDesk = () => {
 		});
 	};
 
-	return { view, drafts, files, toast, drafted, attach, submit, sendNow };
+	return { session, home, view, drafts, files, toast, drafted, attach, submit, sendNow };
 };
 
 export interface Desk extends Identity<ReturnType<typeof createDesk>> {}

@@ -10,12 +10,11 @@ import { Markdown } from "../components/markdown";
 import { Pills, Priority } from "../components/pills";
 import { useDesk, yours } from "../desk";
 import * as Rpc from "../rpc";
-import { home } from "../session";
 
 /** One entry: its parent, the entry, its draft box, its follow-ups and what's open further down; Next goes on. */
 export function EntryView() {
 	const desk = useDesk();
-	const { view, drafts, files, toast } = desk;
+	const { home, view, drafts, files, toast } = desk;
 	const params = useParams<{ session: string; id: string }>();
 	const navigate = useNavigate();
 
