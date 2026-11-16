@@ -17,7 +17,9 @@ import { Plugin } from "@opencode/plugin/effect";
 import * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { Secrets } from "../shared/secrets";
 import * as Settings from "../shared/settings";
+import * as Token from "../shared/token";
 import * as Badge from "./badge";
 import * as Calls from "./calls";
 import * as Command from "./command";
@@ -31,13 +33,16 @@ export default Plugin.define<Scope.Scope>({
 	effect: Effect.fnUntraced(
 		function* (ctx) {
 			const port = yield* Settings.port;
-			const { registration } = yield* Settings.files;
+			const { store, registration } = yield* Settings.files;
+			const secrets = yield* Secrets;
 			const getRootSessionId = yield* Sessions.createRootSessionLookup(ctx);
 			const modes = Modes.make(ctx, getRootSessionId);
 			const connection = yield* Connection.make({
 				port,
 				start: Connection.startService(ctx.options),
 				directory: ctx.location.directory,
+				// The store's token, as the service made it in the Keychain (`token.ts`).
+				token: secrets.getOrFail(store),
 				modes: modes.here,
 				serve: Sessions.serve(ctx),
 			});
@@ -62,6 +67,11 @@ export default Plugin.define<Scope.Scope>({
 			yield* Tools.register(ctx, { calls, modes, getRootSessionId });
 			yield* Badge.register(ctx, { connection, modes, getRootSessionId });
 		},
-		(effect, ctx) => effect.pipe(Effect.provide([BunServices.layer, Settings.layer(ctx.options)]), Effect.orDie),
+		(effect, ctx) =>
+			effect.pipe(
+				Effect.provide(Token.secrets),
+				Effect.provide([BunServices.layer, Settings.layer(ctx.options)]),
+				Effect.orDie,
+			),
 	),
 });

@@ -5,6 +5,8 @@ import * as ConfigProvider from "effect/ConfigProvider";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import { Port } from "../src/model/paths";
 import * as Settings from "../src/shared/settings";
@@ -86,4 +88,16 @@ test("idle is a duration, as text or ms, else 10 minutes", async () => {
 	expect(await idle({}, {})).toEqual(Duration.minutes(10));
 	expect(await idle({}, { DESK_IDLE: "1000" })).toEqual(Duration.millis(1000));
 	expect(await idle({ idle: "2 minutes" }, { DESK_IDLE: "1000" })).toEqual(Duration.minutes(2));
+});
+
+test("the token, standing in for the Keychain's: none unless given, the options' over DESK_TOKEN, and redacted", async () => {
+	const token = (options: Record<string, unknown>, env: Record<string, string>) =>
+		Effect.runPromise(Settings.token.pipe(Effect.provide(ConfigProvider.layer(provider(options, env)))));
+	expect(Option.isNone(await token({}, {}))).toBe(true);
+	const given = await token({}, { DESK_TOKEN: "from-env" });
+	expect(Option.map(given, Redacted.value)).toEqual(Option.some("from-env"));
+	expect(String(Option.getOrThrow(given))).not.toContain("from-env");
+	expect(Option.map(await token({ token: "mine" }, { DESK_TOKEN: "from-env" }), Redacted.value)).toEqual(
+		Option.some("mine"),
+	);
 });

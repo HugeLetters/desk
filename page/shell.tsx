@@ -7,6 +7,10 @@ import { Icon } from "./components/icon";
 import { createDesk, DeskProvider } from "./desk";
 import { deskName } from "./session";
 
+/** What the page says while the service doesn't let this browser in. */
+const notLetIn =
+	"The desk doesn't let this browser in any more: open it from OpenCode once (/desk-mode's link, or the footer's desk badge).";
+
 /**
  * The layout every route is in: the desk the URL shows (`/sessions/<id>/…`; none on the list of desks), its view and
  * drafts for the routes below (`useDesk`), the header (desks, desk mode, Submit), the notices, and the toast.
@@ -26,7 +30,10 @@ export const Shell = (props: ParentProps) => {
 	return (
 		<DeskProvider desk={desk}>
 			<Title>{`${mine() ? `(${mine()}) ` : ""}${named() ? `${deskName(named())} · ` : ""}Desk`}</Title>
-			<Show when={desk.view.state.view} fallback={<div class="empty">Connecting…</div>}>
+			<Show
+				when={desk.view.state.view}
+				fallback={<div class="empty">{desk.view.state.letIn ? "Connecting…" : notLetIn}</div>}
+			>
 				{(view) => (
 					<>
 						<header>
@@ -84,7 +91,7 @@ export const Shell = (props: ParentProps) => {
 										: `${view().deskMode.length} ${view().deskMode.length === 1 ? "session" : "sessions"} in desk mode`}
 								</span>
 								<Show when={!desk.view.state.online}>
-									<span class="offline">reconnecting…</span>
+									<span class="offline">{desk.view.state.letIn ? "reconnecting…" : "not let in"}</span>
 								</Show>
 								<button
 									type="button"
@@ -101,6 +108,9 @@ export const Shell = (props: ParentProps) => {
 							</div>
 						</header>
 						<main>
+							<Show when={!desk.view.state.letIn}>
+								<div class="notice">{notLetIn}</div>
+							</Show>
 							<Show when={view().deskMode.length === 0 || view().desk?.known === false}>
 								<div class="notice">
 									<Show when={view().deskMode.length === 0}>

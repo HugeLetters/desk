@@ -25,6 +25,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import type * as PlatformError from "effect/PlatformError";
 import * as Predicate from "effect/Predicate";
+import * as Redacted from "effect/Redacted";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
@@ -33,12 +34,13 @@ import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
 import { protocol } from "../api/protocol";
-import { host, rpcUrl } from "../api/routes";
+import { host, rpcUrl, withToken } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { AbsolutePath, Port } from "../model/paths";
 import type { Empty } from "../shared/empty";
 import * as Machine from "../shared/machine";
 import * as Process from "../shared/process";
+import type { SecretsError } from "../shared/secrets";
 import * as Settings from "../shared/settings";
 import type { Failure, OpenCodeError } from "./sessions";
 
@@ -55,6 +57,8 @@ export interface Options<R = never> {
 	readonly start: Effect.Effect<void, PlatformError.PlatformError | Config.ConfigError | Settings.InvalidSetting, R>;
 	/** This plugin instance's directory. */
 	readonly directory: AbsolutePath;
+	/** The store's token (`token.ts`), read as each link starts: the service makes it the first time it runs. */
+	readonly token: Effect.Effect<Redacted.Redacted<string>, SecretsError>;
 	/** The sessions in desk mode, reported on every attach (the service holds them only while attached). */
 	readonly modes: Effect.Effect<ReadonlyArray<SessionID>>;
 	/** Answers the service's calls, in this OpenCode. */
@@ -75,10 +79,11 @@ export interface Options<R = never> {
 	readonly needed?: boolean;
 }
 
-/** A live link: the service's API, and its page's URL from its answer to `hello`. */
+/** A live link: the service's API, its page's URL from its answer to `hello`, and the token it was let in with. */
 export interface Link {
 	readonly client: Client;
 	readonly url: URL;
+	readonly token: Redacted.Redacted<string>;
 }
 
 export interface Connection {
@@ -93,6 +98,8 @@ export interface Connection {
 	readonly live: Effect.Effect<Option.Option<Client>>;
 	/** The page's URL, from the service's answer to `hello`. */
 	readonly url: Effect.Effect<URL, DeskError>;
+	/** `url` with the token, once connected: a link that lets the user's browser in (`routes.ts`'s `withToken`). */
+	readonly authorize: (url: URL) => Effect.Effect<URL, DeskError>;
 	/** The live link now (none while not connected), then each new one, and none whenever it drops. */
 	readonly links: Stream.Stream<Option.Option<Link>>;
 }
@@ -105,7 +112,7 @@ const sameLink = Option.makeEquivalence(
 export type State = Data.TaggedEnum<{
 	Off: Empty;
 	Connecting: Empty;
-	Live: { readonly client: Client; readonly url: URL };
+	Live: Link;
 	/** Why the link dropped. */
 	Backoff: { readonly message: string };
 	Refused: { readonly message: string };
@@ -116,7 +123,7 @@ export type Event = Data.TaggedEnum<{
 	/** Whether this plugin instance needs the service ({@link Connection.needsConnection}). */
 	Need: { readonly needed: boolean };
 	/** The service answered `hello`. */
-	Hello: { readonly client: Client; readonly url: URL };
+	Hello: Link;
 	/** The link ended: the service went, or couldn't be started or greeted. */
 	Dropped: { readonly message: string };
 	/** The service won't take this plugin: it's older. */
@@ -133,7 +140,9 @@ export const reconcile = (state: State, event: Event): State => {
 		case "Need":
 			return !event.needed ? State.Off() : state._tag === "Off" ? State.Connecting() : state;
 		case "Hello":
-			return state._tag === "Connecting" ? State.Live({ client: event.client, url: event.url }) : state;
+			return state._tag === "Connecting"
+				? State.Live({ client: event.client, url: event.url, token: event.token })
+				: state;
 		case "Dropped":
 			return state._tag === "Connecting" || state._tag === "Live" ? State.Backoff({ message: event.message }) : state;
 		case "Outdated":
@@ -172,9 +181,12 @@ export const taken = (port: Port) =>
 const refused = (error: RpcClientError.RpcClientError) =>
 	error.reason._tag === "SocketOpenError" && error.reason.kind !== "Timeout";
 
-/** Whether a WebSocket to `url` opens: it connects, and hangs up at once. */
-const upgrades = (url: string) =>
-	Socket.makeWebSocket(url, { openTimeout: "1 second" }).pipe(
+/** The bearer header a plugin is let in by. */
+const authorization = (token: Redacted.Redacted<string>) => ({ authorization: `Bearer ${Redacted.value(token)}` });
+
+/** Whether a WebSocket to `url` opens, with `token`: it connects, and hangs up at once. */
+const upgrades = (url: string, token: Redacted.Redacted<string>) =>
+	Socket.makeWebSocket(url, { openTimeout: "1 second", headers: authorization(token) }).pipe(
 		Effect.flatMap((socket) => socket.reader),
 		Effect.scoped,
 		Effect.as(true),
@@ -194,10 +206,11 @@ export const answering = (port: Port) =>
 /** The connection, off until needed; hangs up when the scope closes. */
 export const make = Effect.fn("Connection.make")(function* <R = never>(options: Options<R>) {
 	const url = rpcUrl(options.port).href;
-	const transport = RpcClient.layerProtocolSocket().pipe(
-		Layer.provide(BunSocket.layerWebSocket(url)),
-		Layer.provide(RpcSerialization.layerNdjson),
-	);
+	const transport = (token: Redacted.Redacted<string>) =>
+		RpcClient.layerProtocolSocket().pipe(
+			Layer.provide(BunSocket.layerWebSocket(url, { headers: authorization(token) })),
+			Layer.provide(RpcSerialization.layerNdjson),
+		);
 
 	/** Answers one of the service's calls, in this OpenCode; a failure is the answer, not the connection's. */
 	const answer = (client: Client, call: ServiceCall) =>
@@ -224,10 +237,19 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 		);
 	});
 
-	/** One link, for as long as it lasts: hello, then the attachment, answering the calls that come on it. */
+	/** One link, for as long as it lasts: the service (started if need be), then the link, let in by the token. */
 	const link = Effect.fn("link")(
 		function* (emit: (event: Event) => Effect.Effect<void>) {
 			yield* ensure;
+			yield* attached(emit, yield* options.token);
+		},
+		(effect, emit) =>
+			Effect.catchCause(effect, (cause) => emit(Event.Dropped({ message: errorMessage(Cause.squash(cause)) }))),
+	);
+
+	/** Hello, then the attachment, answering the calls that come on it. */
+	const attached = Effect.fn("attached")(
+		function* (emit: (event: Event) => Effect.Effect<void>, token: Redacted.Redacted<string>) {
 			const client = yield* RpcClient.make(DeskApi);
 			const greeted = yield* client.hello({ protocol }).pipe(
 				// Something that doesn't speak this protocol at all answers nothing: try again later rather than wait for good.
@@ -259,7 +281,7 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 				Effect.catchTag("RpcClientError", (error) =>
 					refused(error)
 						? Effect.gen(function* () {
-								const opened = yield* Effect.andThen(Effect.sleep("250 millis"), upgrades(url)).pipe(
+								const opened = yield* Effect.andThen(Effect.sleep("250 millis"), upgrades(url, token)).pipe(
 									Effect.repeat({ until: (opened) => opened, times: 7 }),
 								);
 								if (opened || !(yield* answering(options.port))) return yield* error;
@@ -272,16 +294,14 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 			);
 			if (Option.isNone(greeted)) return;
 
-			yield* emit(Event.Hello({ client, url: greeted.value }));
+			yield* emit(Event.Hello({ client, url: greeted.value, token }));
 			yield* client
 				.attach({ directory: options.directory, sessions: yield* options.modes })
 				.pipe(Stream.runForEach((call) => Effect.forkScoped(answer(client, call))));
 			yield* emit(Event.Dropped({ message: "The desk service hung up." }));
 		},
 		Effect.scoped,
-		Effect.provide(transport),
-		(effect, emit) =>
-			Effect.catchCause(effect, (cause) => emit(Event.Dropped({ message: errorMessage(Cause.squash(cause)) }))),
+		(effect, _emit, token) => Effect.provide(effect, transport(token)),
 	);
 
 	const actor = yield* Machine.start<State, Event, R>({
@@ -314,10 +334,13 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 		client: Effect.map(live, (now) => now.client),
 		live: Effect.map(actor.state, (state) => (state._tag === "Live" ? Option.some(state.client) : Option.none())),
 		url: Effect.map(live, (now) => now.url),
+		authorize: (page) => Effect.map(live, (now) => withToken(page, now.token)),
 		links: actor.changes.pipe(
 			Stream.map(
 				(state): Option.Option<Link> =>
-					state._tag === "Live" ? Option.some({ client: state.client, url: state.url }) : Option.none(),
+					state._tag === "Live"
+						? Option.some({ client: state.client, url: state.url, token: state.token })
+						: Option.none(),
 			),
 			Stream.changesWith(sameLink),
 		),
@@ -328,21 +351,27 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 /**
  * Starts `bun src/service/main.ts` detached (`Process.spawnDetached`: it outlives this OpenCode), with this plugin's
  * `options` as it got them (`--options '<json>'`: the service reads them as the plugin does, before the environment),
- * logging to the store's log (`Settings.files`), which it gets as its own stdout and stderr.
+ * logging to the store's log (`Settings.files`), which it gets as its own stdout and stderr. All but the `token`
+ * option: that one goes in its environment (`DESK_TOKEN`), where other users' processes can't read it, as they can arguments.
  */
 export const startService = Effect.fn("startService")(function* (options: Settings.Options) {
 	const fs = yield* FileSystem.FileSystem;
 	const path = yield* Path.Path;
 	const main = path.resolve(import.meta.dir, "../service/main.ts");
 	const { store, log } = yield* Settings.files;
+	const { token, ...rest } = options;
 	yield* fs.makeDirectory(store, { recursive: true });
 
 	// Inside OpenCode, `process.execPath` is OpenCode's own binary, which runs as Bun with BUN_BE_BUN.
 	const bun = yield* Process.which("bun");
 	yield* Process.spawnDetached({
 		command: Option.getOrElse(bun, () => process.execPath),
-		args: [main, "--options", JSON.stringify(options)],
+		args: [main, "--options", JSON.stringify(rest)],
 		output: yield* Process.openForAppend(log),
-		env: { ...process.env, ...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }) },
+		env: {
+			...process.env,
+			...(Option.isSome(bun) ? {} : { BUN_BE_BUN: "1" }),
+			...(token === undefined ? {} : { DESK_TOKEN: String(token) }),
+		},
 	});
 }, Effect.scoped);

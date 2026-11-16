@@ -13,12 +13,13 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Redacted from "effect/Redacted";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import { DeskApi } from "../../src/api/api";
-import { link, rpcPath } from "../../src/api/routes";
+import { link, rpcPath, tokenCookie } from "../../src/api/routes";
 import { Refusal } from "../../src/model/errors";
 import { Port } from "../../src/model/paths";
 import { refusal } from "../../src/model/wording";
@@ -27,7 +28,9 @@ import * as App from "../../src/service/app";
 import { Clients } from "../../src/service/clients";
 import { OpenCode } from "../../src/service/opencode/opencode";
 import { Api } from "../../src/service/transport/api";
+import { Secrets } from "../../src/shared/secrets";
 import * as Settings from "../../src/shared/settings";
+import { keychain, Token } from "../../src/shared/token";
 import type { Identity } from "../../src/shared/type";
 import { type FakeServer, fakeOpenCode } from "./fake-opencode";
 import { D } from "./ids";
@@ -46,6 +49,8 @@ export async function startService(
 		port?: Port;
 		fake?: ReturnType<typeof fakeOpenCode>;
 		outdated?: Effect.Effect<boolean, never, FileSystem.FileSystem>;
+		/** The store's token, as if in the Keychain already. Default: none, so the service makes one. */
+		token?: Redacted.Redacted<string>;
 	} = {},
 ) {
 	const store = D(options.store ?? (await mkdtemp(join(tmpdir(), "desk-"))));
@@ -58,13 +63,21 @@ export async function startService(
 				idle: options.idle ?? 60_000,
 				retry: "50 millis",
 				outdated: options.outdated ?? Effect.succeed(false),
-			}).pipe(Layer.provide(Settings.layer({ home: store })), Layer.provideMerge(BunServices.layer)),
+			}).pipe(
+				// Its own token, made as it starts, in memory: never the Keychain.
+				Layer.provide(Secrets.memory(keychain, options.token ? { [store]: options.token } : {})),
+				Layer.provide(Settings.layer({ home: store })),
+				Layer.provideMerge(BunServices.layer),
+			),
 			scope,
 		),
-	)) as Context.Context<Api | Clients | OpenCode>;
+	)) as Context.Context<Api | Clients | OpenCode | Token>;
 	// As a string: what the tests build their links from.
 	const url = Context.get(services, Api).url.href;
 	const port = Port.make(Number(new URL(url).port));
+	const token = Context.get(services, Token);
+	/** The page's way in: its browser's cookie. */
+	const cookie = { cookie: `${tokenCookie(port)}=${Redacted.value(token)}` };
 	const plugins: Array<Scope.Closeable> = [];
 	const unwatch: Array<() => void> = [];
 	let blank = 0;
@@ -84,6 +97,7 @@ export async function startService(
 						port,
 						start: Effect.void,
 						directory,
+						token: Effect.succeed(token),
 						modes: Effect.sync(() => [...opencode.sessions.keys()]),
 						serve: fake.serve(opencode),
 						timeout: 1000,
@@ -111,7 +125,15 @@ export async function startService(
 			plugins.push(held);
 			return connection;
 		},
-		rpc: <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => rpc(url, f),
+		token,
+		cookie,
+		/** A plugin's way in: the bearer header. */
+		authorization: { authorization: `Bearer ${Redacted.value(token)}` },
+		/** `path` on the page, as the page's browser gets it: with its cookie. */
+		fetch: (path = "", init: RequestInit = {}) =>
+			fetch(`${url}${path}`, { ...init, headers: { ...cookie, ...(init.headers as Record<string, string>) } }),
+		/** The API, as the page calls it: with its cookie. */
+		rpc: <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) => rpc(url, f, cookie),
 		clients: () => Effect.runPromise(Context.get(services, Clients).count),
 		/** How many plugin instances are attached. */
 		attached: () => Effect.runPromise(Context.get(services, OpenCode).connected),
@@ -132,7 +154,7 @@ export const wsUrl = (url: string) => link(new URL(url), rpcPath).href.replace(/
 
 /**
  * Calls the API of the service at `url` (`http://127.0.0.1:<port>/`) over a WebSocket of its own, as the page does;
- * `headers` go with the upgrade (an `origin`, say, as a browser sends it).
+ * `headers` go with the upgrade (the way in: a cookie or a bearer header; an `origin`, say, as a browser sends it).
  */
 export const rpc = <A, E>(
 	url: string,

@@ -4,10 +4,13 @@
  * user's attachments (`/attachments/`), and files relative to an entry's directory for its Markdown media
  * (`/files/<entry id>/<path>`).
  *
- * One guard covers every request: the Host must be a loopback name (a DNS-rebound name gets nothing), and writes and
+ * One guard covers every request: the Host must be a loopback name (a DNS-rebound name gets nothing), writes and
  * WebSocket upgrades must come from the page itself or from outside a browser (no Origin, or this origin), so other
- * sites open in the browser can't post into a session or call the API.
+ * sites open in the browser can't post into a session or call the API, and every request needs the store's token
+ * (`token.ts`): a cookie (the page's browser) or a bearer header (a plugin). A link with `?token=` sets the cookie
+ * and sends the browser on without it.
  */
+import { createHash, timingSafeEqual } from "node:crypto";
 import * as BunHttpServer from "@effect/platform-bun/BunHttpServer";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -20,10 +23,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Predicate from "effect/Predicate";
+import * as Redacted from "effect/Redacted";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import { host } from "../../api/routes";
+import { host, tokenCookie, tokenParam } from "../../api/routes";
 import { type Port, RelativePath } from "../../model/paths";
+import { Token } from "../../shared/token";
 import { Desk } from "../desk";
 import { type Content, Storage } from "../storage/storage";
 import * as Rpc from "./rpc";
@@ -47,10 +52,50 @@ const Guard = HttpRouter.middleware(
 				return HttpServerResponse.text("forbidden", { status: 403 });
 			}
 
+			const token = yield* Token;
+			const cookie = tokenCookie(hostHeader.slice(hostHeader.lastIndexOf(":") + 1));
+			const url = HttpServerRequest.toURL(request);
+			const given = Option.flatMapNullishOr(url, (requested) => requested.searchParams.get(tokenParam));
+			// A link that carries the token: the browser keeps it as a cookie, and goes on without it in the address bar.
+			if (request.method === "GET" && !upgrade && Option.isSome(url) && Option.isSome(given)) {
+				if (!isToken(token, given.value)) return unauthorized();
+
+				const without = new URL(url.value);
+				without.searchParams.delete(tokenParam);
+				return HttpServerResponse.redirect(`${without.pathname}${without.search}`, { status: 302 }).pipe(
+					HttpServerResponse.setCookieUnsafe(cookie, Redacted.value(token), {
+						httpOnly: true,
+						sameSite: "strict",
+						path: "/",
+						maxAge: "400 days",
+					}),
+				);
+			}
+
+			const presented = [request.cookies[cookie], bearer(request.headers.authorization)];
+			if (!presented.some((candidate) => candidate !== undefined && isToken(token, candidate))) return unauthorized();
+
 			return yield* app;
 		}),
 	{ global: true },
 );
+
+/** SHA-256 of `value`: what's compared, so that both sides have the same length. */
+const digest = (value: string) => createHash("sha256").update(value).digest();
+
+/** Whether `given` is the token, compared in constant time. */
+const isToken = (token: Redacted.Redacted<string>, given: string) =>
+	timingSafeEqual(digest(Redacted.value(token)), digest(given));
+
+/** The token in an `Authorization: Bearer <token>` header. */
+const bearer = (authorization: string | undefined) => authorization?.match(/^Bearer (.+)$/i)?.[1];
+
+/** No token, or not the store's: the page shell says how to get in. */
+const unauthorized = () =>
+	HttpServerResponse.text(
+		"Not let in: open the desk from OpenCode once (/desk-mode's link, or the footer's desk badge). Its link lets this browser in.",
+		{ status: 401 },
+	);
 
 /**
  * A stored file as a response, with its ETag and Last-Modified, as files are served; from disk, Bun sends it as it

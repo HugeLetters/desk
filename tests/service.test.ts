@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
+import * as Redacted from "effect/Redacted";
 import * as Rpc from "effect/rpc/Rpc";
 import * as RpcClient from "effect/rpc/RpcClient";
 import type * as RpcClientError from "effect/rpc/RpcClientError";
@@ -23,16 +24,20 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { Outdated, type View } from "../src/api/api";
 import { build, protocol } from "../src/api/protocol";
+import { tokenCookie } from "../src/api/routes";
 import { type EntryId, parse } from "../src/model/entry";
 import { Refusal } from "../src/model/errors";
 import { type AbsolutePath, Port } from "../src/model/paths";
 import * as App from "../src/service/app";
 import { changedOnDisk, outdatedBy } from "../src/service/transport/rpc";
+import { Secrets } from "../src/shared/secrets";
 import * as Settings from "../src/shared/settings";
+import * as Token from "../src/shared/token";
 import { D, E, S } from "./support/ids";
 import { expectBuiltPage } from "./support/page";
 import { present } from "./support/present";
 import { eventually, rpc, type Service, startService, wsUrl } from "./support/service";
+import { testToken } from "./support/setup";
 
 let service: Service;
 beforeEach(async () => {
@@ -417,7 +422,7 @@ describe("delivery", () => {
 		expect(present(server.admitted[0]).files.map(({ uri, name }) => ({ uri: uri.href, name }))).toEqual([
 			{ uri: `file://${service.store}/${file}`, name: "shot" },
 		]);
-		expect(await (await fetch(`${service.url}${file}`)).text()).toBe("PNGDATA");
+		expect(await (await service.fetch(`${file}`)).text()).toBe("PNGDATA");
 	});
 });
 
@@ -601,7 +606,7 @@ describe("the page server", () => {
 	});
 
 	test("serves the page as built by Vite", async () => {
-		await expectBuiltPage(service.url.replace(/\/$/, ""));
+		await expectBuiltPage(service.url.replace(/\/$/, ""), service.cookie);
 	});
 
 	test("serves an entry's media from below its folder, and nothing outside it", async () => {
@@ -612,23 +617,23 @@ describe("the page server", () => {
 		const asked = await service
 			.plugin()
 			.request("ask", { by: { session: S("ses_a"), directory: work }, question: question("Media?") });
-		const get = (path: string) => fetch(`${service.url}files/${asked.id}/${path}`);
+		const get = (path: string) => service.fetch(`files/${asked.id}/${path}`);
 		const found = await get("shots/a%20b.png");
 		expect(found.status).toBe(200);
 		expect(await found.text()).toBe("PNG");
 		expect((await get("shots/missing.png")).status).toBe(404);
 		expect((await get("..%2Fdesk-outside.txt")).status).toBe(403);
-		expect(
-			(await fetch(`${service.url}files/${E("00000000-0000-4000-8000-000000000000")}/shots/a%20b.png`)).status,
-		).toBe(404);
+		expect((await service.fetch(`files/${E("00000000-0000-4000-8000-000000000000")}/shots/a%20b.png`)).status).toBe(
+			404,
+		);
 		await rm(work, { recursive: true, force: true });
 		await rm(join(tmpdir(), "desk-outside.txt"), { force: true });
 	});
 
 	test("a link to a desk or an entry opens the page, its assets from the root", async () => {
-		const shell = await (await fetch(service.url)).text();
+		const shell = await (await service.fetch()).text();
 		for (const path of ["sessions/ses_a", "sessions/ses_a/questions/0190abcd"]) {
-			const response = await fetch(`${service.url}${path}`, { headers: { accept: "text/html" } });
+			const response = await service.fetch(`${path}`, { headers: { accept: "text/html" } });
 			expect(response.status).toBe(200);
 			expect(await response.text()).toBe(shell);
 		}
@@ -642,24 +647,103 @@ describe("the page server", () => {
 		const asked = await service
 			.plugin()
 			.request("ask", { by: { session: S("ses_a"), directory }, question: question("Media") });
-		expect(await (await fetch(`${service.url}files/${asked.id}/media/a.txt`)).text()).toBe("inside");
-		expect((await fetch(`${service.url}files/${asked.id}/..%2F..%2Fetc%2Fhosts`)).status).toBe(403);
-		expect((await fetch(`${service.url}files/nope/media/a.txt`)).status).toBe(404);
+		expect(await (await service.fetch(`files/${asked.id}/media/a.txt`)).text()).toBe("inside");
+		expect((await service.fetch(`files/${asked.id}/..%2F..%2Fetc%2Fhosts`)).status).toBe(403);
+		expect((await service.fetch(`files/nope/media/a.txt`)).status).toBe(404);
 	});
 
 	test("refuses foreign hosts, cross-site writes and another site's page calling the API", async () => {
-		expect((await fetch(service.url, { headers: { host: "evil.example" } })).status).toBe(421);
+		expect((await service.fetch("", { headers: { host: "evil.example" } })).status).toBe(421);
 		expect(
-			(await fetch(`${service.url}rpc`, { method: "POST", headers: { origin: "https://evil.example" }, body: "{}" }))
-				.status,
+			(await service.fetch(`rpc`, { method: "POST", headers: { origin: "https://evil.example" }, body: "{}" })).status,
 		).toBe(403);
 		// A browser sends its page's Origin with a WebSocket upgrade: another site's is refused, the page's own is not, and
 		// a client that isn't a browser (the plugin) sends none.
 		const views = (headers?: Record<string, string>) =>
-			rpc(service.url, (client) => client.view({}).pipe(Stream.take(1), Stream.runCollect), headers);
+			rpc(service.url, (client) => client.view({}).pipe(Stream.take(1), Stream.runCollect), {
+				...service.cookie,
+				...headers,
+			});
 		await expect(views({ origin: "https://evil.example" })).rejects.toThrow();
 		expect(Array.from(await views({ origin: service.url.replace(/\/$/, "") }))).toHaveLength(1);
 		expect(Array.from(await views())).toHaveLength(1);
+	});
+});
+
+describe("the token", () => {
+	test("without the store's token, nothing: the API, an entry's files, attachments, the page", async () => {
+		const asked = await service
+			.plugin()
+			.request("ask", { by: { session: S("ses_a"), directory: D(service.store) }, question: question("Files?") });
+		for (const path of ["", "sessions/ses_a", "rpc", `files/${asked.id}/a.txt`, "attachments/x.png", "assets/x.js"]) {
+			const response = await fetch(`${service.url}${path}`);
+			expect([path, response.status]).toEqual([path, 401]);
+		}
+		// The page shell says how to get in.
+		expect(await (await fetch(service.url)).text()).toContain("open the desk from OpenCode once");
+		// The API's WebSocket, with no token, a wrong cookie or a wrong bearer: refused.
+		const views = (headers?: Record<string, string>) =>
+			rpc(service.url, (client) => client.view({}).pipe(Stream.take(1), Stream.runCollect), headers);
+		await expect(views()).rejects.toThrow();
+		await expect(views({ cookie: `${tokenCookie(service.port)}=wrong` })).rejects.toThrow();
+		await expect(views({ authorization: "Bearer wrong" })).rejects.toThrow();
+		// Its cookie, as the page's browser sends it, or the bearer header, as a plugin does: let in.
+		expect(Array.from(await views(service.cookie))).toHaveLength(1);
+		expect(Array.from(await views(service.authorization))).toHaveLength(1);
+		// Another port's cookie is another service's.
+		await expect(
+			views({ cookie: `${tokenCookie(service.port + 1)}=${Redacted.value(service.token)}` }),
+		).rejects.toThrow();
+		// A wrong one anywhere is refused, as no token is.
+		expect((await fetch(service.url, { headers: { authorization: "Bearer wrong" } })).status).toBe(401);
+		expect(
+			(await fetch(`${service.url}sessions/ses_a`, { headers: { ...service.authorization, accept: "text/html" } }))
+				.status,
+		).toBe(200);
+	});
+
+	test("a link with ?token= keeps it as an HttpOnly, SameSite=Strict cookie and goes on without it; a wrong one doesn't", async () => {
+		const token = Redacted.value(service.token);
+		const response = await fetch(`${service.url}sessions/ses_a?view=all&token=${token}`, { redirect: "manual" });
+		expect(response.status).toBe(302);
+		expect(response.headers.get("location")).toBe("/sessions/ses_a?view=all");
+		const cookie = present(response.headers.get("set-cookie"));
+		expect(cookie).toStartWith(`${tokenCookie(service.port)}=${token};`);
+		expect(cookie).toContain("HttpOnly");
+		expect(cookie).toContain("SameSite=Strict");
+		expect(cookie).toContain("Path=/");
+		expect(cookie).not.toContain("Secure");
+		// The cookie it set lets the browser in.
+		const kept = present(cookie.split(";")[0]);
+		expect(
+			(await fetch(`${service.url}sessions/ses_a?view=all`, { headers: { cookie: kept, accept: "text/html" } })).status,
+		).toBe(200);
+
+		const wrong = await fetch(`${service.url}sessions/ses_a?token=wrong`, { redirect: "manual" });
+		expect(wrong.status).toBe(401);
+		expect(wrong.headers.get("set-cookie")).toBeNull();
+	});
+
+	test("the store's token: made once, 32 random bytes in base64url, in its secrets under the store's path; kept after", async () => {
+		const store = D(await mkdtemp(join(tmpdir(), "desk-")));
+		const tokens = await Effect.runPromise(
+			Effect.gen(function* () {
+				const made = yield* Token.getOrCreate;
+				const again = yield* Token.getOrCreate;
+				const stored = yield* Secrets.use((secrets) => secrets.get(store));
+				return [made, again, stored].map((token) => (token === null ? null : Redacted.value(token)));
+			}).pipe(
+				Effect.provide(Secrets.memory(Token.keychain)),
+				Effect.provide([Settings.layer({ home: store }), BunServices.layer]),
+			),
+		);
+		expect(present(tokens[0])).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(tokens).toEqual([tokens[0], tokens[0], tokens[0]]);
+		// A service on a store that has one lets in by that one.
+		await service.close();
+		service = await startService({ store, token: Redacted.make("kept") });
+		expect(Redacted.value(service.token)).toBe("kept");
+		expect((await fetch(service.url, { headers: { authorization: "Bearer kept" } })).status).toBe(200);
 	});
 });
 
@@ -670,6 +754,7 @@ describe("the service's life", () => {
 		const exit = await Effect.runPromiseExit(
 			Layer.buildWithScope(
 				App.layer({ port, idle: 60_000 }).pipe(
+					Layer.provide(Secrets.memory(Token.keychain)),
 					Layer.provide(Settings.layer({ home: store })),
 					Layer.provideMerge(BunServices.layer),
 				),
@@ -754,7 +839,7 @@ describe("the service's life", () => {
 			5000,
 		);
 		expect(registered).toBe(`http://127.0.0.1:${port}/`);
-		expect((await fetch(registered)).status).toBe(200);
+		expect((await fetch(registered, { headers: { authorization: `Bearer ${testToken}` } })).status).toBe(200);
 		expect(existsSync(join(env, "service.json"))).toBe(false);
 		await expect(fetch(`http://127.0.0.1:${envPort}/`)).rejects.toThrow();
 		main.kill("SIGTERM");
@@ -807,10 +892,10 @@ describe("the service's life", () => {
 
 	test("requests are checked against the protocol: a malformed one is refused, and writes nothing", async () => {
 		await expect(
-			loose(service.url, (client) => client.ask({ by: { session: S("ses_a") }, question: { title: "No body" } })),
+			loose(service, (client) => client.ask({ by: { session: S("ses_a") }, question: { title: "No body" } })),
 		).rejects.toThrow();
 		await expect(
-			loose(service.url, (client) => client.prioritize({ id: E("x"), priority: "urgent", subtree: false })),
+			loose(service, (client) => client.prioritize({ id: E("x"), priority: "urgent", subtree: false })),
 		).rejects.toThrow();
 		expect(await entryFiles()).toEqual([]);
 	});
@@ -819,13 +904,13 @@ describe("the service's life", () => {
 		await service.close();
 		let changed = false;
 		service = await startService({ outdated: Effect.sync(() => changed) });
-		expect(await loose(service.url, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
-		await expect(loose(service.url, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({
+		expect(await loose(service, (client) => client.hello({ protocol }))).toEqual({ url: service.url });
+		await expect(loose(service, (client) => client.hello({ protocol: "2.old" }))).rejects.toMatchObject({
 			_tag: "Outdated",
 			side: "plugin",
 		});
 		changed = true;
-		await expect(loose(service.url, (client) => client.hello({ protocol: "5.new" }))).rejects.toMatchObject({
+		await expect(loose(service, (client) => client.hello({ protocol: "5.new" }))).rejects.toMatchObject({
 			_tag: "Outdated",
 			side: "service",
 		});
@@ -868,7 +953,7 @@ const Loose = RpcGroup.make(
 	Rpc.make("prioritize", { payload: Schema.Unknown, error: Refusal }),
 );
 const loose = <A, E>(
-	url: string,
+	service: Service,
 	f: (client: RpcClient.FromGroup<typeof Loose, RpcClientError.RpcClientError>) => Effect.Effect<A, E>,
 ) =>
 	Effect.runPromise(
@@ -876,7 +961,7 @@ const loose = <A, E>(
 			Effect.scoped,
 			Effect.provide(
 				RpcClient.layerProtocolSocket().pipe(
-					Layer.provide(BunSocket.layerWebSocket(wsUrl(url))),
+					Layer.provide(BunSocket.layerWebSocket(wsUrl(service.url), { headers: service.authorization })),
 					Layer.provide(RpcSerialization.layerNdjson),
 				),
 			),

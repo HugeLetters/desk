@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
 import * as Settings from "../shared/settings";
+import * as Token from "../shared/token";
 import * as App from "./app";
 import { Clients } from "./clients";
 import { Api } from "./transport/api";
@@ -52,7 +53,7 @@ if (import.meta.main) {
 			yield* Effect.log(`desk: serving ${yield* Settings.store} on ${(yield* Api).url}`);
 			yield* Clients.use((clients) => clients.idle);
 			yield* Effect.log("desk: exiting");
-		}).pipe(Effect.provide(Layer.fresh(App.layer(config))));
+		}).pipe(Effect.provide(Layer.fresh(App.layer(config).pipe(Layer.provide(Token.secrets)))));
 	}).pipe(
 		Effect.provide([BunServices.layer, settings(process.argv)]),
 		// The registration is the lock: a second service finds it taken and leaves.

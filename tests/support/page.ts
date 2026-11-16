@@ -1,7 +1,11 @@
 import { expect } from "bun:test";
 
-/** The page at `url` is Vite's build: the shell, its script (the app, which calls /rpc) and styles, and Mermaid's chunk. */
-export async function expectBuiltPage(url: string) {
+/**
+ * The page at `url` is Vite's build: the shell, its script (the app, which calls /rpc) and styles, and Mermaid's chunk;
+ * each fetched with `headers` (the way in: the page's cookie).
+ */
+export async function expectBuiltPage(url: string, headers: Record<string, string>) {
+	const fetch = (input: string) => globalThis.fetch(input, { headers });
 	const shell = await (await fetch(url)).text();
 	const script = /<script type="module" crossorigin src="([^"]+)">/.exec(shell)?.[1];
 	const style = /<link rel="stylesheet" crossorigin href="([^"]+)">/.exec(shell)?.[1];

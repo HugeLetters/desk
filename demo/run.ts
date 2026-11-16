@@ -4,14 +4,16 @@
  *   bun run demo [out-dir]        # default: docs/demo
  *
  * The service runs in this process with a fake OpenCode (`tests/support/fake-opencode.ts`); the sample questions
- * are asked over the API the way the plugin asks them. Nothing touches the real store. Needs Google Chrome
+ * are asked over the API the way the plugin asks them. Nothing touches the real store, nor the Keychain: the
+ * service's token is in memory, and the browser gets its cookie. Needs Google Chrome
  * (driven headless through playwright-core) and ffmpeg.
  */
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import * as Redacted from "effect/Redacted";
 import { chromium, type Page } from "playwright-core";
-import { deskPath, entryPath, link } from "../src/api/routes";
+import { deskPath, entryPath, link, tokenCookie } from "../src/api/routes";
 import type { EntryId } from "../src/model/entry";
 import { fakeOpenCode } from "../tests/support/fake-opencode";
 import { D, S } from "../tests/support/ids";
@@ -113,6 +115,14 @@ try {
 		body: "47400 is free here; Phantom's old desk uses 47309.",
 	});
 	console.log(`sample desk at ${service.url}`);
+	/** A browser context let in as the user's browser is once they've opened a link from OpenCode: by the cookie. */
+	const letIn = async (options?: Parameters<typeof browser.newContext>[0]) => {
+		const context = await browser.newContext(options);
+		await context.addCookies([
+			{ name: tokenCookie(service.port), value: Redacted.value(service.token), url: service.url },
+		]);
+		return context;
+	};
 	const page = (session?: string, entry?: string) =>
 		link(
 			new URL(service.url),
@@ -121,7 +131,7 @@ try {
 
 	// Every link stays on the page: across desks, into an entry and back, and through the desk picker.
 	{
-		const context = await browser.newContext();
+		const context = await letIn();
 		const tab = await context.newPage();
 		await tab.goto(page());
 		await settle(tab);
@@ -155,7 +165,7 @@ try {
 		["desk-review-dark", page("ses_main", review.id), "dark", 1500],
 	];
 	for (const [name, target, scheme, width = 1000] of stills) {
-		const context = await browser.newContext({
+		const context = await letIn({
 			viewport: { width, height: 900 },
 			deviceScaleFactor: 2,
 			colorScheme: scheme,
@@ -174,7 +184,7 @@ try {
 
 	// The walk: OpenCode quits; an answer waits as "not delivered"; OpenCode comes back, and it goes out.
 	await agent.close();
-	const context = await browser.newContext({ viewport: { width: 1000, height: 700 }, colorScheme: "light" });
+	const context = await letIn({ viewport: { width: 1000, height: 700 }, colorScheme: "light" });
 	const tab = await context.newPage();
 	let frame = 0;
 	const snap = async (count = 1) => {

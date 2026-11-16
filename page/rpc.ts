@@ -26,3 +26,14 @@ export const withClient = <A, E>(f: (desk: Effect.Success<typeof client>) => Eff
 /** Calls the desk; rejects with the desk's message. */
 export const call = <A, E>(f: (desk: Effect.Success<typeof client>) => Effect.Effect<A, E>) =>
 	runtime.runPromise(withClient(f));
+
+/**
+ * Whether the service still lets this browser in (its cookie, `http.ts`): a refused WebSocket doesn't say why, so this
+ * asks for the page itself. Unreachable counts as let in: that's the service being away, not refusing.
+ */
+export const letIn = Effect.promise(() =>
+	fetch("/", { method: "HEAD", cache: "no-store" }).then(
+		(response) => response.status !== 401,
+		() => true,
+	),
+);

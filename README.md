@@ -33,6 +33,7 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 
    Or with options: `{ "package": "/Users/<you>/projects/personal/desk", "options": { "port": 47400, "home": "~/.local/share/desk" } }`.
    Each option can be set in the environment instead, as `DESK_` and its name (`DESK_HOME`, `DESK_PORT`, `DESK_TIMEOUT`); the options win.
+   The page lets in only a browser that has opened one of the plugin's links once (see [Security](#security)).
    The plugin starts the service with its own options (`main.ts --options '<json>'`), read the same way, but where
    the plugin warns about a setting that isn't valid and uses the default, the service doesn't start: its log
    (`<store>/service.log`) says which setting.
@@ -40,7 +41,8 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
    question for the user on the desk, not in chat.
-4. The page is `http://127.0.0.1:47400/` (or the `port` option's); `/desk-mode` links to the session's desk there. If
+4. The page is `http://127.0.0.1:47400/` (or the `port` option's); `/desk-mode` links to the session's desk there, a link
+   that lets your browser in. If
    another program has that port, the service doesn't start and the agents' desk tools say so: set the `port` option. In a session with desk mode on, the TUI's footer shows `desk`, or
    `desk [N]` when N entries of the session's desk wait on you (`[N !M]`, M in red, for critical ones); clicking it
    opens the page. The badge is the plugin's `./tui`
@@ -72,7 +74,7 @@ flowchart LR
   The API is one `effect/rpc` group, `DeskApi` (`src/api/api.ts`), checked on both sides; what the desk refuses comes
   back typed and is worded by the plugin or the page (`src/model/wording.ts`). Each request whose rules depend on who's
   calling names its caller (`by`): an agent, in its session and directory, or the user (data, not a credential:
-  everything runs locally as the user). Its version is a hash of the contract's code (`api.ts`, `entry.ts`,
+  the credential is the store's token, which every client needs to get in at all; see [Security](#security)). Its version is a hash of the contract's code (`api.ts`, `entry.ts`,
   `errors.ts`, `bun.lock`; `src/api/protocol.ts`), so nothing is bumped by hand. On `hello` with
   another version, a service whose contract on disk changed since it loaded retires (the plugin starts the new one);
   otherwise the plugin is told to `/reload`. So a contract change restarts the service by itself (the plugin reloads
@@ -124,8 +126,26 @@ flowchart LR
 | `src/service/transport/` | `api.ts` (what each request does), `rpc.ts` (the API over the WebSocket: the version check, the bridge into the plugins' OpenCode), `http.ts` (the one server: the page, `/rpc`, attachments and files; the port, and only that one)                                                                                                                                                                                                                                                     |
 | `src/plugin/`            | `index.ts` (the assembly), `modes.ts` (desk mode in storage, the connection following it), `command.ts` (`/desk-mode`), `tools.ts` (the tools, hiding them), `sessions.ts` (OpenCode's sessions), `calls.ts` (the service, within the timeout), `connection.ts` (connect to the port or start the service; a machine), `badge.ts` (a session's badge from the live connection's `view`, as an OpenCode plugin RPC), `badge-rpc.ts` (that RPC: `status`, `changed`; shared with the TUI) |
 | `src/tui/`               | `index.tsx` (the TUI's footer badge), `badge.ts` (its data: a session's badge, asked of its directory's plugin instance over the plugin RPC, again on `changed`), `rpc-client.ts` (a plugin RPC client from Effect schemas: methods as Effects, events as Streams)                                                                                                                                                                                                                                                                            |
-| `src/shared/`            | `machine.ts` (state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts), `settings.ts` (the settings as Effect `Config`: the plugin's options, then `DESK_<NAME>`, then the defaults; `files`: the store, its registration and log, read from them where they're used), `process.ts` (what Effect lacks to start the service detached), `type.ts`, `empty.ts`                                                                                                                                                          |
+| `src/shared/`            | `machine.ts` (state machines as actors: a pure `reconcile(state, event) → state`, and what each state runs while it lasts), `settings.ts` (the settings as Effect `Config`: the plugin's options, then `DESK_<NAME>`, then the defaults; `files`: the store, its registration and log, read from them where they're used), `process.ts` (what Effect lacks to start the service detached), `secrets.ts` (the Keychain, through `Bun.secrets`; in memory for tests), `token.ts` (the store's token, in it), `type.ts`, `empty.ts`                                                                                                                                                          |
 | `page/`                  | the page (Solid, built by Vite into `page/dist/`): `main.tsx` (the router), `shell.tsx` (the layout every route is in: the desk the URL shows, the header) and `pages/` (the desks, a desk, an entry), `components/`, `stores/` (the desk's view, the drafts, their attachments, the toast; composed in `desk.tsx`, per the shell's desk), `database.ts` (IndexedDB); Mermaid renders in the browser, loaded on first use                                                                                                                                                                                                                                                                                                                                                                                   |
+
+## Security
+
+The service listens on 127.0.0.1 only, and lets nothing in without the store's token: 32 random bytes, made by the
+service the first time it runs on a store and kept in the macOS Keychain (service `desk`, named by the store's
+absolute path; `src/shared/token.ts`), never in a file. A plugin reads it there (macOS may ask once whether OpenCode
+may) and sends it as `Authorization: Bearer <token>` on its WebSocket. The links it hands the user (the `/desk-mode`
+message's, the footer badge's) carry it as `?token=`: the service keeps it in the browser as an HttpOnly,
+SameSite=Strict cookie for that port and sends the browser on to the same address without it. Every route needs it, the
+page, `/rpc`, `/files/` and `/attachments/` alike; without it, 401 (the page says to open the desk from OpenCode once).
+Tokens are compared in constant time and are `Redacted` throughout, so never logged. The Host and Origin checks stay
+as they were (`src/service/transport/http.ts`).
+
+That keeps out other local processes that can't read your Keychain, other users on the machine, other sites open in the
+browser, and anything that reaches the port through a tunnel or a forwarded port. It doesn't keep out a process that
+can read your Keychain: that one can act as you on the desk, as it could in OpenCode. The agent's own copy of the
+`/desk-mode` message has the link without the token, so the token doesn't go into the session's history or to its
+model. The `token` setting (`DESK_TOKEN`) stands in for the Keychain's, for tests and a service run by hand.
 
 ## Entries
 
@@ -180,7 +200,7 @@ bun run page        # rebuild the page on save
 bun run demo        # docs/demo/: stills and the GIF (needs Google Chrome and ffmpeg)
 ```
 
-Tests never touch the real store or port: the desk's rules run on memory storage (`Storage.layerMemory`); the service runs in-process on a temp store, any free port (port 0, which only
+Tests never touch the real store, port or Keychain (the preload, `tests/support/setup.ts`, sets the `token` setting, and the in-process service keeps its token in `Secrets.memory`): the desk's rules run on memory storage (`Storage.layerMemory`); the service runs in-process on a temp store, any free port (port 0, which only
 tests can ask for) and fake OpenCode instances behind fake plugin connections (`tests/support/`); the plugin test starts a real service process on a temp store and a free port. To run
 a service by hand, set `DESK_HOME` (store), `DESK_PORT` (not 47400, which your own desk uses) and optionally `DESK_IDLE` (a duration such as `"1 minute"`, or ms):
 `DESK_HOME=$(mktemp -d) DESK_PORT=47401 bun run service`; its page and API are on that port.

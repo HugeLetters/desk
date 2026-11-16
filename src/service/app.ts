@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type { Port } from "../model/paths";
+import { Token } from "../shared/token";
 import { Clients } from "./clients";
 import * as Delivery from "./delivery/delivery";
 import { Desk } from "./desk";
@@ -39,8 +40,9 @@ export interface Config {
 }
 
 /**
- * Needs the platform (`BunServices.layer`) and the settings (a `ConfigProvider`, `Settings.layer`): provided where the
- * service is run, `main.ts` or the tests.
+ * Needs the platform (`BunServices.layer`), the settings (a `ConfigProvider`, `Settings.layer`) and the secrets the
+ * store's token is in (`Secrets`: the Keychain's, `Token.secrets`, or in memory): provided where the service is run,
+ * `main.ts` or the tests.
  */
 export const layer = (config: Config) => {
 	const core = Layer.mergeAll(Desk.layer, Sessions.layer, Delivery.Failures.layer).pipe(
@@ -60,6 +62,8 @@ export const layer = (config: Config) => {
 		Layer.provideMerge(Api.layer),
 		Layer.provideMerge(Http.server(config.port)),
 		Layer.provideMerge(core),
+		// Once the store is this service's: its token, from the Keychain (made the first time).
+		Layer.provideMerge(Token.layer),
 		// The store first, and with it its lock: nothing else starts while another service has the store.
 		Layer.provideMerge(Storage.layer()),
 	);

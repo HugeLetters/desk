@@ -7,6 +7,7 @@ import * as Arbitrary from "effect/Arbitrary";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type { Entry } from "../src/model/entry";
@@ -135,7 +136,11 @@ const connectionEvents = events(
 			case "Off":
 				return Connection.Event.Need({ needed: tag === "On" });
 			case "Hello":
-				return Connection.Event.Hello({ client, url: new URL(`http://127.0.0.1:47400/${n}`) });
+				return Connection.Event.Hello({
+					client,
+					url: new URL(`http://127.0.0.1:47400/${n}`),
+					token: Redacted.make("token"),
+				});
 			case "Dropped":
 			case "Outdated":
 			case "Taken":

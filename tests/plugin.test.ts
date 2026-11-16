@@ -20,7 +20,8 @@ import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { D, P, S } from "./support/ids";
 import { present } from "./support/present";
-import { eventually, rpc } from "./support/service";
+import { eventually, rpc as rpcAt } from "./support/service";
+import { testToken } from "./support/setup";
 
 interface Session {
 	id: string;
@@ -32,6 +33,9 @@ interface Session {
 
 type Event = { type: string; data: { sessionID: string } };
 type Run<A = unknown> = Effect.Effect<A, unknown>;
+
+/** The API of the service at `page`, let in as a plugin is: by the token (the preload's: `setup.ts`). */
+const rpc: typeof rpcAt = (page, f) => rpcAt(page, f, { authorization: `Bearer ${testToken}` });
 
 /** A badge as it goes over OpenCode's plugin RPC. */
 const encodeStatus = Schema.encodeUnknownEffect(BadgeRpc.methods.status.output);
@@ -203,7 +207,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	);
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
 	expect(present(first.synthetic.at(-1)).description).toMatch(
-		/^Desk mode on: http:\/\/127\.0\.0\.1:\d+\/sessions\/ses_main$/,
+		new RegExp(`^Desk mode on: http://127\\.0\\.0\\.1:\\d+/sessions/ses_main\\?token=${testToken}$`),
 	);
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
 	// The rarely needed ones are in Code Mode; the rest are direct tools.
@@ -229,7 +233,7 @@ test("the plugin started the service, detached, in its store; a subagent's quest
 });
 
 test("the TUI badge's data, over the plugin's RPC: while connected, a desk-mode session's desk, a subagent's its top-level session's; each change emitted", async () => {
-	const page = `http://127.0.0.1:${port}/sessions/ses_main`;
+	const page = `http://127.0.0.1:${port}/sessions/ses_main?token=${testToken}`;
 	await eventually(async () => (await first.status("ses_main"))?.waiting === 1);
 	expect(await first.status("ses_main")).toEqual({ page, waiting: 1, critical: 0 });
 	expect(await first.status("ses_sub")).toEqual({ page, waiting: 1, critical: 0 });
@@ -298,7 +302,9 @@ test("/desk-mode again turns it off", async () => {
 	// told; the second's still has the desk.
 	await eventually(() => first.changed().length > before);
 	expect(await first.status("ses_main")).toBeNull();
-	expect(await second.status("ses_main")).toMatchObject({ page: `http://127.0.0.1:${port}/sessions/ses_main` });
+	expect(await second.status("ses_main")).toMatchObject({
+		page: `http://127.0.0.1:${port}/sessions/ses_main?token=${testToken}`,
+	});
 });
 
 test("the service exits once every plugin instance has gone", async () => {

@@ -3,6 +3,7 @@
  * id>` an entry on it. The page's router (`page/main.tsx`) matches these; the service (an entry's or a desk's link for
  * the agent), the TUI badge and the tests link to them, so all of them build the paths here.
  */
+import * as Redacted from "effect/Redacted";
 
 /** The router's patterns for the list and for an entry. `/projects/*` is the old list, sent to `/`. */
 export const patterns = {
@@ -39,3 +40,16 @@ export const rpcUrl = (port: number) => new URL(rpcPath, `ws://${host}:${port}/`
 
 /** A path as a link on the page at `page` (the service's URL, e.g. `http://127.0.0.1:47400/`). */
 export const link = (page: URL, path: string) => new URL(path, page);
+
+/** The query parameter a link carries the token in: the service lets the browser in by it, then drops it (`http.ts`). */
+export const tokenParam = "token";
+
+/** The cookie the page's token is kept in: one per port, since cookies don't tell ports apart and each is a service. */
+export const tokenCookie = (port: number | string) => `desk-${port}`;
+
+/** `url` with the token (`token.ts`): a link a plugin hands out, which lets the browser in. */
+export const withToken = (url: URL, token: Redacted.Redacted<string>) => {
+	const authorized = new URL(url);
+	authorized.searchParams.set(tokenParam, Redacted.value(token));
+	return authorized;
+};

@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -35,6 +36,9 @@ afterEach(async () => {
 
 /** The page on `port`. */
 const page = (port: number) => new URL(`http://127.0.0.1:${port}/`);
+
+/** The store's token, as the services here have it. */
+const token = Redacted.make("badge-token");
 
 /** A port nothing listens on now. */
 const freePort = async () => {
@@ -81,6 +85,7 @@ const registered = (port: Port, on: Set<string>) => {
 					port,
 					start: Effect.void,
 					directory: D("/work/a"),
+					token: Effect.succeed(token),
 					modes: Effect.succeed([S("ses_a")]),
 					serve: { session: () => Effect.succeed(null), prompt: () => Effect.void },
 					timeout: 200,
@@ -124,14 +129,15 @@ test("the plugin answers a session's badge with its desk on the service it's con
 	expect(plugin.changed[0]).toEqual(["changed", {}]);
 	expect(await plugin.status("ses_a")).toBeNull();
 
-	const first = await startService({ store: home, port });
+	const first = await startService({ store: home, port, token });
 	const opencode = first.fake.server("http://opencode");
 	opencode.session({ id: S("ses_a") });
 	const asking = first.plugin(opencode);
 	const asked = { session: S("ses_a"), directory: D("/work/a") };
 	await asking.request("ask", { by: asked, question: { title: "One?", body: "" } });
 	await asking.request("ask", { by: asked, question: { title: "Two?", body: "", priority: "critical" } });
-	const desk = { page: `${page(port).href}sessions/ses_a`, waiting: 2, critical: 1 };
+	// Its page lets the browser in: it carries the token.
+	const desk = { page: `${page(port).href}sessions/ses_a?token=badge-token`, waiting: 2, critical: 1 };
 	await eventually(async () => (await plugin.status("ses_a"))?.waiting === 2);
 	expect(await plugin.status("ses_a")).toEqual(desk);
 	// A subagent's badge is its top-level session's desk.
@@ -143,7 +149,11 @@ test("the plugin answers a session's badge with its desk on the service it's con
 	on.add("ses_a");
 	// A session in desk mode with nothing on its desk: its page, nothing waiting.
 	on.add("ses_b");
-	expect(await plugin.status("ses_b")).toEqual({ page: `${page(port).href}sessions/ses_b`, waiting: 0, critical: 0 });
+	expect(await plugin.status("ses_b")).toEqual({
+		page: `${page(port).href}sessions/ses_b?token=badge-token`,
+		waiting: 0,
+		critical: 0,
+	});
 
 	// The service goes: not connected, so the badge hides, and the TUI is told; then the connection finds the next
 	// one on the same port.
@@ -151,7 +161,7 @@ test("the plugin answers a session's badge with its desk on the service it's con
 	await first.close(false);
 	await eventually(async () => (await plugin.status("ses_a")) === null);
 	expect(plugin.changed.length).toBeGreaterThan(before);
-	const second = await startService({ store: home, port });
+	const second = await startService({ store: home, port, token });
 	cleanup.push(() => second.close(false));
 	await eventually(async () => (await plugin.status("ses_a")) !== null);
 	expect(await plugin.status("ses_a")).toMatchObject({ page: desk.page, waiting: 2 });
@@ -182,14 +192,14 @@ test("a desk's badge out of the service's view: its page and counts, none waitin
 		deskMode: ["ses_a"],
 		failures: {},
 	};
-	const seen = { url: page(1), view };
+	const seen = { url: page(1), token, view };
 	expect(Badge.fromView(seen, S("ses_a"))).toEqual({
-		page: new URL("http://127.0.0.1:1/sessions/ses_a"),
+		page: new URL("http://127.0.0.1:1/sessions/ses_a?token=badge-token"),
 		waiting: 2,
 		critical: 1,
 	});
 	expect(Badge.fromView(seen, S("ses_b"))).toEqual({
-		page: new URL("http://127.0.0.1:1/sessions/ses_b"),
+		page: new URL("http://127.0.0.1:1/sessions/ses_b?token=badge-token"),
 		waiting: 0,
 		critical: 0,
 	});

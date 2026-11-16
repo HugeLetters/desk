@@ -6,32 +6,41 @@
 import type { Plugin } from "@opencode/plugin/effect";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import type * as Redacted from "effect/Redacted";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { View } from "../api/api";
-import { deskPath, link } from "../api/routes";
+import { deskPath, link, withToken } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import { BadgeRpc } from "./badge-rpc";
 import type { Connection, Link } from "./connection";
 import type { Modes } from "./modes";
 import type * as Sessions from "./sessions";
 
-/** What the live link's service last said: its page and its view. */
+/** What the live link's service last said: its page and its view; and the token the link was let in with. */
 export interface Seen {
 	readonly url: URL;
+	readonly token: Redacted.Redacted<string>;
 	readonly view: View;
 }
 
-/** The badge of the desk of `root` (a top-level session in desk mode), out of what the service last said. */
-export const fromView = ({ url, view }: Seen, root: SessionID) => {
+/**
+ * The badge of the desk of `root` (a top-level session in desk mode), out of what the service last said: its page
+ * with the token, so that clicking it lets the browser in.
+ */
+export const fromView = ({ url, token, view }: Seen, root: SessionID) => {
 	const desk = view.desks.find((summary) => summary.session === root);
-	return { page: link(url, deskPath(root)), waiting: desk?.waiting ?? 0, critical: desk?.critical ?? 0 };
+	return {
+		page: withToken(link(url, deskPath(root)), token),
+		waiting: desk?.waiting ?? 0,
+		critical: desk?.critical ?? 0,
+	};
 };
 
 /** The link's views, for as long as it lasts: none until the service's first, and once it ends. */
 const linkViews = (link: Link) =>
 	link.client.view({}).pipe(
-		Stream.map((view) => Option.some<Seen>({ url: link.url, view })),
+		Stream.map((view) => Option.some<Seen>({ url: link.url, token: link.token, view })),
 		Stream.catchCause(() => Stream.empty),
 		Stream.concat(Stream.make(Option.none<Seen>())),
 	);

@@ -5,6 +5,7 @@ import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
@@ -142,3 +143,10 @@ export const timeout = setting("timeout", duration("timeout"), Duration.seconds(
  * @default open
  */
 export const opener = setting("opener", Config.String("opener"), "open");
+
+/**
+ * The store's token, standing in for the Keychain's (`token.ts`): for tests, and a service run by hand. Unset, the
+ * Keychain's, which the service creates.
+ * @default none
+ */
+export const token = setting("token", Config.option(Config.Redacted("token")), Option.none());

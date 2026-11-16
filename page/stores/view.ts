@@ -12,7 +12,11 @@ import * as Rpc from "../rpc";
 
 /** `onView`: each view of the desk, as it comes. */
 export const createView = (desk: Accessor<string | undefined>, onView: (view: View) => void) => {
-	const [state, setState] = createStore<{ view: View | null; online: boolean }>({ view: null, online: true });
+	const [state, setState] = createStore<{ view: View | null; online: boolean; letIn: boolean }>({
+		view: null,
+		online: true,
+		letIn: true,
+	});
 
 	// One view at a time, of the desk the route shows.
 	createEffect(
@@ -26,13 +30,19 @@ export const createView = (desk: Accessor<string | undefined>, onView: (view: Vi
 								if ((view.desk?.session ?? undefined) !== id) return;
 
 								setState("online", true);
+								setState("letIn", true);
 								setState("view", reconcile(view, { key: "id", merge: true }));
 								onView(view);
 							}),
 						),
 					),
 				).pipe(
-					Effect.tapError(() => Effect.sync(() => setState("online", false))),
+					Effect.tapError(() =>
+						Effect.andThen(
+							Effect.sync(() => setState("online", false)),
+							Effect.flatMap(Rpc.letIn, (letIn) => Effect.sync(() => setState("letIn", letIn))),
+						),
+					),
 					Effect.retry(Schedule.spaced("1 second")),
 				),
 			);
