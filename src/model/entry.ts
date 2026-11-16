@@ -8,7 +8,7 @@
  * asker: agent
  * status: open
  * session: ses_…          # the root (top-level) session
- * directory: /Users/me/projects/phantom
+ * directory: /Users/me/projects/phantom   # an absolute path; one that isn't leaves the entry on the desk, without a folder
  * labels: [design, icons]
  * priority: high   # optional: critical | high | normal | low; absent means normal
  * created: 2026-11-07T16:30:00.000Z
@@ -99,8 +99,6 @@ const Fields = {
 	status: Status,
 	/** The top-level OpenCode session that asked, or that the user's reply belongs to; it hears about the entry. */
 	session: Session.ID,
-	/** Where the asking session works: relative paths in the entry's Markdown resolve against it. */
-	directory: AbsolutePath,
 	labels: Schema.Array(Schema.String),
 	priority: Priority.pipe(Schema.withDecodingDefaultKey(Effect.succeed("normal" as const))),
 	created: Schema.String,
@@ -109,12 +107,25 @@ const Fields = {
 /** The file's header: `Fields`, and the pending text flat, as `outbox` (its message) and `delivery`, both or neither. */
 const Header = Schema.Struct({
 	...Fields,
+	/** As written, whatever it is: an entry with a directory that isn't usable stays on the desk ({@link Entry}'s `directory`). */
+	directory: Schema.String,
 	outbox: Schema.NullOr(MessageID).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
 	delivery: Delivery.pipe(Schema.withDecodingDefaultKey(Effect.succeed("queue" as const))),
 });
 
 export const Entry = Schema.Struct({
 	...Fields,
+	/**
+	 * Where the asking session works: relative paths in the entry's Markdown resolve against it. Null when the file's
+	 * `directory` isn't an absolute path (only a hand-edited file has one): the entry stays on the desk, but has no
+	 * folder to serve files from.
+	 */
+	directory: Schema.NullOr(AbsolutePath),
+	/**
+	 * The file's `directory` as written, which `serialize` writes back: the desk never invents or drops a directory,
+	 * whether or not it's usable. The same as `directory` when that isn't null.
+	 */
+	directoryText: Schema.String,
 	pending: Schema.NullOr(Pending),
 	id: EntryId,
 	title: Schema.String,
@@ -125,6 +136,7 @@ export interface Entry extends Identity<typeof Entry.Type> {}
 
 const decodeHeader = Schema.decodeUnknownOption(Header);
 const decodeId = Schema.decodeUnknownOption(EntryId);
+const decodeDirectory = Schema.decodeUnknownOption(AbsolutePath);
 const answerMarker = "<!-- desk:answer -->";
 
 export const answerer = (entry: Pick<Entry, "asker">): Party => (entry.asker === "user" ? "agent" : "user");
@@ -250,7 +262,7 @@ export function serialize(entry: Entry): string {
 		`asker: ${entry.asker}`,
 		`status: ${entry.status}`,
 		`session: ${entry.session}`,
-		`directory: ${JSON.stringify(entry.directory)}`,
+		`directory: ${JSON.stringify(entry.directoryText)}`,
 		`labels: [${entry.labels.join(", ")}]`,
 		...(entry.priority === "normal" ? [] : [`priority: ${entry.priority}`]),
 		`created: "${entry.created}"`,
@@ -266,8 +278,10 @@ export function parse(id: EntryId, text: string): Option.Option<Entry> {
 
 	const [, head, title, body] = match as unknown as [string, string, string, string];
 	const [question, answer] = body.split(answerMarker);
-	return Option.map(decodeHeader(Bun.YAML.parse(head)), ({ outbox, delivery, ...header }) => ({
+	return Option.map(decodeHeader(Bun.YAML.parse(head)), ({ outbox, delivery, directory, ...header }) => ({
 		...header,
+		directory: Option.getOrNull(decodeDirectory(directory)),
+		directoryText: directory,
 		pending: outbox === null ? null : { message: outbox, delivery },
 		id,
 		title: title.trim(),

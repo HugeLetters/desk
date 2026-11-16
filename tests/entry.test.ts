@@ -27,6 +27,7 @@ const entry: Entry = {
 	status: "answered",
 	session: S("ses_1"),
 	directory: D("/work/phantom"),
+	directoryText: "/work/phantom",
 	labels: ["design", "icons"],
 	priority: "normal",
 	created: "2026-11-07T16:30:00.000Z",
@@ -64,7 +65,7 @@ test("text still pending is in the header as its message (`outbox`) and delivery
 	expect<unknown>(parse(id, serialize(pending))).toEqual(Option.some(pending));
 });
 
-test("a file written before directories were checked still parses: its directory, quoted or not, is absolute", () => {
+test("a file's directory, quoted or not, is read as the absolute path it is", () => {
 	const header = (directory: string) =>
 		`---\nparent:\nasker: agent\nstatus: open\nsession: ses_1\ndirectory: ${directory}\nlabels: []\ncreated: "2026-11-07T16:30:00.000Z"\n---\n\n# Which icon?\n\nPick one.\n`;
 	for (const written of [
@@ -75,9 +76,21 @@ test("a file written before directories were checked still parses: its directory
 		expect<unknown>(Option.map(parse(id, header(written)), (parsed) => parsed.directory)).toEqual(
 			Option.some(JSON.parse(written.startsWith('"') ? written : JSON.stringify(written))),
 		);
+});
 
-	// Only a hand-edited file has a relative one: not an entry.
-	expect<unknown>(parse(id, header("projects/phantom"))).toEqual(Option.none());
+test("a hand-edited file whose directory isn't absolute is still an entry, without a folder, and keeps what was written", () => {
+	const header = (directory: string) =>
+		`---\nparent:\nasker: agent\nstatus: open\nsession: ses_1\ndirectory: ${directory}\nlabels: []\ncreated: "2026-11-07T16:30:00.000Z"\n---\n\n# Which icon?\n\nPick one.\n`;
+	for (const written of ["relative/dir", "", "~/projects/phantom", "./here"]) {
+		const parsed = Option.getOrThrow(parse(id, header(JSON.stringify(written))));
+		expect(parsed.directory).toBeNull();
+		expect(parsed.directoryText).toBe(written);
+		// Written back as it was, and read again the same.
+		expect(serialize(parsed)).toContain(`directory: ${JSON.stringify(written)}\n`);
+		expect<unknown>(parse(id, serialize(parsed))).toEqual(Option.some(parsed));
+	}
+	// Not text at all: not an entry.
+	expect<unknown>(parse(id, header("[a, b]"))).toEqual(Option.none());
 });
 
 test("files that aren't entries parse to None", () => {

@@ -2,7 +2,7 @@
  * The service through its public seams: plugin instances and pages on its API (the WebSocket at `/rpc`), its HTTP, the store's files,
  * and fake OpenCode servers on the other side.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -650,6 +650,44 @@ describe("the page server", () => {
 		expect(await (await service.fetch(`files/${asked.id}/media/a.txt`)).text()).toBe("inside");
 		expect((await service.fetch(`files/${asked.id}/..%2F..%2Fetc%2Fhosts`)).status).toBe(403);
 		expect((await service.fetch(`files/nope/media/a.txt`)).status).toBe(404);
+	});
+
+	test("an entry whose directory isn't an absolute path stays on the desk, without a folder: no files, written back as it was, said once in the log", async () => {
+		const logged: Array<string> = [];
+		const spies = (["log", "warn", "error"] as const).map((method) =>
+			spyOn(console, method).mockImplementation((...parts: Array<unknown>) => void logged.push(parts.join(" "))),
+		);
+		try {
+			const asked = await service
+				.plugin()
+				.request("ask", { by: { session: S("ses_a"), directory: D("/w") }, question: question("Where?") });
+			const file = join(service.store, `${asked.id}.md`);
+			await writeFile(file, (await readFile(file, "utf8")).replace('directory: "/w"', "directory: relative/dir"));
+
+			// Listed, as before: the page's desk and the agent's list.
+			await eventually(async () => (await view("ses_a")).entries.some((entry) => entry.directory === null));
+			expect(await service.plugin().request("list", { session: S("ses_a") })).toContain(`${asked.id} Where?`);
+
+			// An unknown session's desk is named from its entries' folder: there's none to name it from.
+			expect((await view()).desks).toMatchObject([{ session: "ses_a", folder: "", known: false }]);
+
+			const files = await service.fetch(`files/${asked.id}/a.png`);
+			expect(files.status).toBe(404);
+			expect(await files.text()).toBe("this entry has no folder");
+
+			// A write (the user's answer) puts the directory back as it was.
+			await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "Here." }] }));
+			expect(await read(asked.id)).toMatchObject({ answer: "Here.", directory: null, directoryText: "relative/dir" });
+			expect(await readFile(file, "utf8")).toContain('directory: "relative/dir"\n');
+			await service.plugin().request("list", { session: S("ses_a") });
+			await view("ses_a");
+
+			const said = logged.filter((line) => line.includes(`entry ${asked.id}: its directory isn't an absolute path`));
+			expect(said).toHaveLength(1);
+			expect(said[0]).toContain("so its files can't be served");
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
 	});
 
 	test("refuses foreign hosts, cross-site writes and another site's page calling the API", async () => {

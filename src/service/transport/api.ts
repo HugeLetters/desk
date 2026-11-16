@@ -67,7 +67,7 @@ export class Api extends Context.Service<
 					const name = (id: string, mine: ReadonlyArray<Entry>) =>
 						Effect.map(
 							// The folder its latest entry was asked from, for a session OpenCode doesn't know.
-							sessions.name(SessionID.make(id), mine.at(-1)?.directory),
+							sessions.name(SessionID.make(id), mine.at(-1)?.directory ?? undefined),
 							(name) => ({ session: id, ...name }),
 						);
 					const deskMode = yield* opencode.inDeskMode;

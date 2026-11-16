@@ -127,6 +127,7 @@ const Files = HttpRouter.add(
 		const { id, "*": path = "" } = yield* HttpRouter.params;
 		const entry = (yield* desk.entries).find((candidate) => candidate.id === id);
 		if (!entry) return HttpServerResponse.text("no such entry", { status: 404 });
+		if (entry.directory === null) return HttpServerResponse.text("this entry has no folder", { status: 404 });
 
 		// Not a path below the directory (absolute, or climbing out of it): never read.
 		const below = decodeRelative(path);

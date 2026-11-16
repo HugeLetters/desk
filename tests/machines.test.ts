@@ -350,6 +350,7 @@ const entryOf = (asker: "user" | "agent"): Entry => ({
 	status: "open",
 	session: S("ses_a"),
 	directory: D("/w"),
+	directoryText: "/w",
 	labels: [],
 	priority: "normal",
 	created: "0001",

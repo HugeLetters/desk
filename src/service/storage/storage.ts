@@ -161,14 +161,39 @@ export const make = Effect.fn("Storage.make")(function* () {
 		return path.dirname(normal) === "attachments" ? backend.attachment(normal) : Effect.succeedNone;
 	};
 
+	const unusable = yield* Ref.make<ReadonlySet<EntryId>>(new Set());
+
+	/** Every entry; the first time one is seen with a directory that isn't an absolute path, the log says so. */
+	const load = backend.load.pipe(
+		Effect.tap((entries) =>
+			Effect.forEach(
+				entries.filter((entry) => entry.directory === null),
+				(entry) =>
+					Effect.flatMap(
+						Ref.modify(unusable, (seen): [boolean, ReadonlySet<EntryId>] => [
+							!seen.has(entry.id),
+							new Set(seen).add(entry.id),
+						]),
+						(first) =>
+							first
+								? Effect.logWarning(
+										`desk: entry ${entry.id}: its directory isn't an absolute path, so its files can't be served`,
+									)
+								: Effect.void,
+					),
+				{ discard: true },
+			),
+		),
+	);
+
 	return Storage.of({
-		entries: backend.load,
+		entries: load,
 		transact: (change) =>
 			lock
 				.withPermits(1)(
 					Effect.gen(function* () {
 						const attached = yield* Ref.make<ReadonlyArray<RelativePath>>([]);
-						const all = yield* backend.load;
+						const all = yield* load;
 						return yield* change(all, handle(attached)).pipe(
 							Effect.onError(() => Effect.flatMap(Ref.get(attached), backend.detach)),
 						);

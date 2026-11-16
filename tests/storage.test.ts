@@ -38,6 +38,7 @@ const entry = (name: string, created: string, title = name): Entry => ({
 	status: "open",
 	session: S("ses_a"),
 	directory: D("/w"),
+	directoryText: "/w",
 	labels: ["design"],
 	priority: "high",
 	created,

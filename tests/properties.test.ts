@@ -49,6 +49,7 @@ const desks = Arbitrary.array(
 				status: shape.status,
 				session: S("ses_a"),
 				directory: D("/w"),
+				directoryText: "/w",
 				labels: [],
 				priority: shape.priority,
 				created: String(index).padStart(4, "0"),
