@@ -717,6 +717,8 @@ describe("the token", () => {
 			const response = await fetch(`${service.url}${path}`);
 			expect([path, response.status]).toEqual([path, 401]);
 		}
+		// The refusal is recognizably the desk's: a plugin tells it from another program's.
+		expect((await fetch(service.url)).headers.get("www-authenticate")).toBe('Bearer realm="desk"');
 		// The page shell says how to get in.
 		expect(await (await fetch(service.url)).text()).toContain("open the desk from OpenCode once");
 		// The API's WebSocket, with no token, a wrong cookie or a wrong bearer: refused.

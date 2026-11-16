@@ -129,7 +129,7 @@ test("states with the same key share one run, started in the first of them; anot
 
 const client = {} as Connection.Client;
 const connectionEvents = events(
-	["On", "Off", "Hello", "Dropped", "Outdated", "Taken", "Retry"],
+	["On", "Off", "Hello", "Dropped", "Outdated", "Taken", "Unauthorized", "Retry"],
 	(tag, n): Connection.Event => {
 		switch (tag) {
 			case "On":
@@ -144,6 +144,7 @@ const connectionEvents = events(
 			case "Dropped":
 			case "Outdated":
 			case "Taken":
+			case "Unauthorized":
 				return { _tag: tag, message: `why ${n}` };
 			default:
 				return Connection.Event.Retry();
@@ -165,14 +166,14 @@ test("connection: off only when not needed, and always then; live only by hello 
 	);
 });
 
-test("connection: refused only by an outdated plugin or a port another program has, while connecting, and for good until turned off, saying why; a dropped link backs off, then retries", async () => {
+test("connection: refused only by an outdated plugin, a port another program has or a service that won't take the token, while connecting, and for good until turned off, saying why; a dropped link backs off, then retries", async () => {
 	await check(connectionEvents, (sequence) =>
 		connectionSteps(sequence).every(({ before, event, after }) => {
 			if (before._tag === "Refused") return after === before || after._tag === "Off";
 			if (after._tag === "Refused")
 				return (
 					before._tag === "Connecting" &&
-					(event._tag === "Outdated" || event._tag === "Taken") &&
+					(event._tag === "Outdated" || event._tag === "Taken" || event._tag === "Unauthorized") &&
 					after.message === event.message
 				);
 			if (after._tag === "Backoff" && before._tag !== "Backoff")

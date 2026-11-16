@@ -85,6 +85,7 @@ const registered = (port: Port, on: Set<string>) => {
 				const connection = yield* Connection.make({
 					port,
 					start: Effect.void,
+					registration: D("/work/a/service.json"),
 					directory: D("/work/a"),
 					token: Effect.succeed(token),
 					modes: Effect.succeed([S("ses_a")]),

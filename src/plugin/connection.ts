@@ -6,11 +6,12 @@
  * goes, it does it all again, starting a new one; requests wait for that.
  *
  * Something else may have the port: then the WebSocket's upgrade fails while the port still takes connections, and the
- * agents are told so (`taken`), rather than waiting for a service that can't start there.
+ * agents are told so (`taken`), rather than waiting for a service that can't start there. If it's a desk service that
+ * refuses the plugin's token (the Keychain's changed while it ran), they're told that instead (`unauthorized`).
  *
  * A machine (`machine.ts`): `Off`; `Connecting` and then `Live`, on one WebSocket (one `run`, the `link`); `Backoff` a
  * moment after the link drops; `Refused` while this plugin is older than the service or another program has the port,
- * until it's turned off.
+ * or the service there doesn't take this plugin's token, until it's turned off.
  */
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as Cause from "effect/Cause";
@@ -34,7 +35,7 @@ import * as Stream from "effect/Stream";
 import * as Socket from "effect/socket/Socket";
 import { DeskApi, type Outcome, type Prompt, type ServiceCall, type SessionInfo } from "../api/api";
 import { protocol } from "../api/protocol";
-import { host, rpcUrl, withToken } from "../api/routes";
+import { challenge, host, rpcUrl, serviceUrl, withToken } from "../api/routes";
 import type { SessionID } from "../model/entry";
 import type { AbsolutePath, Port } from "../model/paths";
 import type { Empty } from "../shared/empty";
@@ -55,6 +56,8 @@ export interface Options<R = never> {
 	readonly port: Port;
 	/** Starts the service; run when nothing listens on the port. */
 	readonly start: Effect.Effect<void, PlatformError.PlatformError | Config.ConfigError | Settings.InvalidSetting, R>;
+	/** The service's `service.json`, whose pid the user can kill (what a refusal tells them). */
+	readonly registration: AbsolutePath;
 	/** This plugin instance's directory. */
 	readonly directory: AbsolutePath;
 	/** The store's token (`token.ts`), read as each link starts: the service makes it the first time it runs. */
@@ -130,6 +133,8 @@ export type Event = Data.TaggedEnum<{
 	Outdated: { readonly message: string };
 	/** Another program has the port. */
 	Taken: { readonly message: string };
+	/** The desk service there doesn't accept this plugin's token. */
+	Unauthorized: { readonly message: string };
 	/** `Backoff` is over. */
 	Retry: Empty;
 }>;
@@ -147,6 +152,7 @@ export const reconcile = (state: State, event: Event): State => {
 			return state._tag === "Connecting" || state._tag === "Live" ? State.Backoff({ message: event.message }) : state;
 		case "Outdated":
 		case "Taken":
+		case "Unauthorized":
 			return state._tag === "Connecting" ? State.Refused({ message: event.message }) : state;
 		case "Retry":
 			return state._tag === "Backoff" ? State.Connecting() : state;
@@ -172,6 +178,25 @@ export const errorMessage = (error: unknown) =>
 /** What the agents are told while another program has `port`. */
 export const taken = (port: Port) =>
 	`Port ${port} is taken by another program, so the desk service can't run there. The user sets the desk plugin's port option (or DESK_PORT) to a free port and runs /reload; if it's an older desk service, they stop it instead.`;
+
+/** What the agents are told while the desk service on `port` refuses this plugin's token: the Keychain's changed while it ran. */
+export const unauthorized = (port: Port, registration: AbsolutePath) =>
+	`The desk service on port ${port} didn't accept this OpenCode's token: the token in the Keychain changed while it ran. Restart the desk service (kill the pid in ${registration}) and /reload.`;
+
+/**
+ * Whether the desk service on `port` refuses `token`: a plain request to its page answers 401 with the desk's
+ * challenge (`routes.ts`). Another program refusing the upgrade doesn't answer that way, and neither does one that can't
+ * be reached.
+ */
+const refusesToken = (port: Port, token: Redacted.Redacted<string>) =>
+	Effect.tryPromise(async () => {
+		const response = await fetch(serviceUrl(port), {
+			headers: authorization(token),
+			redirect: "manual",
+			signal: AbortSignal.timeout(1000),
+		});
+		return response.status === 401 && response.headers.get("www-authenticate") === challenge;
+	}).pipe(Effect.orElseSucceed(() => false));
 
 /**
  * Whether the WebSocket couldn't even open (not for lack of time): an upgrade refused, as by a server that isn't the
@@ -286,7 +311,11 @@ export const make = Effect.fn("Connection.make")(function* <R = never>(options: 
 								);
 								if (opened || !(yield* answering(options.port))) return yield* error;
 
-								yield* emit(Event.Taken({ message: taken(options.port) }));
+								yield* emit(
+									(yield* refusesToken(options.port, token))
+										? Event.Unauthorized({ message: unauthorized(options.port, options.registration) })
+										: Event.Taken({ message: taken(options.port) }),
+								);
 								return Option.none<URL>();
 							})
 						: Effect.fail(error),

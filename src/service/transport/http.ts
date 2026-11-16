@@ -26,7 +26,7 @@ import * as Predicate from "effect/Predicate";
 import * as Redacted from "effect/Redacted";
 import * as Runtime from "effect/Runtime";
 import * as Schema from "effect/Schema";
-import { host, tokenCookie, tokenParam } from "../../api/routes";
+import { challenge, host, tokenCookie, tokenParam } from "../../api/routes";
 import { type Port, RelativePath } from "../../model/paths";
 import { Token } from "../../shared/token";
 import { Desk } from "../desk";
@@ -90,11 +90,11 @@ const isToken = (token: Redacted.Redacted<string>, given: string) =>
 /** The token in an `Authorization: Bearer <token>` header. */
 const bearer = (authorization: string | undefined) => authorization?.match(/^Bearer (.+)$/i)?.[1];
 
-/** No token, or not the store's: the page shell says how to get in. */
+/** No token, or not the store's: the text says how to get in, and the header that it's the desk's (`routes.ts`'s `challenge`). */
 const unauthorized = () =>
 	HttpServerResponse.text(
 		"Not let in: open the desk from OpenCode once (/desk-mode's link, or the footer's desk badge). Its link lets this browser in.",
-		{ status: 401 },
+		{ status: 401, headers: { "www-authenticate": challenge } },
 	);
 
 /**

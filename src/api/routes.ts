@@ -47,6 +47,12 @@ export const tokenParam = "token";
 /** The cookie the page's token is kept in: one per port, since cookies don't tell ports apart and each is a service. */
 export const tokenCookie = (port: number | string) => `desk-${port}`;
 
+/**
+ * The `WWW-Authenticate` header of the service's 401: it's the desk's own refusal of a token (a plugin tells a service that
+ * doesn't accept its token from another program that refuses its upgrade).
+ */
+export const challenge = 'Bearer realm="desk"';
+
 /** `url` with the token (`token.ts`): a link a plugin hands out, which lets the browser in. */
 export const withToken = (url: URL, token: Redacted.Redacted<string>) => {
 	const authorized = new URL(url);

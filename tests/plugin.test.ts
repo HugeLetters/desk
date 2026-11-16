@@ -10,6 +10,7 @@ import { SessionNotFoundError } from "@opencode/protocol/errors";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -20,7 +21,7 @@ import { answering } from "../src/plugin/connection";
 import plugin from "../src/plugin/index";
 import { D, P, S } from "./support/ids";
 import { present } from "./support/present";
-import { eventually, rpc as rpcAt } from "./support/service";
+import { eventually, rpc as rpcAt, startService } from "./support/service";
 import { testToken } from "./support/setup";
 
 interface Session {
@@ -315,6 +316,40 @@ test("the service exits once every plugin instance has gone", async () => {
 	await Bun.sleep(100);
 	expect(await Effect.runPromise(answering(port))).toBe(false);
 	expect((await readdir(home)).filter((name) => name.endsWith(".md"))).toHaveLength(3);
+});
+
+test("another program that answers 401 is still a port taken: only the desk's own challenge says the token changed", async () => {
+	const elsewhere = await mkdtemp(join(tmpdir(), "desk-taken-401-"));
+	const other = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("no", { status: 401 }) });
+	const context = fakeContext(elsewhere, sessions, { port: other.port });
+	const unload = await load(context);
+	try {
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow(
+			`Port ${other.port} is taken by another program`,
+		);
+	} finally {
+		await unload();
+		other.stop(true);
+		await rm(elsewhere, { recursive: true, force: true });
+	}
+});
+
+test("a desk service that doesn't accept this OpenCode's token isn't a port taken: the tools say the token changed, and what to do", async () => {
+	const rightsHome = await mkdtemp(join(tmpdir(), "desk-token-"));
+	// A service that made its token in the Keychain before it was recreated: this plugin (the preload's token) isn't let in.
+	const service = await startService({ store: rightsHome, token: Redacted.make("another-token") });
+	const context = fakeContext(rightsHome, sessions, { port: service.port });
+	const unload = await load(context);
+	try {
+		const why = `The desk service on port ${service.port} didn't accept this OpenCode's token: the token in the Keychain changed while it ran. Restart the desk service (kill the pid in ${join(rightsHome, "service.json")}) and /reload.`;
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow(why);
+		context.storage.set("on/ses_main", true);
+		await expect(context.tool("desk_list", "ses_main", {})).rejects.toThrow(why);
+		await expect(context.tool("desk_list", "ses_main", {})).rejects.not.toThrow("taken by another program");
+	} finally {
+		await unload();
+		await service.close();
+	}
 });
 
 test("a stuck service: /desk-mode and the tools fail after the timeout instead of waiting for good", async () => {

@@ -54,6 +54,7 @@ export default Plugin.define<Scope.Scope>({
 			const connection = yield* Connection.make({
 				port,
 				start: Connection.startService(ctx.options),
+				registration,
 				directory: ctx.location.directory,
 				// The store's token, as the service made it in the Keychain (`token.ts`).
 				token: secrets.getOrFail(store),

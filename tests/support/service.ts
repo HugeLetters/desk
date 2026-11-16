@@ -96,6 +96,7 @@ export async function startService(
 					Connection.make({
 						port,
 						start: Effect.void,
+						registration: D(join(store, "service.json")),
 						directory,
 						token: Effect.succeed(token),
 						modes: Effect.sync(() => [...opencode.sessions.keys()]),
