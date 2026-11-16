@@ -19,6 +19,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { SessionID } from "../model/entry";
+import { invalidSetting } from "../model/wording";
 import { BadgeRpc, type Status } from "../plugin/badge-rpc";
 import * as Settings from "../shared/settings";
 import { count, follow } from "./badge";
@@ -76,7 +77,13 @@ function Badge(props: { theme: Context["theme"]; status: Status | null; open: (p
  * plugin instance in that session's directory, and asked again when that instance says something changed.
  */
 const badge = Effect.fn("badge")(function* (context: Context) {
-	const opener = yield* Settings.opener;
+	// A setting that isn't valid: no badge (the plugin's server part says what to fix), and the reason, once, in the log.
+	const settings = yield* Settings.all.pipe(Effect.catchTag("InvalidSetting", Effect.succeed));
+	if (settings instanceof Settings.InvalidSetting) {
+		return yield* Effect.logError(`desk: no badge. ${invalidSetting(settings.name, settings.message)}`);
+	}
+
+	const { opener } = settings;
 	const client = rpcClient(BadgeRpc, context);
 	const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 

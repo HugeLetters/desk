@@ -1,10 +1,8 @@
 import * as Config from "effect/Config";
 import * as ConfigProvider from "effect/ConfigProvider";
-import * as Context from "effect/Context";
 import * as Data from "effect/Data";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Runtime from "effect/Runtime";
@@ -23,53 +21,36 @@ export const optionsProvider = (options: Options) => {
 	return ConfigProvider.fromUnknown({ desk: options });
 };
 
-/** A setting given but not valid, where the settings are strict ({@link layer}'s `strict`: the service). */
+/** A setting given but not valid: one that's missing is its default, one that's wrong is never silently replaced. */
 export class InvalidSetting extends Data.TaggedError("InvalidSetting")<{
 	readonly name: string;
 	readonly message: string;
 }> {
-	// Reported by whoever reads the settings (the service's `main.ts`), so not by the runtime as well.
+	// Reported by whoever reads the settings (the service's `main.ts`, the plugin, the TUI), so not by the runtime as well.
 	override readonly [Runtime.errorReported] = false;
 }
-
-/**
- * Whether a setting given but not valid fails ({@link InvalidSetting}) instead of giving way to its default with a
- * warning.
- * @default false
- */
-const Strict = Context.Reference<boolean>("desk/Settings/Strict", { defaultValue: () => false });
 
 /**
  * Default ConfigProvider layer for configuration:
  * - {@link Options} provider
  * - Constant-case env provider
  * - Any other providers setup
- *
- * `strict`: a setting given but not valid fails instead of giving way to its default (the service; the plugin and the
- * TUI warn and go on).
  */
-export const layer = (options: Options = {}, { strict = false }: { readonly strict?: boolean } = {}) => {
+export const layer = (options: Options = {}) => {
 	const provider = ConfigProvider.orElse(
 		optionsProvider(options),
 		ConfigProvider.fromEnv().pipe(ConfigProvider.constantCase),
 	);
 
-	return Layer.merge(ConfigProvider.layerAdd(provider, { asPrimary: true }), Layer.succeed(Strict, strict));
+	return ConfigProvider.layerAdd(provider, { asPrimary: true });
 };
 
-/** Desk Setting config w/ a fallback: missing, the fallback; not valid, the fallback with a warning, or, strict, a failure. */
+/** Desk Setting config w/ a fallback: missing, the fallback; not valid, an {@link InvalidSetting} naming it. */
 const setting = <A>(name: string, config: Config.Config<A>, fallback: A) =>
 	config.pipe(
 		Config.nested("desk"),
 		Config.withDefault(fallback),
-		Effect.catch(
-			Effect.fnUntraced(function* (error) {
-				if (yield* Strict) return yield* new InvalidSetting({ name, message: error.message });
-
-				yield* Effect.logWarning(`desk: ignoring the ${name} setting, using its default: ${error.message}`);
-				return fallback;
-			}),
-		),
+		Effect.mapError((error) => new InvalidSetting({ name, message: error.message })),
 	);
 
 /**
@@ -150,3 +131,6 @@ export const opener = setting("opener", Config.String("opener"), "open");
  * @default none
  */
 export const token = setting("token", Config.option(Config.Redacted("token")), Option.none());
+
+/** Every setting, read at once: for whoever must know before it starts that none is invalid (the plugin, the TUI). */
+export const all = Effect.all({ files, port, idle, timeout, opener, token });

@@ -3,7 +3,7 @@
  * service its connection is live to, through restarts, while the desk is in desk mode), and how the TUI asks for it
  * (`src/tui/badge.ts`: per session, of its directory's instance, again on that instance's `changed`).
  */
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,7 @@ import { BadgeRpc, type Status } from "../src/plugin/badge-rpc";
 import * as Connection from "../src/plugin/connection";
 import { OpenCodeError } from "../src/plugin/sessions";
 import { count, follow } from "../src/tui/badge";
+import tui from "../src/tui/index";
 import { rpcClient } from "../src/tui/rpc-client";
 import { D, S } from "./support/ids";
 import { present } from "./support/present";
@@ -280,4 +281,45 @@ test("the TUI asks per session, of its directory's instance, and again on that i
 	await eventually(() => seen.ses_b?.length === 2);
 	await eventually(() => seen.ses_a?.length === 3);
 	expect(seen.ses_b?.at(-1)).toEqual(badge("ses_b", 1));
+});
+
+test("the TUI's badge stays hidden while a setting isn't valid, and logs why once; with valid ones it takes its slot", async () => {
+	const load = async (options: Record<string, unknown>) => {
+		const slots: Array<unknown> = [];
+		const context = {
+			options,
+			client: { rpc: () => ({}) },
+			location: { directory: "/work/tui" },
+			data: { on: () => () => {} },
+			ui: {
+				slot: (slot: unknown) => {
+					slots.push(slot);
+					return () => {};
+				},
+			},
+		} as never;
+		const logged: Array<string> = [];
+		const record = (...parts: Array<unknown>) => void logged.push(parts.join(" "));
+		const spies = [
+			spyOn(console, "error").mockImplementation(record),
+			spyOn(console, "log").mockImplementation(record),
+			spyOn(console, "warn").mockImplementation(record),
+		];
+		try {
+			const unload = tui.setup(context);
+			await Bun.sleep(100);
+			await (await unload)?.();
+		} finally {
+			for (const spy of spies) spy.mockRestore();
+		}
+		return { slots, logged };
+	};
+
+	const invalid = await load({ port: "nope" });
+	expect(invalid.slots).toHaveLength(0);
+	const why = invalid.logged.filter((line) => line.includes("The desk's `port` option isn't valid"));
+	expect(why).toHaveLength(1);
+	expect(why[0]).toContain("Fix it in opencode.json (or DESK_PORT) and /reload.");
+
+	expect((await load({})).slots).toHaveLength(1);
 });

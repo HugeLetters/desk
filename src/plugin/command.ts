@@ -23,6 +23,7 @@ export const register = (ctx: Context, desk: Desk) =>
 			name: "desk-mode",
 			description: "Turn desk mode on or off for this session: agents ask you questions on the desk instead of in chat",
 			execute: Effect.fnUntraced(function* ({ sessionID }) {
+				yield* desk.calls.available;
 				const on = yield* desk.modes.toggle(sessionID);
 				yield* desk.sync;
 

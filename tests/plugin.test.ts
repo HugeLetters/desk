@@ -355,3 +355,30 @@ test("another program on the port: nothing is started, and /desk-mode and the to
 		await rm(elsewhere, { recursive: true, force: true });
 	}
 });
+
+test("an option that isn't valid doesn't crash the load or fall back to a default: nothing connects or starts, and /desk-mode and the tools name the option", async () => {
+	const invalid = await mkdtemp(join(tmpdir(), "desk-invalid-"));
+	const context = fakeContext(invalid, sessions, { port: "nope" });
+	const unload = await load(context);
+	try {
+		const why = "The desk's `port` option isn't valid:";
+		const fix = "Fix it in opencode.json (or DESK_PORT) and /reload.";
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow(why);
+		await expect(context.command("desk-mode", "ses_main")).rejects.toThrow(fix);
+		// Refused before it changed anything.
+		expect(context.storage.get("on/ses_main")).toBeUndefined();
+
+		context.storage.set("on/ses_main", true);
+		await expect(context.tool("desk_list", "ses_main", {})).rejects.toThrow(why);
+		await expect(context.tool("desk_ask", "ses_main", { title: "Q?", body: "" })).rejects.toThrow(fix);
+		// Desk mode is off for a session that never turned it on, but the reason is still the setting's.
+		await expect(context.tool("desk_list", "ses_other", {})).rejects.toThrow(why);
+
+		// No badge, and the TUI asking gets an answer rather than an error.
+		expect(await context.status("ses_main")).toBeNull();
+		expect(await readdir(invalid)).toEqual([]);
+	} finally {
+		await unload();
+		await rm(invalid, { recursive: true, force: true });
+	}
+});

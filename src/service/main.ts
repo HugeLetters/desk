@@ -4,8 +4,8 @@
  * answers on the port; started while another one has the store (`<store>/service.json`), it exits at once, and with
  * the port taken by another program, it exits with an error that says so. Its settings are the plugin's options it
  * was started with (`--options '<json>'`, as the plugin got them), then the environment (`DESK_HOME`, `DESK_PORT`,
- * `DESK_IDLE`: run by hand, or in tests), then the defaults (`settings.ts`). Unlike the plugin, it's strict: a setting
- * given but not valid stops it, saying which (exit code 1), rather than giving way to the default.
+ * `DESK_IDLE`: run by hand, or in tests), then the defaults (`settings.ts`). A setting given but not valid stops it,
+ * saying which (exit code 1), rather than giving way to the default.
  */
 import * as BunRuntime from "@effect/platform-bun/BunRuntime";
 import * as BunServices from "@effect/platform-bun/BunServices";
@@ -33,9 +33,9 @@ export const options = (argv: ReadonlyArray<string>) => {
 	);
 };
 
-/** The settings as the service reads them: `argv`'s options, then the environment, strictly. */
+/** The settings as the service reads them: `argv`'s options, then the environment. */
 export const settings = (argv: ReadonlyArray<string>) =>
-	Layer.unwrap(Effect.map(options(argv), (given) => Settings.layer(given, { strict: true })));
+	Layer.unwrap(Effect.map(options(argv), (given) => Settings.layer(given)));
 
 /** The service's configuration, from the settings. */
 export const configuration = Effect.gen(function* () {

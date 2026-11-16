@@ -51,6 +51,7 @@ const tools = (ctx: Context, desk: Desk) => {
 	const tool = <I, E>(run: (input: I, sessionID: SessionID) => Effect.Effect<string, E>) =>
 		Effect.fnUntraced(
 			function* (input: I, context: Tool.Context) {
+				yield* desk.calls.available;
 				if (!(yield* desk.modes.on(context.sessionID))) {
 					return yield* new Tool.Error({
 						message: "The desk is off for this session; the user turns it on with /desk-mode.",

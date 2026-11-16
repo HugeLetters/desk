@@ -42,18 +42,30 @@ test("options first, then DESK_HOME, DESK_PORT and DESK_TIMEOUT, then ~/.local/s
 	expect((await read({ timeout: 1500 }, { HOME: "/home/me" })).timeout).toEqual(Duration.millis(1500));
 });
 
-test("a leading ~ in the store is the user's home; a setting that isn't valid (a relative store, say) gives way to the default", async () => {
+test("a leading ~ in the store is the user's home; a relative store isn't valid", async () => {
 	expect((await read({ home: "~/desk" }, { HOME: "/home/me" })).store).toBe(D("/home/me/desk"));
 	expect((await read({ home: "~" }, { HOME: "/home/me" })).store).toBe(D("/home/me"));
 	expect((await read({ home: "/a/~b" }, { HOME: "/home/me" })).store).toBe(D("/a/~b"));
-	expect((await read({ home: "a/~b" }, { HOME: "/home/me" })).store).toBe(D("/home/me/.local/share/desk"));
 	expect((await read({}, { HOME: "/home/me", DESK_HOME: "~/env" })).store).toBe(D("/home/me/env"));
-	for (const port of [0, -1, 65536, 1.5])
-		expect((await read({ port }, { HOME: "/home/me" })).port).toBe(Port.make(47400));
-	expect(await read({ port: "nope", timeout: "soon" }, { HOME: "/home/me" })).toMatchObject({
-		port: Port.make(47400),
-		timeout: Duration.seconds(30),
-	});
+});
+
+test("a setting that isn't valid fails, naming it, and is never replaced by its default", async () => {
+	const failure = async (options: Record<string, unknown>) => {
+		const result = await Effect.runPromise(
+			Effect.result(
+				Effect.provide(
+					Settings.all,
+					Layer.mergeAll(BunServices.layer, ConfigProvider.layer(provider(options, { HOME: "/home/me" }))),
+				),
+			),
+		);
+		return Result.isFailure(result) ? result.failure : undefined;
+	};
+	expect(await failure({ home: "a/~b" })).toMatchObject({ _tag: "InvalidSetting", name: "home" });
+	for (const port of [0, -1, 65536, 1.5, "nope"])
+		expect(await failure({ port })).toMatchObject({ _tag: "InvalidSetting", name: "port" });
+	expect(await failure({ timeout: "soon" })).toMatchObject({ _tag: "InvalidSetting", name: "timeout" });
+	expect(await failure({ port: 5000 })).toBeUndefined();
 });
 
 test("an entry's layer puts the options and the environment in front of a provider already there", async () => {
@@ -67,19 +79,17 @@ test("an entry's layer puts the options and the environment in front of a provid
 	if (process.env.DESK_TIMEOUT === undefined) expect(settings.timeout).toEqual(Duration.seconds(2));
 });
 
-test("strict (the service): a setting given but not valid fails, saying which; one not given is still its default", async () => {
-	const strictly = (options: Record<string, unknown>) =>
+test("a setting given but not valid fails, saying which; one not given is still its default", async () => {
+	const read = (options: Record<string, unknown>) =>
 		Effect.runPromise(
 			Effect.result(
-				Effect.all({ port: Settings.port, idle: Settings.idle }).pipe(
-					Effect.provide(Settings.layer(options, { strict: true })),
-				),
+				Effect.all({ port: Settings.port, idle: Settings.idle }).pipe(Effect.provide(Settings.layer(options))),
 			),
 		);
-	const failed = await strictly({ port: "nope" });
+	const failed = await read({ port: "nope" });
 	expect(Result.isFailure(failed) && failed.failure).toMatchObject({ _tag: "InvalidSetting", name: "port" });
 	if (process.env.DESK_PORT === undefined && process.env.DESK_IDLE === undefined)
-		expect(await strictly({})).toEqual(Result.succeed({ port: Port.make(47400), idle: Duration.minutes(10) }));
+		expect(await read({})).toEqual(Result.succeed({ port: Port.make(47400), idle: Duration.minutes(10) }));
 });
 
 test("idle is a duration, as text or ms, else 10 minutes", async () => {

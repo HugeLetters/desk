@@ -15,7 +15,15 @@ export interface Calls {
 	) => Effect.Effect<A, E | Connection.DeskError>;
 	/** `url` with the token, once connected (`Connection.authorize`), within the same time. */
 	readonly authorize: (url: URL) => Effect.Effect<URL, Connection.DeskError>;
+	/** Whether the desk can be used at all: fails, saying why, while the plugin can't run (a setting isn't valid). */
+	readonly available: Effect.Effect<void, Connection.DeskError>;
 }
+
+/** The calls of a plugin that can't run: each fails with `message`, and nothing connects. */
+export const unavailable = (message: string): Calls => {
+	const failure = Effect.fail(new Connection.DeskError({ message }));
+	return { service: () => failure, authorize: () => failure, available: failure };
+};
 
 /** `registration`: the service's `service.json`, whose pid the user can kill. */
 export const make = (
@@ -34,5 +42,6 @@ export const make = (
 	return {
 		service: (f) => within(Effect.flatMap(connection.client, f)),
 		authorize: (url) => within(connection.authorize(url)),
+		available: Effect.void,
 	};
 };

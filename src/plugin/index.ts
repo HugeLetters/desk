@@ -15,8 +15,10 @@
 import * as BunServices from "@effect/platform-bun/BunServices";
 import { Plugin } from "@opencode/plugin/effect";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { invalidSetting } from "../model/wording";
 import { Secrets } from "../shared/secrets";
 import * as Settings from "../shared/settings";
 import * as Token from "../shared/token";
@@ -32,11 +34,23 @@ export default Plugin.define<Scope.Scope>({
 	id: "desk",
 	effect: Effect.fnUntraced(
 		function* (ctx) {
-			const port = yield* Settings.port;
-			const { store, registration } = yield* Settings.files;
-			const secrets = yield* Secrets;
+			const settings = yield* Settings.all.pipe(Effect.catchTag("InvalidSetting", Effect.succeed));
 			const getRootSessionId = yield* Sessions.createRootSessionLookup(ctx);
 			const modes = Modes.make(ctx, getRootSessionId);
+
+			// A setting that isn't valid doesn't crash OpenCode's plugin load, nor is it replaced by a default: the plugin
+			// loads, connects to nothing and starts nothing, and says what to fix to whoever uses the desk.
+			if (settings instanceof Settings.InvalidSetting) {
+				const calls = Calls.unavailable(invalidSetting(settings.name, settings.message));
+				yield* Command.register(ctx, { calls, modes, sync: Effect.void });
+				yield* Tools.register(ctx, { calls, modes, getRootSessionId });
+				yield* Badge.register(ctx, { connection: { links: Stream.make(Option.none()) }, modes, getRootSessionId });
+				return;
+			}
+
+			const { port, files, timeout } = settings;
+			const { store, registration } = files;
+			const secrets = yield* Secrets;
 			const connection = yield* Connection.make({
 				port,
 				start: Connection.startService(ctx.options),
@@ -48,7 +62,7 @@ export default Plugin.define<Scope.Scope>({
 			});
 			const sync = yield* Modes.follow(modes, connection);
 			yield* sync;
-			const calls = Calls.make(connection, yield* Settings.timeout, registration);
+			const calls = Calls.make(connection, timeout, registration);
 
 			// A session that moves keeps its desk; the service looks its folder up again, for the desk's name. A session
 			// moving in or out of this directory may connect or hang up this instance, too.

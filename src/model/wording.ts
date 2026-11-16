@@ -35,3 +35,7 @@ export const refusal = (refused: Refusal) => {
 };
 
 export const deliveryFailed = (failed: DeliveryFailed) => `Delivering to ${failed.session}: ${failed.cause}`;
+
+/** What the plugin answers while one of its settings isn't valid (`name`: the option, `why`: what's wrong with it). */
+export const invalidSetting = (name: string, why: string) =>
+	`The desk's \`${name}\` option isn't valid: ${why.replace(/\.$/, "")}. Fix it in opencode.json (or DESK_${name.toUpperCase()}) and /reload.`;
