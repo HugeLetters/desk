@@ -329,7 +329,7 @@ test("the TUI's badge stays hidden while a setting isn't valid, and logs why onc
 
 	const valid = await load({});
 	expect(valid.slots).toHaveLength(1);
-	// "Open the desk" is in the command palette, but only while the session on screen has a badge: none yet.
+	// "Open desk" is in the command palette, but only while the session on screen has a badge: none yet.
 	const commands = valid.layers.flatMap((layer) => layer().commands);
 	expect(commands.map((command) => [command.id, command.palette, command.enabled()])).toEqual([
 		["desk.open", true, false],

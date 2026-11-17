@@ -108,9 +108,8 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 		commands: [
 			{
 				id: "desk.open",
-				title: "Open the desk",
-				description: "Open this session's desk in the browser",
-				group: "Desk",
+				title: "Open desk",
+				group: "Session",
 				palette: true,
 				bind: false,
 				enabled: () => current() !== undefined,
