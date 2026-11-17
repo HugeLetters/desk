@@ -287,12 +287,15 @@ test("the TUI asks per session, of its directory's instance, and again on that i
 test("the TUI's badge stays hidden while a setting isn't valid, and logs why once; with valid ones it takes its slot", async () => {
 	const load = async (options: Record<string, unknown>) => {
 		const slots: Array<unknown> = [];
+		const layers: Array<() => { commands: Array<{ id: string; palette: boolean; enabled: () => boolean }> }> = [];
 		const context = {
 			options,
 			client: { rpc: () => ({}) },
 			location: { directory: "/work/tui" },
 			data: { on: () => () => {} },
+			keymap: { layer: (factory: (typeof layers)[number]) => void layers.push(factory) },
 			ui: {
+				router: { current: () => ({ type: "session", sessionID: "ses_a" }) },
 				slot: (slot: unknown) => {
 					slots.push(slot);
 					return () => {};
@@ -313,7 +316,7 @@ test("the TUI's badge stays hidden while a setting isn't valid, and logs why onc
 		} finally {
 			for (const spy of spies) spy.mockRestore();
 		}
-		return { slots, logged };
+		return { slots, logged, layers };
 	};
 
 	const invalid = await load({ port: "nope" });
@@ -322,5 +325,13 @@ test("the TUI's badge stays hidden while a setting isn't valid, and logs why onc
 	expect(why).toHaveLength(1);
 	expect(why[0]).toContain("Fix it in opencode.json (or DESK_PORT) and /reload.");
 
-	expect((await load({})).slots).toHaveLength(1);
+	expect(invalid.layers).toHaveLength(0);
+
+	const valid = await load({});
+	expect(valid.slots).toHaveLength(1);
+	// "Open the desk" is in the command palette, but only while the session on screen has a badge: none yet.
+	const commands = valid.layers.flatMap((layer) => layer().commands);
+	expect(commands.map((command) => [command.id, command.palette, command.enabled()])).toEqual([
+		["desk.open", true, false],
+	]);
 });

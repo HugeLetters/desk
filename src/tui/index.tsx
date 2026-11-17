@@ -87,6 +87,39 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 	const client = rpcClient(BadgeRpc, context);
 	const run = yield* FiberSet.makeRuntime<ChildProcessSpawner.ChildProcessSpawner>();
 
+	/** The badges now shown, by session: the session's status, while it's in desk mode and the plugin is connected. */
+	const [shown, setShown] = createSignal<ReadonlyMap<string, Status>>(new Map());
+	const record = (session: string, status: Status | null) =>
+		setShown((all) => {
+			const next = new Map(all);
+			if (status === null) next.delete(session);
+			else next.set(session, status);
+			return next;
+		});
+
+	// In the command palette beside the badge, for the session on screen, only while its desk is in desk mode.
+	const current = () => {
+		const route = context.ui.router.current();
+		return route.type === "session" ? shown().get(route.sessionID) : undefined;
+	};
+	context.keymap.layer(() => ({
+		commands: [
+			{
+				id: "desk.open",
+				title: "Open the desk",
+				description: "Open this session's desk in the browser",
+				group: "Desk",
+				palette: true,
+				bind: false,
+				enabled: () => current() !== undefined,
+				run: () => {
+					const status = current();
+					if (status !== undefined) run(open(opener, status.page));
+				},
+			},
+		],
+	}));
+
 	/** Each time OpenCode's server reconnects, while the stream runs. */
 	const reconnects = Stream.callback<void>((queue) =>
 		Effect.acquireRelease(
@@ -112,10 +145,18 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 
 						const following = run(
 							follow(client, SessionID.make(session), at, reconnects).pipe(
-								Stream.runForEach((now) => Effect.sync(() => setStatus(now))),
+								Stream.runForEach((now) =>
+									Effect.sync(() => {
+										setStatus(now);
+										record(session, now);
+									}),
+								),
 							),
 						);
-						onCleanup(() => run(Fiber.interrupt(following)));
+						onCleanup(() => {
+							record(session, null);
+							run(Fiber.interrupt(following));
+						});
 					});
 					return <Badge theme={context.theme} status={status()} open={(page) => run(open(opener, page))} />;
 				},

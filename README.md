@@ -42,8 +42,9 @@ More stills in [docs/demo/](docs/demo/), made by `bun run demo`.
 3. In a session, `/desk-mode` turns desk mode on for it (and its subagents); `/desk-mode` again turns it off. Off by
    default: a session without it doesn't see the `desk_*` tools at all. With it on, agents are told to put every
    question for the user on the desk, not in chat.
-4. The page is `http://127.0.0.1:47400/` (or the `port` option's); `/desk-mode` links to the session's desk there, a link
-   that lets your browser in. If
+4. The page is `http://127.0.0.1:47400/` (or the `port` option's); the badge's link (or the command palette's
+   "Open the desk", there only while the session on screen has desk mode on) opens the session's desk there with the
+   token that lets your browser in (`/desk-mode` doesn't print it). If
    another program has that port, the service doesn't start and the agents' desk tools say so: set the `port` option. In a session with desk mode on, the TUI's footer shows `desk`, or
    `desk [N]` when N entries of the session's desk wait on you (`[N !M]`, M in red, for critical ones); clicking it
    opens the page. The badge is the plugin's `./tui`
