@@ -200,6 +200,40 @@ describe("delivery", () => {
 		await eventually(async () => Object.keys((await view()).failures).length === 0);
 	});
 
+	test("a message goes through the plugin instance in the session's own directory, though another one attached first knows the session too", async () => {
+		const other = service.fake.server("http://opencode-1");
+		const own = service.fake.server("http://opencode-2");
+		other.session({ id: S("ses_a"), directory: D("/work/b") });
+		own.session({ id: S("ses_a"), directory: D("/work/b") });
+		const first = service.plugin(other, D("/work/a"));
+		await first.url();
+		service.plugin(own, D("/work/b"));
+		await eventually(async () => (await service.attached()) === 2);
+		const asked = await first.request("ask", {
+			by: { session: S("ses_a"), directory: D("/work/b") },
+			question: question("A?"),
+		});
+		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "yes" }] }));
+		await eventually(() => own.admitted.length === 1);
+		expect(other.admitted).toEqual([]);
+	});
+
+	test("a message to a session that no OpenCode answers for says why on the page, instead of waiting without a reason", async () => {
+		const server = service.fake.server("http://opencode-1");
+		server.session({ id: S("ses_a"), directory: D("/work/a") });
+		const plugin = service.plugin(server, D("/work/a"));
+		const asked = await plugin.request("ask", {
+			by: { session: S("ses_a"), directory: D("/work/a") },
+			question: question("A?"),
+		});
+		server.down = true;
+		await service.rpc((client) => client.submit({ drafts: [{ entry: asked.id, text: "yes" }] }));
+		const message = present(present(await read(asked.id)).pending).message;
+		await eventually(async () => (await view()).failures[message]?.cause.includes("didn't answer"));
+		server.down = false;
+		await eventually(() => server.admitted.length === 1);
+	});
+
 	test("the user's answer reaches its session once, as one message per session, and leaves the outbox", async () => {
 		const server = service.fake.server("http://opencode-1");
 		server.session({ id: S("ses_a"), directory: D("/work/phantom") });

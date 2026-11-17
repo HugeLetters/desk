@@ -103,6 +103,7 @@ const handlers = (outdated: Effect.Effect<boolean, never, FileSystem.FileSystem>
 				const failed = (outcome: Outcome) =>
 					outcome._tag === "Failed" ? Effect.fail(new Unanswered({ cause: outcome.cause })) : Effect.succeed(outcome);
 				const client: Client = {
+					directory,
 					session: (sessionID) =>
 						Effect.flatMap(
 							call((call) => ({ _tag: "Session", call, sessionID })),

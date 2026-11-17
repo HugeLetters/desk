@@ -20,6 +20,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { Prompt, SessionInfo } from "../../api/api";
 import type { SessionID } from "../../model/entry";
 import { DeliveryFailed } from "../../model/errors";
+import type { AbsolutePath } from "../../model/paths";
 import type { Empty } from "../../shared/empty";
 
 export type { Prompt, SessionInfo };
@@ -40,6 +41,8 @@ export class Unanswered extends Data.TaggedError("Unanswered")<{ readonly cause:
 
 /** One connected plugin instance, acting in its OpenCode. */
 export interface Client {
+	/** The directory this plugin instance runs in. */
+	readonly directory: AbsolutePath;
 	/** The session, or undefined when this OpenCode doesn't know it. */
 	readonly session: (sessionID: SessionID) => Effect.Effect<SessionInfo | undefined, Unanswered>;
 	readonly prompt: (prompt: Prompt) => Effect.Effect<void, Unanswered>;
@@ -96,26 +99,35 @@ export class OpenCode extends Context.Service<
 					readonly client: Client | undefined;
 					readonly lookup: Lookup;
 				}
-				/** Asks `clients` in turn; `unreachable`: one asked before couldn't answer. */
+				/**
+				 * Asks `clients` in turn: the one in the session's own directory if there is one, or else the first that knows
+				 * it (`fallback`). A client in another directory may know the session (OpenCode's sessions are shared) but
+				 * prompting through it doesn't reach it. `unreachable`: one asked before couldn't answer.
+				 */
 				const ask = (
 					sessionID: SessionID,
 					clients: ReadonlyArray<Attached>,
 					unreachable: boolean,
+					fallback?: Found,
 				): Effect.Effect<Found> => {
 					const [first, ...rest] = clients;
 					if (first === undefined)
-						return Effect.succeed({ client: undefined, lookup: unreachable ? Lookup.Unreachable() : Lookup.Unknown() });
+						return Effect.succeed(
+							fallback ?? { client: undefined, lookup: unreachable ? Lookup.Unreachable() : Lookup.Unknown() },
+						);
 					return first.client.session(sessionID).pipe(
 						Effect.matchEffect({
-							onFailure: () => ask(sessionID, rest, true),
-							onSuccess: (session) =>
-								session
-									? Effect.succeed({ client: first.client, lookup: Lookup.Known({ session }) })
-									: ask(sessionID, rest, unreachable),
+							onFailure: () => ask(sessionID, rest, true, fallback),
+							onSuccess: (session) => {
+								if (!session) return ask(sessionID, rest, unreachable, fallback);
+								const found: Found = { client: first.client, lookup: Lookup.Known({ session }) };
+								return session.directory === first.client.directory
+									? Effect.succeed(found)
+									: ask(sessionID, rest, unreachable, fallback ?? found);
+							},
 						}),
 					);
 				};
-
 				/** The first attached client that knows the session. One that can't answer is skipped, and remembered. */
 				const find = (sessionID: SessionID) =>
 					Effect.flatMap(SubscriptionRef.get(state), (all) => ask(sessionID, all, false));
@@ -140,14 +152,24 @@ export class OpenCode extends Context.Service<
 					inDeskMode: Effect.map(SubscriptionRef.get(state), inDeskMode),
 					session: (sessionID) => Effect.map(find(sessionID), (found) => found.lookup),
 					prompt: (prompt) =>
-						Effect.flatMap(find(prompt.sessionID), ({ client }) =>
-							client
-								? client.prompt(prompt).pipe(
-										Effect.mapError(({ cause }) => new DeliveryFailed({ session: prompt.sessionID, cause })),
-										Effect.as(true),
+						Effect.flatMap(find(prompt.sessionID), ({ client, lookup }) => {
+							if (client) {
+								return client.prompt(prompt).pipe(
+									Effect.mapError(({ cause }) => new DeliveryFailed({ session: prompt.sessionID, cause })),
+									Effect.as(true),
+								);
+							}
+							// A client that couldn't answer may be the one that has the session (say, one moved to its
+							// directory): waiting silently as for an unknown session would hide why nothing arrives.
+							return lookup._tag === "Unreachable"
+								? Effect.fail(
+										new DeliveryFailed({
+											session: prompt.sessionID,
+											cause: "no OpenCode knows the session, and one attached didn't answer when asked",
+										}),
 									)
-								: Effect.succeed(false),
-						),
+								: Effect.succeed(false);
+						}),
 					move: (sessionID) => Effect.asVoid(PubSub.publish(moved, sessionID)),
 					moved: Stream.fromPubSub(moved),
 				});
