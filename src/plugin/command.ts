@@ -8,6 +8,9 @@ import * as Option from "effect/Option";
 import type { Calls } from "./calls";
 import type { Modes } from "./modes";
 
+/** `label` as a terminal hyperlink to `url` (OSC 8): a terminal that doesn't know it shows the label alone. */
+const hyperlink = (url: string, label: string) => `\u001b]8;;${url}\u001b\\${label}\u001b]8;;\u001b\\`;
+
 export interface Context extends Pick<Plugin.Context, "command" | "session"> {}
 
 export interface Desk {
@@ -38,9 +41,9 @@ export const register = (ctx: Context, desk: Desk) =>
 					? `Desk mode is on for this session. What you need from the user and what you tell them goes on the desk (desk_ask), not in chat, for this session and its subagents: in chat, questions and answers get lost as they come in out of order. That's every question, decision or review, and your replies too: to what they said on the desk (a follow-up under that entry) and to what they ask in chat, unless they ask for the reply in chat. One entry per question or decision: several go in several entries, and a reply that raises several things gets a follow-up for each. In chat, name an entry by its title at most (a critical one, say); don't retell it there. The user answers on <${url}>\n`
 					: "Desk mode is off for this session: the desk_* tools are gone; ask the user in chat.";
 				// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
-				// A link with a label, so the token in its address isn't on the screen; the page drops it from the address bar
-				// on arrival (a redirect, after it sets its cookie).
-				const description = authorized ? `Desk mode on: [open the desk](${authorized})` : "Desk mode off";
+				// A terminal hyperlink (OSC 8) with a label, so the token in its address isn't on the screen (the TUI doesn't
+				// render Markdown here); the page drops it from the address bar on arrival (a redirect, after it sets its cookie).
+				const description = authorized ? `Desk mode on: ${hyperlink(authorized, "open the desk")}` : "Desk mode off";
 				yield* ctx.session.synthetic({ sessionID, text, description, resume: false });
 			}),
 		});
