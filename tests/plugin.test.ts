@@ -208,7 +208,7 @@ test("off by default: a session sees no desk tools until /desk-mode turns it on,
 	);
 	// What the user sees in the TUI: a synthetic message without a description is hidden.
 	// No address (and so no token) in it: the TUI prints it as plain text.
-	expect(present(first.synthetic.at(-1)).description).toBe("Desk mode on: open the desk from the badge below");
+	expect(present(first.synthetic.at(-1)).description).toBe("Desk mode on");
 	expect(await first.visible("ses_main")).toEqual([...desk, "read"]);
 	// The rarely needed ones are in Code Mode; the rest are direct tools.
 	expect(desk.filter((name) => present(first.tools.get(name)).options?.codemode !== false)).toEqual([

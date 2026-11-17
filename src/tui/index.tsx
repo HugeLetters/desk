@@ -103,6 +103,8 @@ const badge = Effect.fn("badge")(function* (context: Context) {
 		return route.type === "session" ? shown().get(route.sessionID) : undefined;
 	};
 	context.keymap.layer(() => ({
+		// Global: the palette is opened in another input mode than the default one, which a layer is limited to.
+		mode: "global",
 		commands: [
 			{
 				id: "desk.open",

@@ -37,7 +37,7 @@ export const register = (ctx: Context, desk: Desk) =>
 				// The TUI shows a synthetic message by its description only (none: not at all); the text is for the agent.
 				// No address in the description: the TUI shows it as plain text (it renders neither Markdown nor terminal
 				// hyperlinks), and the address carries the token. The badge's link opens the page, token included.
-				const description = page === undefined ? "Desk mode off" : "Desk mode on: open the desk from the badge below";
+				const description = page === undefined ? "Desk mode off" : "Desk mode on";
 				yield* ctx.session.synthetic({ sessionID, text, description, resume: false });
 			}),
 		});
