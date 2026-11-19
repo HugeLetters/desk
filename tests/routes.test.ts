@@ -1,6 +1,6 @@
 /** The page's routes (`src/api/routes.ts`), which the page matches and the service, the TUI and the demo link to. */
 import { expect, test } from "bun:test";
-import { deskPath, entryPath, link, rpcUrl, serviceUrl, sessionIn } from "../src/api/routes";
+import { deskPath, entryPath, link, rpcUrl, serviceUrl, sessionIn, up } from "../src/api/routes";
 
 test("a desk is /sessions/<id>, an entry /sessions/<id>/questions/<entry id>, and the path gives its desk back", () => {
 	expect(deskPath("ses_a")).toBe("/sessions/ses_a");
@@ -12,4 +12,10 @@ test("a desk is /sessions/<id>, an entry /sessions/<id>/questions/<entry id>, an
 	expect(rpcUrl(47400).href).toBe("ws://127.0.0.1:47400/rpc");
 	expect(sessionIn(entryPath("ses a/b", "x"))).toBe("ses a/b");
 	expect(sessionIn("/")).toBeUndefined();
+});
+
+test("up a route: an entry goes to its desk, a desk to the list of desks, the list nowhere", () => {
+	expect(up(entryPath("ses a/b", "0190abcd"))).toBe(deskPath("ses a/b"));
+	expect(up(deskPath("ses_a"))).toBe("/");
+	expect(up("/")).toBeUndefined();
 });

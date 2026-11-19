@@ -23,6 +23,12 @@ export const sessionIn = (pathname: string) => {
 	return id === undefined ? undefined : decodeURIComponent(id);
 };
 
+/** The route one level up from `pathname`: an entry's desk, a desk's list of desks; none from the list of desks. */
+export const up = (pathname: string) => {
+	if (/^\/sessions\/[^/]+\/questions\/[^/]+\/?$/.test(pathname)) return deskPath(sessionIn(pathname) ?? "");
+	return pathname === "/" ? undefined : "/";
+};
+
 /** The desk's API (`api.ts`), a WebSocket beside the routes, for the page and the plugins alike. */
 export const rpcPath = "/rpc";
 

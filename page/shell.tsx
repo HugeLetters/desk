@@ -1,8 +1,8 @@
 /** @jsxImportSource solid-js */
 import { Title } from "@solidjs/meta";
 import { A, useLocation, useNavigate } from "@solidjs/router";
-import { createEffect, createMemo, For, type ParentProps, Show } from "solid-js";
-import { deskPath, sessionIn } from "../src/api/routes";
+import { createEffect, createMemo, For, onCleanup, type ParentProps, Show } from "solid-js";
+import { deskPath, sessionIn, up } from "../src/api/routes";
 import { Icon } from "./components/icon";
 import { createDesk, DeskProvider } from "./desk";
 import { deskName } from "./session";
@@ -22,6 +22,22 @@ export const Shell = (props: ParentProps) => {
 	const desk = createDesk(session);
 	const mine = () => desk.view.mine().length;
 	const named = () => desk.view.state.view?.desk;
+
+	// Escape goes up a route: an entry to its desk, a desk to the list of desks. In a text box it only leaves the box,
+	// so a draft isn't left behind by a key meant for something else; anything that handled it already keeps it.
+	const onKey = (event: KeyboardEvent) => {
+		if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+
+		const focused = document.activeElement;
+		if (focused instanceof HTMLElement && focused.matches("input, textarea, select, [contenteditable]")) {
+			focused.blur();
+			return;
+		}
+		const parent = up(route.pathname);
+		if (parent !== undefined) navigate(parent);
+	};
+	window.addEventListener("keydown", onKey);
+	onCleanup(() => window.removeEventListener("keydown", onKey));
 
 	// Desks used to be per project: an old link goes to the list.
 	createEffect(() => {
